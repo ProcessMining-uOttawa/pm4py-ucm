@@ -1,0 +1,6 @@
+include README.md
+include LICENSE
+include pyproject.toml
+recursive-include pm4py_ucm *.py
+recursive-exclude tests *
+recursive-exclude examples *
