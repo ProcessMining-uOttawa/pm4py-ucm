@@ -36,6 +36,7 @@ classifiers = [
 ]
 dependencies = [
     "graphviz>=0.20",
+    "Pillow>=10.0",
 ]
 
 [project.optional-dependencies]

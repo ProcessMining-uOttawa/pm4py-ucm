@@ -32,6 +32,71 @@ def small_ucm():
                            leaf("D")))
 
 
+class ExportFilterTests(unittest.TestCase):
+    """Three .jucm-only export filters introduced for jUCMNav readability:
+
+    1. ``<condition>`` elements are suppressed by default.
+    2. EmptyPoints preceding a loop's OR-join are emitted as
+       DirectionArrows.
+    3. ComponentRefs that have nothing bound to them are omitted.
+    """
+
+    def test_conditions_suppressed_by_default(self):
+        ucm = small_ucm()
+        xml = serialize_to_string(ucm)
+        # The default no longer emits ``<condition>`` children. The
+        # ``connections`` elements should be empty (self-closing).
+        self.assertNotIn("<condition", xml)
+
+    def test_conditions_can_be_enabled(self):
+        ucm = small_ucm()
+        xml = serialize_to_string(ucm, emit_conditions=True)
+        self.assertIn("<condition", xml)
+
+    def test_pre_loop_join_empty_points_emitted_as_direction_arrows(self):
+        """A process tree with a loop has, after routing-point insertion,
+        two ``EmptyPoint`` "Bend" nodes feeding the ``LoopJoin``. Both
+        must be emitted with ``xsi:type="ucm.map:DirectionArrow"``."""
+        tree = NS(operator=NS(value="*"),
+                  children=[leaf("body"), leaf(None)],
+                  label=None)
+        ucm = conv.apply(tree)
+        xml = serialize_to_string(ucm, layout=False)
+        # ``ucm.map:DirectionArrow`` should appear at least twice — one
+        # on the entry side of the LoopJoin, one on the redo back-edge.
+        self.assertGreaterEqual(
+            xml.count("ucm.map:DirectionArrow"), 2,
+            "expected ≥2 DirectionArrows around the loop's OR-join",
+        )
+
+    def test_unbound_component_refs_are_omitted(self):
+        """A ComponentRef with no PathNode bound to it (and no
+        descendants either) does not survive into the export."""
+        ucm = small_ucm()
+        comp = ucm.get_or_add_component("Lonely")
+        ucm.maps[0].add_component_ref(comp, x=0, y=0, width=100, height=100)
+        # Don't bind any node to ``comp``.
+        xml = serialize_to_string(ucm, layout=False)
+        # The component definition stays (it lives at the URN level
+        # and may be referenced from other maps later)…
+        root = ET.fromstring(xml)
+        urndef = root.find("urndef")
+        comp_names = [c.get("name") for c in urndef.findall("components")]
+        self.assertIn("Lonely", comp_names)
+        # …but no ComponentRef on the map references it.
+        for diag in urndef.findall("specDiagrams"):
+            for cr in diag.findall("contRefs"):
+                self.assertNotEqual(
+                    cr.get("contDef"),
+                    str(comp.id),
+                    "unbound ComponentRef should not be emitted",
+                )
+        # And the definition's ``contRefs`` back-reference is empty.
+        lonely_el = next(c for c in urndef.findall("components")
+                         if c.get("name") == "Lonely")
+        self.assertIsNone(lonely_el.get("contRefs"))
+
+
 class ExportImportTests(unittest.TestCase):
 
     def test_export_produces_valid_xml(self):
@@ -127,12 +192,25 @@ class ExportImportTests(unittest.TestCase):
 
     def test_definitions_carry_back_references(self):
         """Each responsibility definition lists the IDs of the RespRefs
-        that point at it (``respRefs="36 39"``); each component definition
-        lists the IDs of its ComponentRefs (``contRefs="14 42"``)."""
+        that point at it (``respRefs="36 39"``); each component
+        definition lists the IDs of its ComponentRefs
+        (``contRefs="14 42"``).
+
+        The exporter drops unbound ComponentRefs, so we bind one of
+        the existing RespRefs to the freshly-created ComponentRef
+        before exporting; otherwise the filter would (correctly)
+        suppress the ComponentRef and its ``contRefs`` back-reference."""
         ucm = small_ucm()
-        # Add a component definition referenced from a fresh ComponentRef
         comp = ucm.get_or_add_component("System")
-        ucm.maps[0].add_component_ref(comp, x=0, y=0, width=100, height=100)
+        cr = ucm.maps[0].add_component_ref(
+            comp, x=0, y=0, width=100, height=100,
+        )
+        # Bind a node to the new ComponentRef so the export filter
+        # keeps it.
+        for n in ucm.maps[0].nodes:
+            if isinstance(n, UCM.RespRef):
+                n.cont_ref = cr
+                break
         xml = serialize_to_string(ucm)
         root = ET.fromstring(xml)
         urndef = root.find("urndef")
@@ -149,9 +227,14 @@ class ExportImportTests(unittest.TestCase):
     def test_condition_label_distinct_from_expression(self):
         """A connection's ``<condition>`` puts the human-readable name in
         ``label`` and the logical guard in ``expression`` (default
-        ``"true"``). The two are distinct fields."""
+        ``"true"``). The two are distinct fields.
+
+        Conditions are suppressed by default in the .jucm export (the
+        converter-generated ``redo``/``exit``/``branch0`` labels are
+        synthetic and clutter the diagram); pass
+        ``emit_conditions=True`` to opt back in."""
         ucm = small_ucm()
-        xml = serialize_to_string(ucm)
+        xml = serialize_to_string(ucm, emit_conditions=True)
         root = ET.fromstring(xml)
         diag = root.find(".//specDiagrams")
         labels_found = []

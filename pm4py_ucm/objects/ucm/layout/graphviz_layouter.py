@@ -56,26 +56,38 @@ def apply_graphviz_layout(
     except ImportError:
         return False
 
-    params = dict(parameters or {})
-    params.setdefault("style", style)
-    # Single-map mode — graphviz cluster names use empty prefix then.
-    params.setdefault("map_index", 0)
-
-    try:
-        gviz = build_graph(ucm, parameters=params)
-        json_bytes = gviz.pipe(format="json")
-    except Exception:
-        # graphviz binary missing, broken, or model triggers a graphviz
-        # error. Either way, fall back.
+    if not ucm.maps:
         return False
 
-    try:
-        data = json.loads(json_bytes)
-    except (ValueError, TypeError):
-        return False
+    # Lay out every map independently. The visualizer's per-map render
+    # uses empty prefixes for node ids when ``map_index`` selects a
+    # specific map, which is what :func:`_apply_layout_from_json` keys
+    # off — so we must call it once per map. Otherwise plug-in maps
+    # (produced by hierarchical decomposition) all stay at (0, 0).
+    any_success = False
+    for i in range(len(ucm.maps)):
+        params = dict(parameters or {})
+        params.setdefault("style", style)
+        params["map_index"] = i
 
-    _apply_layout_from_json(ucm, data)
-    return True
+        try:
+            gviz = build_graph(ucm, parameters=params)
+            json_bytes = gviz.pipe(format="json")
+        except Exception:
+            # graphviz binary missing, broken, or this particular map
+            # triggers a graphviz error — fall back for the whole UCM
+            # only if no map laid out cleanly.
+            continue
+
+        try:
+            data = json.loads(json_bytes)
+        except (ValueError, TypeError):
+            continue
+
+        _apply_layout_from_json(ucm, data)
+        any_success = True
+
+    return any_success
 
 
 def _apply_layout_from_json(ucm: UCM, data: dict) -> None:

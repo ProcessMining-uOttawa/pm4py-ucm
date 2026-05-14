@@ -78,3 +78,6 @@ site/
 demo/*.jucm
 demo/*.png
 !demo/*.sample
+
+# Claude Code / agent-harness local settings
+.claude/

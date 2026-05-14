@@ -32,9 +32,24 @@ from ...ucm.parameters import (
     DEFAULT_FONT_SIZE,
     DEFAULT_RANKDIR,
     DEFAULT_BG,
+    DEFAULT_SHOW_CONDITIONS,
 )
 from ....objects.ucm.obj import UCM
-from ....objects.ucm.util.name_wrap import wrap_name
+from ....objects.ucm.util.name_wrap import wrap_name as _wrap_name
+
+
+def wrap_name(name: str, **kwargs) -> str:
+    """Visualizer-side wrap that emits ``\\n`` line breaks.
+
+    The shared :func:`pm4py_ucm.objects.ucm.util.name_wrap.wrap_name`
+    helper returns ``\\r\\n``-joined output to match jUCMNav's own
+    encoding (``&#xD;&#xA;`` in attribute values). Graphviz, however,
+    treats ``\\r`` and ``\\n`` as *two* line breaks — which doubles the
+    spacing of every wrapped label in the PNG. Normalise to ``\\n``
+    here so the visualizer renders with single-spaced multi-line
+    labels, leaving the exporter's wrapping unchanged.
+    """
+    return _wrap_name(name, **kwargs).replace("\r\n", "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -47,14 +62,20 @@ from ....objects.ucm.util.name_wrap import wrap_name
 
 _BPMN_STYLES: Dict[type, Dict[str, str]] = {
     UCM.StartPoint: dict(
-        shape="circle", style="filled", fillcolor="black",
-        fixedsize="true", width="0.25", height="0.25", label="",
+        # BPMN start event: empty (white-filled) circle with a thin
+        # black border. The thin border distinguishes it visually
+        # from the end event, which uses the same shape with a
+        # thicker stroke.
+        shape="circle", style="filled", fillcolor="white",
+        color="black", penwidth="1",
+        fixedsize="true", width="0.30", height="0.30", label="",
     ),
     UCM.EndPoint: dict(
-        # BPMN end event: thick-border filled black circle (the
-        # standard, distinguishing it from the thinner-border start).
-        shape="circle", style="filled", fillcolor="black",
-        color="black", penwidth="3",
+        # BPMN end event: empty (white-filled) circle with a thick
+        # black border. Same shape as the start event but a noticeably
+        # heavier stroke — the standard BPMN "Plain End Event" look.
+        shape="circle", style="filled", fillcolor="white",
+        color="black", penwidth="4",
         fixedsize="true", width="0.30", height="0.30", label="",
     ),
     UCM.RespRef: dict(
@@ -92,9 +113,13 @@ _BPMN_STYLES: Dict[type, Dict[str, str]] = {
         label="⏲",
     ),
     UCM.Stub: dict(
-        # BPMN sub-process marker
-        shape="box", style="rounded,filled", fillcolor="#FFFFFF",
-        color="#444444", fixedsize="false",
+        # BPMN sub-process: rounded rectangle with a decomposition
+        # marker (bold ``+`` glyph) appended to the label below the
+        # name. Light pastel pink fill with a deeper pink contour
+        # distinguishes sub-process activities at a glance from
+        # ordinary RespRef boxes (which are pale yellow).
+        shape="box", style="rounded,filled", fillcolor="#FFD4E5",
+        color="#C04079", penwidth="1.5", fixedsize="false",
     ),
     UCM.Connect: dict(
         shape="point", width="0.10", height="0.10", label="",
@@ -112,7 +137,15 @@ _BPMN_STYLES: Dict[type, Dict[str, str]] = {
         shape="ellipse", style="dashed", label="?",
     ),
     UCM.EmptyPoint: dict(
-        shape="point", width="0.06", height="0.06", label="",
+        # Empty points are *routing waypoints*, not visible nodes —
+        # they sit between segments of a single conceptual line.
+        # Render them at the same colour as the edges and as close to
+        # zero-size as graphviz allows, so they're indistinguishable
+        # from the line passing through them. The connection-emission
+        # code below also drops arrowheads on edges that terminate at
+        # an EmptyPoint, completing the illusion of an unbroken line.
+        shape="point", width="0.01", height="0.01",
+        color="#444444", fillcolor="#444444", label="",
     ),
 }
 
@@ -189,7 +222,15 @@ _UCM_STYLES: Dict[type, Dict[str, str]] = {
         shape="ellipse", style="dashed", label="?",
     ),
     UCM.EmptyPoint: dict(
-        shape="point", width="0.06", height="0.06", label="",
+        # Empty points are *routing waypoints*, not visible nodes —
+        # they sit between segments of a single conceptual line.
+        # Render them at the same colour as the edges and as close to
+        # zero-size as graphviz allows, so they're indistinguishable
+        # from the line passing through them. The connection-emission
+        # code below also drops arrowheads on edges that terminate at
+        # an EmptyPoint, completing the illusion of an unbroken line.
+        shape="point", width="0.01", height="0.01",
+        color="#444444", fillcolor="#444444", label="",
     ),
 }
 
@@ -284,6 +325,12 @@ def apply(ucm: UCM, parameters: Optional[Dict[str, Any]] = None) -> Digraph:
         * ``font_size`` – integer font size for node labels.
         * ``map_index`` – which map to visualise (default ``0``). If ``None``
           all maps are emitted as graphviz subgraphs.
+        * ``show_conditions`` – boolean (default ``False``). When ``True``,
+          render ``[condition]`` labels on edges. Discovered UCMs carry
+          synthetic conditions (``redo``, ``exit``, ``branch0``…) that
+          add visual clutter without information; the default omits them
+          from the PNG while leaving them intact in the underlying model
+          (and the exported ``.jucm``).
     """
     parameters = parameters or {}
     style_name = parameters.get("style", STYLE_UCM)
@@ -297,7 +344,23 @@ def apply(ucm: UCM, parameters: Optional[Dict[str, Any]] = None) -> Digraph:
     rankdir = parameters.get("rankdir", DEFAULT_RANKDIR)
     bgcolor = parameters.get("bgcolor", DEFAULT_BG)
     font_size = str(parameters.get("font_size", DEFAULT_FONT_SIZE))
+    show_conditions = bool(parameters.get(
+        "show_conditions", DEFAULT_SHOW_CONDITIONS,
+    ))
     map_index = parameters.get("map_index", 0)
+    # ``map_name`` (or the public ``map=`` kwarg piped in via parameters)
+    # selects a map by name and overrides ``map_index``. Unknown names
+    # raise rather than silently falling back to the first map — better
+    # to surface a typo immediately.
+    map_name = parameters.get("map_name", None)
+    if map_name is not None:
+        matching = [i for i, m in enumerate(ucm.maps) if m.name == map_name]
+        if not matching:
+            raise ValueError(
+                f"No map named {map_name!r} in UCM "
+                f"(available: {[m.name for m in ucm.maps]})"
+            )
+        map_index = matching[0]
 
     filename = tempfile.NamedTemporaryFile(suffix=".gv", delete=False).name
 
@@ -331,17 +394,24 @@ def apply(ucm: UCM, parameters: Optional[Dict[str, Any]] = None) -> Digraph:
     g.format = fmt
 
     if map_index is None:
+        # Map-name labels get a bold, slightly larger font so the
+        # reader can see at a glance which cluster they're looking at.
+        map_label_size = str(int(font_size) + 3)
         for i, ucm_map in enumerate(ucm.maps):
             with g.subgraph(name=f"cluster_{i}") as sub:
                 sub.attr(label=ucm_map.name or f"Map{i}",
-                         style="rounded", color="#888888")
+                         style="rounded", color="#888888",
+                         fontname=f"{DEFAULT_FONT}-Bold",
+                         fontsize=map_label_size)
                 _emit_map(sub, ucm_map, style_table, style_name,
-                          prefix=f"m{i}_")
+                          prefix=f"m{i}_",
+                          show_conditions=show_conditions)
     else:
         if not ucm.maps:
             return g
         idx = max(0, min(map_index, len(ucm.maps) - 1))
-        _emit_map(g, ucm.maps[idx], style_table, style_name)
+        _emit_map(g, ucm.maps[idx], style_table, style_name,
+                  show_conditions=show_conditions)
 
     return g
 
@@ -351,6 +421,7 @@ def _emit_map(
     style_table: Dict[type, Dict[str, str]],
     style_name: str,
     prefix: str = "",
+    show_conditions: bool = DEFAULT_SHOW_CONDITIONS,
 ) -> None:
     """Render a single :class:`UCM.UCMmap` into the given graphviz graph.
 
@@ -369,7 +440,21 @@ def _emit_map(
             label = wrap_name(node.name or "stub")
             if getattr(node, "is_synchronizing", False):
                 label = f"≣ {label}"
-            attrs["label"] = label
+            if style_name == STYLE_BPMN:
+                # BPMN sub-process: a bold ``+`` glyph below the name
+                # marks the activity as decomposed. We use graphviz's
+                # HTML-like label so the marker can be rendered bold
+                # (plain ``label="..."`` has no inline formatting).
+                # ``&``/``<``/``>`` must be escaped, and newlines from
+                # the wrap helper become ``<BR/>``.
+                safe = (label
+                        .replace("&", "&amp;")
+                        .replace("<", "&lt;")
+                        .replace(">", "&gt;")
+                        .replace("\n", "<BR/>"))
+                attrs["label"] = f"<{safe}<BR/><B>+</B>>"
+            else:
+                attrs["label"] = label
         g_target.node(node_id(node), **attrs)
 
     # Find root ComponentRefs (no parent), and emit clusters top-down.
@@ -404,9 +489,22 @@ def _emit_map(
 
     for c in ucm_map.connections:
         edge_attrs: Dict[str, str] = {}
-        if c.condition:
+        # Branch conditions ("redo", "exit", "branch0", …) emitted by the
+        # converter carry no domain information for the reader, so they
+        # are suppressed in the PNG by default. The exporter still
+        # writes them to the .jucm — that's where the user can rename or
+        # delete them. Set ``show_conditions=True`` in the visualizer
+        # parameters to render them anyway.
+        if show_conditions and c.condition:
             edge_attrs["label"] = f"[{c.condition}]"
         if c.name:
             existing = edge_attrs.get("label", "")
             edge_attrs["label"] = (existing + " " + c.name).strip()
+        # An EmptyPoint is a routing waypoint, not a visible node — the
+        # edge should pass *through* it as if uninterrupted. Drop the
+        # arrowhead when terminating at an EmptyPoint so the segment
+        # before the empty point ends as a plain line, matching the
+        # segment after it.
+        if isinstance(c.target, UCM.EmptyPoint):
+            edge_attrs["arrowhead"] = "none"
         g.edge(node_id(c.source), node_id(c.target), **edge_attrs)

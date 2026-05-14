@@ -66,15 +66,33 @@ def apply(log, parameters: Optional[Dict[str, Any]] = None) -> UCM:
         ) from exc
 
     parameters = dict(parameters or {})
-    res_attr = parameters.pop("resource_attribute", None)
+    # Resource mining is enabled by default: when the log carries any of
+    # the standard XES "who" attributes (``org:resource`` / ``org:role``
+    # / ``org:group``) the miner produces a non-empty
+    # ``{activity: performer}`` mapping; otherwise it returns ``{}`` and
+    # nothing changes. The historical opt-in behaviour is preserved for
+    # callers that pass ``resource_attribute=False`` explicitly, which
+    # disables resource mining entirely.
+    res_attr = parameters.pop(
+        "resource_attribute",
+        ("org:resource", "org:role", "org:group"),
+    )
     res_params = dict(parameters.pop("resource_parameters", None) or {})
+
+    # When the caller passes a path to an XES file, materialise it once
+    # up front. PM4Py's inductive miner and our resource miner both
+    # expect a DataFrame / EventLog, not a string path — the latter
+    # was previously accepted only by the docstring.
+    if isinstance(log, str):
+        log = pm4py.read_xes(log)
 
     # Allow the caller to either pass a pre-built tree or a log.
     tree = parameters.pop("process_tree", None)
     if tree is None:
         tree = pm4py.discover_process_tree_inductive(log)
 
-    # Mine performers if asked.
+    # Mine performers when enabled (default: yes — with a fallback
+    # attribute list — unless the caller passed ``resource_attribute=False``).
     if res_attr:
         if isinstance(res_attr, (list, tuple)):
             res_params.setdefault("attribute_priority", list(res_attr))
