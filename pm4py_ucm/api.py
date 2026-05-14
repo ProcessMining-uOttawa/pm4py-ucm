@@ -51,16 +51,30 @@ def write_ucm(
 # Discovery
 # ---------------------------------------------------------------------------
 
-def discover_ucm_inductive(log, parameters: Optional[Dict[str, Any]] = None) -> UCM:
+def discover_ucm_inductive(
+    log,
+    parameters: Optional[Dict[str, Any]] = None,
+    decomposition=None,
+) -> UCM:
     """Discover a UCM from an event log using the inductive miner.
 
     Pass ``resource_attribute="org:resource"`` (or another attribute name,
     or a fallback list) in ``parameters`` to also mine activity→performer
-    bindings and surface them in the resulting UCM."""
+    bindings and surface them in the resulting UCM.
+
+    The ``decomposition`` argument, if set, splits the result into a
+    root map plus plug-in (sub-)maps connected by Stubs. Accepts
+    ``"off"`` / ``None`` (single map — current behaviour), ``"auto"``,
+    ``"aggressive"``, or a dict — see
+    :mod:`pm4py_ucm.objects.ucm.conversion.decomposition` for the
+    full parameter shape."""
+    params = dict(parameters or {})
+    if decomposition is not None:
+        params["decomposition"] = decomposition
     return _discovery.apply(
         log,
         variant=_discovery.Variants.INDUCTIVE,
-        parameters=parameters,
+        parameters=params,
     )
 
 
@@ -141,13 +155,24 @@ def bind_performers(ucm: UCM, performers: Dict[str, Any], **kwargs) -> UCM:
 # Conversion
 # ---------------------------------------------------------------------------
 
-def convert_to_ucm(obj, parameters: Optional[Dict[str, Any]] = None) -> UCM:
-    """Convert a supported object (currently process trees) to a UCM."""
+def convert_to_ucm(
+    obj,
+    parameters: Optional[Dict[str, Any]] = None,
+    decomposition=None,
+) -> UCM:
+    """Convert a supported object (currently process trees) to a UCM.
+
+    The ``decomposition`` argument has the same meaning as in
+    :func:`discover_ucm_inductive` — see that function for details.
+    """
     if isinstance(obj, UCM):
         return obj
+    params = dict(parameters or {})
+    if decomposition is not None:
+        params["decomposition"] = decomposition
     # Duck-type a process tree: it has ``operator`` / ``children`` / ``label``.
     if all(hasattr(obj, a) for a in ("operator", "children", "label")):
-        return _tree_converter.apply(obj, parameters=parameters)
+        return _tree_converter.apply(obj, parameters=params)
     raise TypeError(
         f"convert_to_ucm: don't know how to convert {type(obj).__name__} "
         "to a Use Case Map."
@@ -162,6 +187,7 @@ def view_ucm(
     ucm: UCM,
     style: str = "ucm",
     parameters: Optional[Dict[str, Any]] = None,
+    map: Optional[str] = None,
 ) -> None:
     """Render and display the UCM in the system viewer.
 
@@ -179,9 +205,29 @@ def view_ucm(
     parameters
         Forwarded to the underlying visualizer; see
         :func:`pm4py_ucm.visualization.ucm.variants.classic.apply`.
+    map
+        When set, render only the map with this name (one panel — the
+        existing single-map behaviour). When ``None`` (default) and the
+        UCM contains more than one map (e.g. produced by hierarchical
+        decomposition), all maps are vertically stacked in a single
+        image with title strips and separators.
     """
     params = dict(parameters or {})
     params.setdefault("style", style)
+    if len(ucm.maps) > 1 and map is None:
+        from .visualization.ucm import stacked as _stacked
+        import tempfile, os
+        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
+        _stacked.render(ucm, tmp, parameters=params)
+        try:
+            os.startfile(tmp)  # Windows
+        except (AttributeError, OSError):
+            # Non-Windows or no handler — fall back to the gviz viewer
+            # of the first map so the call doesn't silently no-op.
+            pass
+        return tmp
+    if map is not None:
+        params["map_name"] = map
     gviz = _visualizer.apply(ucm, parameters=params)
     return _visualizer.view(gviz)
 
@@ -191,11 +237,22 @@ def save_vis_ucm(
     file_path: str,
     style: str = "ucm",
     parameters: Optional[Dict[str, Any]] = None,
+    map: Optional[str] = None,
 ) -> str:
     """Render the UCM and save the resulting image to ``file_path``.
 
-    See :func:`view_ucm` for the ``style`` parameter."""
+    See :func:`view_ucm` for the ``style`` and ``map`` parameters. When
+    the UCM has multiple maps and ``map`` is left as ``None``, all maps
+    are composed vertically into a single PNG (root map at the top,
+    plug-in maps below in pre-order); each panel carries a title strip
+    with the map's name, and adjacent panels are separated by a thin
+    horizontal rule."""
     params = dict(parameters or {})
     params.setdefault("style", style)
+    if len(ucm.maps) > 1 and map is None:
+        from .visualization.ucm import stacked as _stacked
+        return _stacked.render(ucm, file_path, parameters=params)
+    if map is not None:
+        params["map_name"] = map
     gviz = _visualizer.apply(ucm, parameters=params)
     return _visualizer.save(gviz, file_path)

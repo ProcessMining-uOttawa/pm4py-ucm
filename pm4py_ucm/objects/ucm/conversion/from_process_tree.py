@@ -38,7 +38,7 @@ quacks the same way — useful for testing without an installed PM4Py.
 """
 from __future__ import annotations
 
-from typing import Iterable, List, Optional
+from typing import Callable, Iterable, List, Optional
 
 from ..obj import UCM
 
@@ -54,6 +54,18 @@ _INTERLEAVING = "o"
 
 _CHOICE_OPS = {_XOR, _OR}
 _PARALLEL_OPS = {_PARALLEL, _INTERLEAVING}
+
+
+# Hook used by the :mod:`pm4py_ucm.objects.ucm.conversion.decomposition`
+# module to intercept subtrees that should become plug-in maps. When set,
+# ``_attach`` calls it for every subtree it is about to expand; if the hook
+# returns ``True`` the recursion stops (the hook has emitted a Stub instead).
+#
+# The decomposition module activates this via
+# :func:`pm4py_ucm.objects.ucm.conversion.decomposition._cut_handler_active`,
+# a context manager that scopes the swap so exceptions can't leak it.
+_cut_handler: Optional[Callable[[object, "UCM.PathNode", "UCM.PathNode",
+                                  "UCM.UCMmap"], bool]] = None
 
 
 def _op_value(operator) -> Optional[str]:
@@ -111,6 +123,17 @@ def apply(tree, parameters: Optional[dict] = None) -> UCM:
         A new UCM container with a single map representing ``tree``.
     """
     parameters = dict(parameters or {})
+
+    # Hierarchical decomposition — when ``decomposition`` is set to a
+    # non-``None`` / non-``"off"`` value, hand off to the decomposition
+    # module which produces a multi-map UCM. The default (no key, or
+    # ``None``, or ``"off"``) preserves the single-map output below
+    # byte-for-byte.
+    if parameters.get("decomposition") not in (None, "off"):
+        # Imported here to avoid a circular import at module load.
+        from . import decomposition as _decomp
+        return _decomp.apply(tree, parameters=parameters)
+
     map_name: str = parameters.get("map_name", "DiscoveredMap")
     urn_name: str = parameters.get("urn_name", "PM4PyDiscovery")
     simplify: bool = parameters.get("simplify", True)
@@ -124,8 +147,8 @@ def apply(tree, parameters: Optional[dict] = None) -> UCM:
 
     start = UCM.StartPoint(name="start")
     end = UCM.EndPoint(name="end")
-    ucm.add_node(start)
-    ucm.add_node(end)
+    ucm_map.add_node(start)
+    ucm_map.add_node(end)
 
     # ``_attach`` recurses on the tree structure; ``simplify_empty_points``
     # iterates. For deeply nested inputs (e.g. a process tree with a long
@@ -138,7 +161,7 @@ def apply(tree, parameters: Optional[dict] = None) -> UCM:
     if _required > _saved_limit:
         _sys.setrecursionlimit(_required)
     try:
-        _attach(tree, start, end, ucm)
+        _attach(tree, start, end, ucm_map)
         if simplify:
             simplify_empty_points(ucm)
         # Routing empty points run *after* simplification so that the
@@ -181,8 +204,19 @@ def _tree_depth(tree) -> int:
 # Recursive expansion
 # ---------------------------------------------------------------------------
 
-def _attach(tree, entry: UCM.PathNode, exit: UCM.PathNode, ucm: UCM) -> None:
-    """Splice ``tree`` between ``entry`` and ``exit`` on the UCM's default map."""
+def _attach(tree, entry: UCM.PathNode, exit: UCM.PathNode,
+            ucm_map: "UCM.UCMmap") -> None:
+    """Splice ``tree`` between ``entry`` and ``exit`` on ``ucm_map``.
+
+    When the module-level :data:`_cut_handler` is set, it is consulted
+    before any expansion: if it returns ``True`` the recursion stops
+    (the handler has emitted a placeholder — typically a Stub — to stand
+    in for ``tree`` in the current map). This is how the decomposition
+    module turns selected subtrees into plug-in maps.
+    """
+    if _cut_handler is not None and _cut_handler(tree, entry, exit, ucm_map):
+        return
+
     op = _op_value(getattr(tree, "operator", None))
     children = list(getattr(tree, "children", []) or [])
     label = getattr(tree, "label", None)
@@ -191,65 +225,65 @@ def _attach(tree, entry: UCM.PathNode, exit: UCM.PathNode, ucm: UCM) -> None:
         # Leaf
         if label is None:
             # tau / silent — collapse to a direct edge
-            ucm.add_connection(entry, exit)
+            ucm_map.add_connection(entry, exit)
         else:
             r = UCM.RespRef(name=str(label))
-            r.set_resp_def(ucm.get_or_add_responsibility(str(label)))
-            ucm.add_node(r)
-            ucm.add_connection(entry, r)
-            ucm.add_connection(r, exit)
+            r.set_resp_def(ucm_map._owner.get_or_add_responsibility(str(label)))
+            ucm_map.add_node(r)
+            ucm_map.add_connection(entry, r)
+            ucm_map.add_connection(r, exit)
         return
 
     if op == _SEQUENCE:
         if not children:
-            ucm.add_connection(entry, exit)
+            ucm_map.add_connection(entry, exit)
             return
         prev = entry
         for i, child in enumerate(children):
             if i == len(children) - 1:
-                _attach(child, prev, exit, ucm)
+                _attach(child, prev, exit, ucm_map)
             else:
                 ep = UCM.EmptyPoint()
-                ucm.add_node(ep)
-                _attach(child, prev, ep, ucm)
+                ucm_map.add_node(ep)
+                _attach(child, prev, ep, ucm_map)
                 prev = ep
         return
 
     if op in _CHOICE_OPS:
         # Empty XOR / OR — treat like an empty sequence
         if not children:
-            ucm.add_connection(entry, exit)
+            ucm_map.add_connection(entry, exit)
             return
         # Single-child XOR collapses to the child
         if len(children) == 1:
-            _attach(children[0], entry, exit, ucm)
+            _attach(children[0], entry, exit, ucm_map)
             return
         of = UCM.OrFork(name="OrFork")
         oj = UCM.OrJoin(name="OrJoin")
-        ucm.add_node(of)
-        ucm.add_node(oj)
-        ucm.add_connection(entry, of)
-        ucm.add_connection(oj, exit)
+        ucm_map.add_node(of)
+        ucm_map.add_node(oj)
+        ucm_map.add_connection(entry, of)
+        ucm_map.add_connection(oj, exit)
         for k, child in enumerate(children):
             label = f"branch{k}"  # default branch label; user can edit
-            _attach_with_initial_label(child, of, oj, ucm, label)
+            _attach_with_initial_label(child, of, oj, ucm_map, label)
         return
 
     if op in _PARALLEL_OPS:
         if not children:
-            ucm.add_connection(entry, exit)
+            ucm_map.add_connection(entry, exit)
             return
         if len(children) == 1:
-            _attach(children[0], entry, exit, ucm)
+            _attach(children[0], entry, exit, ucm_map)
             return
         af = UCM.AndFork(name="AndFork")
         aj = UCM.AndJoin(name="AndJoin")
-        ucm.add_node(af)
-        ucm.add_node(aj)
-        ucm.add_connection(entry, af)
-        ucm.add_connection(aj, exit)
+        ucm_map.add_node(af)
+        ucm_map.add_node(aj)
+        ucm_map.add_connection(entry, af)
+        ucm_map.add_connection(aj, exit)
         for child in children:
-            _attach(child, af, aj, ucm)
+            _attach(child, af, aj, ucm_map)
         return
 
     if op == _LOOP:
@@ -262,47 +296,47 @@ def _attach(tree, entry: UCM.PathNode, exit: UCM.PathNode, ucm: UCM) -> None:
         if len(children) < 2:
             # Degenerate loop; fall back to attaching the only body
             if children:
-                _attach(children[0], entry, exit, ucm)
+                _attach(children[0], entry, exit, ucm_map)
             else:
-                ucm.add_connection(entry, exit)
+                ucm_map.add_connection(entry, exit)
             return
         do_tree, redo_tree = children[0], children[1]
         oj_in = UCM.OrJoin(name="LoopJoin")
         of_out = UCM.OrFork(name="LoopFork")
-        ucm.add_node(oj_in)
-        ucm.add_node(of_out)
-        ucm.add_connection(entry, oj_in)
-        _attach(do_tree, oj_in, of_out, ucm)
+        ucm_map.add_node(oj_in)
+        ucm_map.add_node(of_out)
+        ucm_map.add_connection(entry, oj_in)
+        _attach(do_tree, oj_in, of_out, ucm_map)
         # Branch out of the loop
-        ucm.add_connection(of_out, exit, condition="exit")
+        ucm_map.add_connection(of_out, exit, condition="exit")
         # Redo branch: of_out -> redo -> oj_in
-        _attach_with_initial_label(redo_tree, of_out, oj_in, ucm, "redo")
+        _attach_with_initial_label(redo_tree, of_out, oj_in, ucm_map, "redo")
         return
 
     # Unknown operator — fall back to sequence semantics
-    _attach_sequence_fallback(children, entry, exit, ucm)
+    _attach_sequence_fallback(children, entry, exit, ucm_map)
 
 
-def _attach_sequence_fallback(children, entry, exit, ucm):
+def _attach_sequence_fallback(children, entry, exit, ucm_map):
     if not children:
-        ucm.add_connection(entry, exit)
+        ucm_map.add_connection(entry, exit)
         return
     prev = entry
     for i, child in enumerate(children):
         if i == len(children) - 1:
-            _attach(child, prev, exit, ucm)
+            _attach(child, prev, exit, ucm_map)
         else:
             ep = UCM.EmptyPoint()
-            ucm.add_node(ep)
-            _attach(child, prev, ep, ucm)
+            ucm_map.add_node(ep)
+            _attach(child, prev, ep, ucm_map)
             prev = ep
 
 
-def _attach_with_initial_label(tree, entry, exit, ucm, label: str) -> None:
+def _attach_with_initial_label(tree, entry, exit, ucm_map, label: str) -> None:
     """Attach ``tree`` and tag the first connection out of ``entry`` it
     creates with ``condition=label`` — used to label OR-fork branches."""
     before = len(entry._succ)
-    _attach(tree, entry, exit, ucm)
+    _attach(tree, entry, exit, ucm_map)
     after = len(entry._succ)
     if after > before:
         # The first new outgoing connection from ``entry`` is the branch.

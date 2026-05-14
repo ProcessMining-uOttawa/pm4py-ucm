@@ -130,6 +130,7 @@ def apply(
         wrap_names=parameters.get("wrap_names", True),
         wrap_width=parameters.get("wrap_width", _DEFAULT_WRAP_WIDTH),
         layout_engine=parameters.get("layout_engine", "graphviz"),
+        emit_conditions=parameters.get("emit_conditions", False),
     )
 
     if hasattr(file_path, "write"):
@@ -147,6 +148,7 @@ def serialize_to_string(
     wrap_names: bool = True,
     wrap_width: int = None,
     layout_engine: str = "graphviz",
+    emit_conditions: bool = False,
 ) -> str:
     """Return the XMI serialisation of ``ucm`` as a string.
 
@@ -198,7 +200,8 @@ def serialize_to_string(
     ucm.modified = _format_timestamp()
 
     w = _XmlWriter(encoding=encoding)
-    _emit_urnspec(w, ucm, wrap_names=wrap_names, wrap_width=wrap_width)
+    _emit_urnspec(w, ucm, wrap_names=wrap_names, wrap_width=wrap_width,
+                  emit_conditions=emit_conditions)
     return w.text()
 
 
@@ -206,7 +209,8 @@ def serialize_to_string(
 # Top-level structure
 # ---------------------------------------------------------------------------
 
-def _emit_urnspec(w, ucm, wrap_names=True, wrap_width=_DEFAULT_WRAP_WIDTH):
+def _emit_urnspec(w, ucm, wrap_names=True, wrap_width=_DEFAULT_WRAP_WIDTH,
+                   emit_conditions=False):
     """Emit the ``<urn:URNspec>`` root and all its children, in the order
     jUCMNav itself uses."""
     if wrap_names:
@@ -230,7 +234,7 @@ def _emit_urnspec(w, ucm, wrap_names=True, wrap_width=_DEFAULT_WRAP_WIDTH):
     w.open("urn:URNspec", root_attrs)
     _emit_ucmspec(w, ucm)
     _emit_grlspec(w, ucm)
-    _emit_urndef(w, ucm, _wrap)
+    _emit_urndef(w, ucm, _wrap, emit_conditions=emit_conditions)
     w.close("urn:URNspec")
 
 
@@ -248,19 +252,18 @@ def _emit_grlspec(w, ucm) -> None:
     w.close("grlspec")
 
 
-def _emit_urndef(w, ucm, _wrap) -> None:
+def _emit_urndef(w, ucm, _wrap, emit_conditions=False) -> None:
     """Emit ``<urndef>`` with the canonical child order
     responsibilities -> specDiagrams -> components.
 
     Before emitting any diagram we build a *stub context*: a set of
     lookup tables that lets every emit site cheaply find the XPath
-    fragment that addresses any plug-in binding. The context is shared
-    across the parent map (which references in/out bindings on its
-    connections) and every plug-in map (whose ``parentStub`` attribute
-    and start/end ``inBindings``/``outBindings`` reference back into
-    bindings on the parent stub).
+    fragment that addresses any plug-in binding. The context also
+    carries the per-export filters (which EmptyPoints to emit as
+    DirectionArrows, which ComponentRefs to keep, whether to emit
+    ``<condition>`` elements at all).
     """
-    ctx = _build_stub_context(ucm)
+    ctx = _build_stub_context(ucm, emit_conditions=emit_conditions)
 
     w.open("urndef", [])
     for r in ucm.responsibilities:
@@ -268,7 +271,7 @@ def _emit_urndef(w, ucm, _wrap) -> None:
     for i, ucm_map in enumerate(ucm.maps):
         _emit_ucmmap(w, ucm, ucm_map, map_index=i, _wrap=_wrap, ctx=ctx)
     for c in ucm.components:
-        _emit_component(w, ucm, c)
+        _emit_component(w, ucm, c, ctx=ctx)
     w.close("urndef")
 
 
@@ -305,14 +308,74 @@ class _StubContext:
         self.startpoint_to_in: Dict["UCM.StartPoint", "UCM.InBinding"] = {}
         # plug-in EndPoint -> OutBinding that points at it
         self.endpoint_to_out: Dict["UCM.EndPoint", "UCM.OutBinding"] = {}
+        # ----- Export filters (populated in _build_stub_context) -----
+        #
+        # Whether ``<condition>`` elements should be emitted on
+        # ``<connections>``. Default ``False`` — the converter-generated
+        # ``redo`` / ``exit`` / ``branch0`` labels are synthetic and
+        # clutter the diagram; users wanting real conditions can pass
+        # ``emit_conditions=True`` to the exporter.
+        self.emit_conditions: bool = False
+        # ids of PathNodes that are :class:`UCM.EmptyPoint` in the model
+        # but should be serialised as :class:`UCM.DirectionArrow`. Used
+        # to draw direction arrows at the entry of a loop's OR-join,
+        # where the routing bend points would otherwise just look like
+        # dots on the path.
+        self.direction_arrow_ids: set = set()
+        # For each map (key: ``id(ucm_map)``), the ``id``s of
+        # :class:`UCM.ComponentRef`s to keep on export. ComponentRefs
+        # with no bound nodes (and no descendants with bound nodes) are
+        # omitted so jUCMNav doesn't show empty actor boxes.
+        self.kept_cont_refs: Dict[int, set] = {}
 
 
-def _build_stub_context(ucm: UCM) -> _StubContext:
+def _build_stub_context(
+    ucm: UCM, emit_conditions: bool = False,
+) -> _StubContext:
     """Walk every stub of every map and build the lookup tables that
-    let downstream emitters resolve binding XPaths in O(1)."""
+    let downstream emitters resolve binding XPaths in O(1).
+
+    Also computes the export filters: which routing :class:`UCM.EmptyPoint`s
+    should be promoted to :class:`UCM.DirectionArrow` (those preceding a
+    loop's OR-join) and which :class:`UCM.ComponentRef`s have at least one
+    bound node and should therefore survive into the ``.jucm``.
+    """
     ctx = _StubContext()
+    ctx.emit_conditions = emit_conditions
 
     for map_idx, ucm_map in enumerate(ucm.maps):
+        # Direction-arrow promotion: any EmptyPoint whose unique
+        # successor is the loop's OrJoin ("LoopJoin", set by
+        # ``from_process_tree._attach``) is rendered as a
+        # DirectionArrow on export. There are two of these per loop —
+        # one on the entry path, one on the redo back-edge — and
+        # plain bend points there read worse than direction arrows
+        # in jUCMNav.
+        for node in ucm_map.nodes:
+            if not isinstance(node, UCM.EmptyPoint):
+                continue
+            succs = node.succ_connections
+            if len(succs) != 1:
+                continue
+            target = succs[0].target
+            if isinstance(target, UCM.OrJoin) and target.name == "LoopJoin":
+                ctx.direction_arrow_ids.add(id(node))
+
+        # ComponentRef keep-set: a ComponentRef is kept iff some
+        # PathNode on this map points at it OR at one of its
+        # descendants. The ancestor walk preserves the nesting
+        # hierarchy when an inner reference is bound but the outer
+        # wrapper has no direct nodes of its own.
+        used_directly = {
+            n.cont_ref for n in ucm_map.nodes if n.cont_ref is not None
+        }
+        keep: set = set()
+        for cr in used_directly:
+            while cr is not None and id(cr) not in keep:
+                keep.add(id(cr))
+                cr = cr.parent
+        ctx.kept_cont_refs[id(ucm_map)] = keep
+
         for node_idx, node in enumerate(ucm_map.nodes):
             if not isinstance(node, UCM.Stub):
                 continue
@@ -363,12 +426,23 @@ def _emit_responsibility(
 
 
 def _emit_component(
-    w: "_XmlWriter", ucm: UCM, comp: "UCM.ComponentElement"
+    w: "_XmlWriter", ucm: UCM, comp: "UCM.ComponentElement",
+    ctx: Optional["_StubContext"] = None,
 ) -> None:
     """Emit a ``<components>`` element with its bidirectional
     ``contRefs`` back-reference. ``kind`` is omitted when it equals the
-    default ``Team``."""
+    default ``Team``.
+
+    The ``contRefs`` list is restricted to the ComponentRefs that
+    actually survive emission (per :attr:`_StubContext.kept_cont_refs`);
+    listing skipped ones would produce dangling XPath references in
+    the XMI."""
     refs = ucm.find_cont_refs(comp)
+    if ctx is not None and ctx.kept_cont_refs:
+        kept_total: set = set()
+        for s in ctx.kept_cont_refs.values():
+            kept_total.update(s)
+        refs = [r for r in refs if id(r) in kept_total]
     attrs = [("name", comp.effective_name), ("id", str(comp.id))]
     if refs:
         attrs.append(("contRefs", " ".join(str(r.id) for r in refs)))
@@ -418,8 +492,17 @@ def _emit_ucmmap(
 
     for node in m.nodes:
         _emit_node(w, m, node, map_index, conn_index, _wrap=_wrap, ctx=ctx)
+    # Filter ComponentRefs to those with at least one bound node (or a
+    # descendant with one) on this map. Computed once in
+    # :func:`_build_stub_context`; falls through to "keep everything"
+    # when no context is supplied (legacy callers).
+    keep_ids = (
+        ctx.kept_cont_refs.get(id(m)) if ctx is not None else None
+    )
     for cr in m.cont_refs:
-        _emit_cont_ref(w, m, cr)
+        if keep_ids is not None and id(cr) not in keep_ids:
+            continue
+        _emit_cont_ref(w, m, cr, ctx=ctx)
     for c in m.connections:
         _emit_connection(w, c, ctx=ctx)
 
@@ -441,11 +524,23 @@ def _emit_node(
     ``<bindings>``, etc.).
     """
     xsi_type = _NODE_XSI_TYPES.get(type(n), "ucm.map:PathNode")
+    # Promote pre-loop-join EmptyPoints to DirectionArrows on export
+    # (see :func:`_build_stub_context` for the detection logic). The
+    # in-memory Python class stays ``EmptyPoint`` so PNG rendering and
+    # programmatic access are unaffected — only the serialised XMI
+    # element type is changed.
+    if (ctx is not None
+            and isinstance(n, UCM.EmptyPoint)
+            and id(n) in ctx.direction_arrow_ids):
+        xsi_type = _NODE_XSI_TYPES[UCM.DirectionArrow]
 
-    # Only RespRef carries a user-meaningful display name worth wrapping;
-    # control nodes (StartPoint, OrFork, …) keep their short type-derived
-    # names so jUCMNav doesn't break "OrFork49" across lines.
-    display = (_wrap(n.effective_name) if isinstance(n, UCM.RespRef)
+    # RespRef and Stub both carry user-meaningful display names worth
+    # wrapping (responsibility text and plug-in map names, respectively).
+    # Control nodes (StartPoint, OrFork, …) keep their short
+    # type-derived names so jUCMNav doesn't break "OrFork49" across
+    # lines.
+    display = (_wrap(n.effective_name)
+               if isinstance(n, (UCM.RespRef, UCM.Stub))
                else n.effective_name)
     attrs: List = [
         ("xsi:type", xsi_type),
@@ -584,11 +679,17 @@ def _connection_xpath_for(
 
 
 def _emit_cont_ref(
-    w: "_XmlWriter", m: "UCM.UCMmap", cr: "UCM.ComponentRef"
+    w: "_XmlWriter", m: "UCM.UCMmap", cr: "UCM.ComponentRef",
+    ctx: Optional["_StubContext"] = None,
 ) -> None:
     """Emit one ``<contRefs xsi:type="ucm.map:ComponentRef">`` with
     geometry, contained-node list, child-ref list, parent link, and
-    ``<label/>`` child."""
+    ``<label/>`` child.
+
+    When ``ctx`` carries a non-empty :attr:`_StubContext.kept_cont_refs`
+    set for this map, the ``children`` attribute lists only kept
+    children — skipped ComponentRefs must not appear as dangling
+    references."""
     attrs: List = [
         ("xsi:type", "ucm.map:ComponentRef"),
         ("name", cr.effective_name),
@@ -602,8 +703,19 @@ def _emit_cont_ref(
     contained = m.nodes_in(cr)
     if contained:
         attrs.append(("nodes", " ".join(str(n.id) for n in contained)))
+    keep_ids = (
+        ctx.kept_cont_refs.get(id(m)) if ctx is not None else None
+    )
     if cr.children:
-        attrs.append(("children", " ".join(str(c.id) for c in cr.children)))
+        kept_children = [
+            c for c in cr.children
+            if keep_ids is None or id(c) in keep_ids
+        ]
+        if kept_children:
+            attrs.append((
+                "children",
+                " ".join(str(c.id) for c in kept_children),
+            ))
     if cr.parent is not None:
         attrs.append(("parent", str(cr.parent.id)))
     w.open("contRefs", attrs)
@@ -639,7 +751,11 @@ def _emit_connection(
         if c in ctx.connection_to_out:
             attrs.append(("outBindings",
                           ctx.out_xpath[ctx.connection_to_out[c]]))
-    if c.condition is None:
+    emit_cond = (
+        c.condition is not None
+        and (ctx is None or ctx.emit_conditions)
+    )
+    if not emit_cond:
         w.empty("connections", attrs)
         return
     w.open("connections", attrs)

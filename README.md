@@ -245,6 +245,63 @@ conditions — the canonical idiom in jUCMNav.
 After conversion, an `EmptyPoint` simplification pass collapses chains of
 unnamed degree-2 connectors so that the resulting map renders compactly.
 
+## Hierarchical decomposition
+
+For complex process trees, a single flat UCM map quickly becomes visually
+overwhelming. The optional `decomposition=` keyword on
+`discover_ucm_inductive` and `convert_to_ucm` splits the result into a
+**root map plus plug-in (sub-)maps connected by Stubs**. The same
+`PluginBinding` machinery the package already uses for hand-built models
+ties everything together — every round-trip stays byte-stable through the
+exporter and importer.
+
+```python
+import pm4py
+import pm4py_ucm
+
+log = pm4py.read_xes("running-example.xes")
+
+# Default: one flat map (current behaviour, byte-stable with old exports)
+flat = pm4py_ucm.discover_ucm_inductive(log)
+assert len(flat.maps) == 1
+
+# Hierarchical: a root map + one plug-in per "phase" / branch / loop body
+hier = pm4py_ucm.discover_ucm_inductive(log, decomposition="auto")
+assert len(hier.maps) >= 1
+
+pm4py_ucm.view_ucm(hier)                   # all maps stacked in one PNG
+pm4py_ucm.view_ucm(hier, map="loop_Test")  # just one plug-in
+pm4py_ucm.write_ucm(hier, "out.jucm")      # opens in jUCMNav as root+plug-ins
+```
+
+The `decomposition` argument accepts:
+
+| Value          | Effect                                                                                 |
+|----------------|----------------------------------------------------------------------------------------|
+| `None` / `"off"` | No decomposition. Output byte-stable with pre-decomposition exports.                |
+| `"auto"`       | All three boundary rules on, `max_leaves_per_map=20`, `min_leaves_to_decompose=4`.     |
+| `"aggressive"` | Same boundary rules, `max_leaves_per_map=10`.                                          |
+| `dict`         | Any subset of the six keys below; unspecified keys take the `"auto"` defaults.         |
+
+Configurable keys:
+
+| Key                         | Default | Meaning                                                                                                                                  |
+|-----------------------------|---------|------------------------------------------------------------------------------------------------------------------------------------------|
+| `on_root_sequence`          | `True`  | Each child of a top-level `→` becomes a plug-in. Root map reads as a chain of phase stubs.                                                |
+| `on_parallel`               | `True`  | Each `+` branch becomes a plug-in. AND-fork/join vertical-expansion cost is replaced by a single stub per branch.                          |
+| `on_loop`                   | `True`  | Each `*` operator's entire expansion becomes a plug-in. Parent map reads as forward flow with one stub for the iteration.                  |
+| `max_leaves_per_map`        | `20`    | Hard cap; over-sized maps recursively force-cut the largest operator-subtree until the cap is met.                                         |
+| `min_leaves_to_decompose`   | `4`     | Floor — subtrees smaller than this stay inlined regardless of rules.                                                                       |
+| `balance_ratio`             | `0.2`   | Sibling share threshold under `→` and `+`. A child needs at least this fraction of the parent's leaves to be pulled out independently.     |
+
+Unknown keys raise `ValueError`.
+
+When the UCM has multiple maps, `view_ucm` and `save_vis_ucm` compose
+every map vertically into a single PNG (`Pillow` does the stacking).
+Each panel has a title strip and adjacent panels are separated by a thin
+horizontal rule. Bound stubs gain a `→ <plug-in name>` external label so
+the reader can follow each stub to its plug-in map.
+
 ## Module layout
 
 ```
