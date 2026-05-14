@@ -69,6 +69,123 @@ class ExportFilterTests(unittest.TestCase):
             "expected ≥2 DirectionArrows around the loop's OR-join",
         )
 
+    def test_component_color_attributes_emitted(self):
+        """Each ``<components>`` definition carries ``lineColor``,
+        ``fillColor`` and ``filled="true"`` attributes (RGB triplets)
+        — the standard jUCMNav attributes for per-component colours.
+        The colour is shared across every ``<contRefs>`` that
+        references this definition."""
+        ucm = UCM(name="L")
+        m = ucm.add_map(name="M")
+        comp = ucm.get_or_add_component("Team")
+        cr = m.add_component_ref(comp)
+        a = m.add_node(UCM.RespRef(
+            resp_def=ucm.get_or_add_responsibility("A"), name="A",
+        ))
+        a.cont_ref = cr
+        xml = serialize_to_string(ucm, layout=False)
+        # Component definition has lineColor + fillColor + filled.
+        self.assertRegex(xml,
+            r'<components [^>]*name="Team"[^>]*'
+            r'lineColor="\d+,\d+,\d+"[^>]*'
+            r'fillColor="\d+,\d+,\d+"[^>]*'
+            r'filled="true"')
+
+    def test_component_color_deterministic_by_name(self):
+        """The same component name always picks the same colour pair."""
+        def _colors_for(name):
+            ucm = UCM(name="L")
+            m = ucm.add_map(name="M")
+            comp = ucm.get_or_add_component(name)
+            cr = m.add_component_ref(comp)
+            a = m.add_node(UCM.RespRef(
+                resp_def=ucm.get_or_add_responsibility("A"), name="A",
+            ))
+            a.cont_ref = cr
+            xml = serialize_to_string(ucm, layout=False)
+            import re
+            line = re.search(r'lineColor="([^"]+)"', xml).group(1)
+            fill = re.search(r'fillColor="([^"]+)"', xml).group(1)
+            return line, fill
+
+        self.assertEqual(_colors_for("Alpha"), _colors_for("Alpha"))
+        # Sanity check: a different name picks (almost always) a
+        # different palette slot.
+        self.assertNotEqual(_colors_for("Alpha"), _colors_for("Beta"))
+
+    def test_unbound_label_above_when_clear(self):
+        """An unbound RespRef whose "above" region is empty gets the
+        default ``<label/>`` — jUCMNav then renders the name above the
+        symbol."""
+        ucm = UCM(name="L")
+        m = ucm.add_map(name="M")
+        sp = m.add_node(UCM.StartPoint(name="start"))
+        a = m.add_node(UCM.RespRef(
+            resp_def=ucm.get_or_add_responsibility("Solo"),
+            name="Solo",
+        ))
+        ep = m.add_node(UCM.EndPoint(name="end"))
+        m.add_connection(sp, a)
+        m.add_connection(a, ep)
+        sp.x, sp.y = 50, 100
+        a.x, a.y = 150, 100
+        ep.x, ep.y = 250, 100
+        xml = serialize_to_string(ucm, layout=False)
+        # The RespRef's <label/> stays empty — no deltaY override.
+        self.assertRegex(xml,
+            r'<nodes [^>]*name="Solo"[^>]*>\s*<label/>')
+
+    def test_unbound_label_flips_below_when_above_clashes(self):
+        """An unbound RespRef with a sibling element sitting directly
+        above it (e.g. a parallel branch one row up) gets a negative
+        ``deltaY`` so jUCMNav draws the name below the symbol.
+        jUCMNav's deltaY axis is inverted relative to model pixel y —
+        negative deltaY moves the label *downward* in the diagram."""
+        ucm = UCM(name="L")
+        m = ucm.add_map(name="M")
+        # Two parallel branches: ``upper`` at y=50, ``lower`` at y=100.
+        # The label on ``lower`` would clash with the upper branch's
+        # path; deltaY must flip it below.
+        upper = m.add_node(UCM.RespRef(
+            resp_def=ucm.get_or_add_responsibility("Upper"),
+            name="Upper",
+        ))
+        lower = m.add_node(UCM.RespRef(
+            resp_def=ucm.get_or_add_responsibility("Lower"),
+            name="Lower",
+        ))
+        upper.x, upper.y = 150, 50
+        lower.x, lower.y = 150, 100
+        xml = serialize_to_string(ucm, layout=False)
+        # The "Lower" element gets a negative deltaY (label below
+        # the symbol in jUCMNav's coordinate convention).
+        self.assertRegex(xml,
+            r'<nodes [^>]*name="Lower"[^>]*>\s*<label deltaY="-\d+"/>')
+
+    def test_bound_resp_label_stays_default(self):
+        """A RespRef bound to a ComponentRef inherits the cluster's
+        spacing — no label-position override is needed."""
+        ucm = UCM(name="L")
+        m = ucm.add_map(name="M")
+        comp = ucm.get_or_add_component("Team")
+        cr = m.add_component_ref(comp)
+        a = m.add_node(UCM.RespRef(
+            resp_def=ucm.get_or_add_responsibility("BoundResp"),
+            name="BoundResp",
+        ))
+        a.cont_ref = cr
+        a.x, a.y = 150, 100
+        # Even with a competing element above, the bound RespRef gets
+        # no deltaY override.
+        upper = m.add_node(UCM.RespRef(
+            resp_def=ucm.get_or_add_responsibility("Other"),
+            name="Other",
+        ))
+        upper.x, upper.y = 150, 50
+        xml = serialize_to_string(ucm, layout=False)
+        self.assertRegex(xml,
+            r'<nodes [^>]*name="BoundResp"[^>]*>\s*<label/>')
+
     def test_unbound_component_refs_are_omitted(self):
         """A ComponentRef with no PathNode bound to it (and no
         descendants either) does not survive into the export."""

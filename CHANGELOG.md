@@ -7,6 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (UCM × marker + label placement)
+
+- **PNG**: the × glyph that used to float above the path as plaintext
+  has been replaced by a graphviz `box` arrowhead drawn at the end
+  of every edge entering a RespRef. The marker now sits *on* the
+  path line instead of as separate text floating above it. The
+  RespRef node itself is invisible (`shape=point` with transparent
+  colours); the activity name floats as an `xlabel`, both for
+  bound and unbound RespRefs. BPMN style is unchanged.
+- **PNG**: wider graphviz spacing (`nodesep` 0.40 → 0.75, `ranksep`
+  0.55 → 1.00) so external (`xlabel`) names have room to breathe
+  instead of overlapping adjacent paths and component boxes.
+- **`.jucm`** label-placement heuristic is now bidirectional and
+  more aggressive. For every unbound `RespRef` / `Stub`, the
+  exporter counts neighbours in a tight column directly above
+  *and* below the symbol (within ±80 px x and ±80 px y, up from
+  the previous ±35 / ±60). The label is then placed on the
+  quieter side: `deltaY=-55` for below (was -20), or `deltaY=+40`
+  to push it further above when below is more crowded. Default
+  (no override) only fires when both sides are clear.
+
+### Changed (UCM colour + line crossing + arrow visibility)
+
+- **Per-component colours in `.jucm`.** Each `<components>` definition
+  now carries `lineColor`, `fillColor` and `filled="true"` attributes
+  with the same hashed pastel palette the PNG visualizer uses —
+  RGB-triplet format (`r,g,b` decimal) matching jUCMNav's
+  convention. Example:
+  `<components name="Claims Administrator" id="145" lineColor="0,64,128" fillColor="160,255,255" filled="true" contRefs="42"/>`.
+  Colour is attached at the URN-level definition (not per
+  ComponentRef) so every reference to the same actor inherits the
+  same colour. The hash function moved to
+  `pm4py_ucm.objects.ucm.util.component_colors.component_color()` and
+  is shared between the exporter and the visualizer.
+- **Path lines visually cross the × glyph** in PNG. Edges with a
+  UCM-style `RespRef` target now also set `headclip=false`; edges
+  with a `RespRef` source set `tailclip=false`. Both segments extend
+  to the bbox centroid, so the two halves meet at the × instead of
+  a few pixels away. `_BPMN_STYLES` unchanged.
+- **Visible arrows into OR-joins / OR-forks** in PNG. The graph-level
+  `arrowsize` raised from `0.7` to `1.0` (graphviz default) so
+  arrowheads at the tiny OR-join dots stay legible, and an explicit
+  `dir=forward` ensures back-edges (e.g. the redo branch of a loop)
+  always draw their arrowhead at the *target* side even when
+  graphviz routes the curve "backwards" in rank space.
+
+### Changed (UCM PNG polish)
+
+- **Per-component pastel colours.** Component-cluster fill and border
+  are now chosen deterministically from a 12-entry professional
+  pastel palette via MD5 hash of the component's name, so the same
+  team gets the same colour across every map in one render and
+  across runs. Actors keep the bold outline that distinguishes them
+  but draw from the same hashed palette.
+- **Bold component names** in the PNG (cluster labels switched to
+  `Helvetica-Bold`). The `.jucm` is untouched — jUCMNav's own font
+  settings stay in charge there.
+- **Continuous path line through the × glyph.** UCM-style edges that
+  terminate at a `RespRef` now drop their arrowhead, so the path
+  reads as an unbroken line crossing the × marker rather than
+  arrowing into a box and arrowing out again. BPMN style is
+  unchanged (its boxed activities are valid flow destinations).
+- **Smoother edges** via `splines=curved` on the graphviz top-level
+  graph (was `splines=spline`). Produces softer bezier-style
+  routing.
+
+### Changed (UCM label placement)
+
+- **PNG (UCM style)**: unbound `RespRef` and `Stub` elements now use
+  graphviz's external `xlabel` for their name (with `forcelabels=true`
+  on the graph) so the activity label floats next to the symbol
+  rather than sitting on the path line. RespRefs/Stubs *inside* a
+  ComponentRef cluster keep the compact inline label — the cluster
+  already gives them clear space.
+- **PNG (UCM style)**: component-cluster labels are pinned to the
+  top-left (`labeljust=l, labelloc=t`) so the name stays away from
+  path lines crossing through the middle of the rectangle.
+- **`.jucm` exporter**: unbound `RespRef` and `Stub` labels get a
+  positive `deltaY` (placing them below the symbol) when the model
+  has a sibling element directly above — typically a parallel branch
+  one row up. Bound elements and elements whose "above" region is
+  clear keep the default `<label/>` so jUCMNav renders the name in
+  its standard position above the symbol. ComponentRef labels are
+  untouched: jUCMNav's default already places them at the top-left.
+
+## [Unreleased — previously]
+
 ### Added
 
 - **Hierarchical decomposition.** A new `decomposition=` keyword argument

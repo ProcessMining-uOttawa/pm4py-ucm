@@ -42,6 +42,10 @@ from typing import IO, Dict, Iterable, List, Optional, Tuple, Union
 
 from ...obj import UCM
 from ...layout.layouter import apply_layout
+from ...util.component_colors import (
+    component_color as _component_color,
+    hex_to_rgb_triplet as _hex_to_rgb,
+)
 from ...util.name_wrap import wrap_name, DEFAULT_MAX_WIDTH as _DEFAULT_WRAP_WIDTH
 
 
@@ -444,6 +448,17 @@ def _emit_component(
             kept_total.update(s)
         refs = [r for r in refs if id(r) in kept_total]
     attrs = [("name", comp.effective_name), ("id", str(comp.id))]
+    # Per-component pastel colour, hashed deterministically from the
+    # component name so the same actor wears the same colour across
+    # maps in this file *and* across runs. jUCMNav reads ``lineColor``
+    # / ``fillColor`` (plus ``filled="true"``) directly off the
+    # ``<components>`` definition as SWT RGB triplets
+    # (``r,g,b`` decimal). Same colours the PNG visualizer uses.
+    if comp.name:
+        fill_hex, line_hex = _component_color(comp.name)
+        attrs.append(("lineColor", _hex_to_rgb(line_hex)))
+        attrs.append(("fillColor", _hex_to_rgb(fill_hex)))
+        attrs.append(("filled", "true"))
     if refs:
         attrs.append(("contRefs", " ".join(str(r.id) for r in refs)))
     if comp.description:
@@ -598,7 +613,13 @@ def _emit_node(
 
     w.open("nodes", attrs)
     if needs_label:
-        w.empty("label", [])
+        label_attrs: List = []
+        dx, dy = _compute_label_delta(n, m)
+        if dx:
+            label_attrs.append(("deltaX", str(dx)))
+        if dy:
+            label_attrs.append(("deltaY", str(dy)))
+        w.empty("label", label_attrs)
     if pre:
         _emit_condition_element(w, "precondition", n.pre_condition)
     if post:
@@ -607,6 +628,77 @@ def _emit_node(
         for binding in n.bindings:
             _emit_plugin_binding(w, binding, ctx)
     w.close("nodes")
+
+
+#: Horizontal tolerance for the "is something else in my column?"
+#: probe. Responsibility names render at ~70–110 pixels wide in
+#: jUCMNav's default font, so a sibling within 80 pixels x and a
+#: similar band of y is a credible label clash.
+_LABEL_X_TOLERANCE = 80
+#: Vertical band the probe examines. ~80 pixels covers the typical
+#: gap between adjacent ranks in a UCM layout.
+_LABEL_Y_CLEARANCE = 80
+#: jUCMNav's deltaY convention is inverted vs the model's pixel y axis:
+#: a *negative* deltaY moves the label *downwards* on the diagram, a
+#: *positive* deltaY moves it further *upwards*. The magnitudes are
+#: chosen larger than the prior 20 px so labels actually clear
+#: neighbouring paths and component rectangles — 20 px was too timid
+#: and labels still ended up sitting on top of adjacent edges.
+_LABEL_BELOW_DELTA_Y = -55
+_LABEL_FURTHER_ABOVE_DELTA_Y = 40
+
+
+def _compute_label_delta(
+    node: "UCM.PathNode", ucm_map: "UCM.UCMmap",
+) -> Tuple[int, int]:
+    """Return ``(deltaX, deltaY)`` for the ``<label>`` child of ``node``.
+
+    The heuristic looks at every other element on the same map and
+    counts how many sit in a tight band directly *above* and *below*
+    the current node (within :data:`_LABEL_X_TOLERANCE` x and
+    :data:`_LABEL_Y_CLEARANCE` y). The label is then placed on the
+    quieter side:
+
+    * If something is above and the area below is clear → label below.
+    * If both sides have neighbours but above has more → label below.
+    * If both sides have neighbours but below has more (or equal) →
+      nudge the label *further above* (positive deltaY) to clear the
+      symbol entirely.
+    * If both sides are clear → no override; jUCMNav uses its default.
+
+    Bound elements (``cont_ref`` set) sit inside their actor
+    swim-lane where the cluster already gives the label clear space,
+    so the heuristic doesn't touch them. Likewise for elements that
+    haven't been laid out yet (every coordinate still at the origin).
+    """
+    if not isinstance(node, (UCM.RespRef, UCM.Stub)):
+        return (0, 0)
+    if node.cont_ref is not None:
+        return (0, 0)
+    xe, ye = int(node.x), int(node.y)
+    if xe == 0 and ye == 0:
+        return (0, 0)
+    above = below = 0
+    for other in ucm_map.nodes:
+        if other is node:
+            continue
+        ox, oy = int(other.x), int(other.y)
+        if abs(ox - xe) >= _LABEL_X_TOLERANCE:
+            continue
+        dy = ye - oy
+        if 0 < dy < _LABEL_Y_CLEARANCE:
+            above += 1
+        elif 0 < -dy < _LABEL_Y_CLEARANCE:
+            below += 1
+    if above == 0 and below == 0:
+        return (0, 0)
+    if above > 0 and below == 0:
+        return (0, _LABEL_BELOW_DELTA_Y)
+    if above > below:
+        return (0, _LABEL_BELOW_DELTA_Y)
+    # below >= above: keep label above but push it further up so it
+    # clears the symbol and any side-by-side siblings.
+    return (0, _LABEL_FURTHER_ABOVE_DELTA_Y)
 
 
 def _emit_plugin_binding(

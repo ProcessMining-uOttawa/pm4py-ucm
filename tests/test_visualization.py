@@ -60,16 +60,18 @@ class UCMVisualizationTests(unittest.TestCase):
         # belongs to a stub, of which there are none in this fixture.
         self.assertNotIn("diamond", g.source)
 
-    def test_ucm_style_uses_x_glyph_for_resprefs(self):
-        """RespRefs in UCM style are drawn with a × glyph alongside the name.
-
-        We use the Latin-1 multiplication sign (U+00D7) rather than the
-        less-widely-available U+2715 so that the glyph renders correctly
-        in every font, including the default Times-Roman that graphviz
-        falls back to on some systems."""
+    def test_ucm_respref_uses_box_arrowhead_marker(self):
+        """The text × glyph previously stacked above the path is now
+        replaced by a graphviz ``box`` arrowhead drawn at the end of
+        each edge entering a RespRef. The marker sits on the line
+        itself, keeping the path-line area uncluttered. RespRef nodes
+        themselves are invisible (transparent points)."""
         ucm = self._build()
         g = visualizer.apply(ucm, parameters={"style": "ucm"})
-        self.assertIn("×", g.source)
+        # No leftover × glyph from the old style.
+        self.assertNotIn("×", g.source)
+        # The marker comes from a ``box`` arrowhead on incoming edges.
+        self.assertIn("arrowhead=box", g.source)
 
     def test_invalid_style_rejected(self):
         ucm = self._build()
@@ -90,6 +92,215 @@ class UCMVisualizationTests(unittest.TestCase):
         g = visualizer.apply(ucm, parameters={"show_conditions": True})
         self.assertIn("[x]", g.source)
         self.assertIn("[y]", g.source)
+
+
+class ComponentColorTests(unittest.TestCase):
+    """Component clusters are coloured deterministically by name from a
+    professional pastel palette — same name → same colour across maps
+    and runs."""
+
+    def _ucm_with(self, comp_names):
+        ucm = UCM(name="V")
+        m = ucm.add_map(name="M")
+        for name in comp_names:
+            comp = ucm.get_or_add_component(name)
+            cr = m.add_component_ref(comp)
+            a = m.add_node(UCM.RespRef(
+                resp_def=ucm.get_or_add_responsibility(name + "Act"),
+                name=name + "Act",
+            ))
+            a.cont_ref = cr
+        return ucm
+
+    def test_same_component_same_colour_across_renders(self):
+        ucm1 = self._ucm_with(["Alpha"])
+        ucm2 = self._ucm_with(["Alpha"])
+        g1 = visualizer.apply(ucm1, parameters={"style": "ucm"})
+        g2 = visualizer.apply(ucm2, parameters={"style": "ucm"})
+        import re
+        bg1 = re.search(r'bgcolor="(#[0-9A-F]{6})"', g1.source).group(1)
+        bg2 = re.search(r'bgcolor="(#[0-9A-F]{6})"', g2.source).group(1)
+        self.assertEqual(bg1, bg2,
+                          "same component name must hash to same colour")
+
+    def test_different_components_get_different_colours(self):
+        # Pick names known to land on different palette buckets.
+        ucm = self._ucm_with(["TeamRed", "TeamBlue", "TeamGreen"])
+        g = visualizer.apply(ucm, parameters={"style": "ucm"})
+        import re
+        bgs = re.findall(r'bgcolor="(#[0-9A-F]{6})"', g.source)
+        # Each cluster has its own bgcolor; at least two distinct.
+        self.assertGreaterEqual(len(set(bgs)), 2,
+                                f"expected ≥2 distinct cluster colours, "
+                                f"got {bgs}")
+
+    def test_cluster_font_is_bold(self):
+        ucm = self._ucm_with(["Team"])
+        g = visualizer.apply(ucm, parameters={"style": "ucm"})
+        self.assertIn("Helvetica-Bold", g.source)
+
+
+class RespRefMarkerTests(unittest.TestCase):
+    """In UCM style, the responsibility marker is a ``box`` arrowhead
+    on incoming edges (the × glyph used to sit above the line).
+    The RespRef node itself is invisible. BPMN keeps the standard
+    arrowhead and a yellow activity box."""
+
+    def _ucm(self):
+        ucm = UCM(name="V")
+        m = ucm.add_map(name="M")
+        sp = m.add_node(UCM.StartPoint(name="start"))
+        a = m.add_node(UCM.RespRef(
+            resp_def=ucm.get_or_add_responsibility("A"), name="A",
+        ))
+        ep = m.add_node(UCM.EndPoint(name="end"))
+        m.add_connection(sp, a)
+        m.add_connection(a, ep)
+        return ucm, sp, a, ep
+
+    def test_ucm_edges_into_respref_have_box_arrowhead(self):
+        ucm, sp, a, ep = self._ucm()
+        g = visualizer.apply(ucm, parameters={"style": "ucm"})
+        a_tok = f"n{id(a)}"
+        edges = [line for line in g.source.splitlines()
+                 if "->" in line and f"-> {a_tok}" in line]
+        self.assertTrue(edges)
+        for line in edges:
+            self.assertIn("arrowhead=box", line)
+
+    def test_bpmn_keeps_default_arrowhead_into_respref(self):
+        ucm, sp, a, ep = self._ucm()
+        g = visualizer.apply(ucm, parameters={"style": "bpmn"})
+        a_tok = f"n{id(a)}"
+        edges = [line for line in g.source.splitlines()
+                 if "->" in line and f"-> {a_tok}" in line]
+        self.assertTrue(edges)
+        for line in edges:
+            # BPMN keeps the standard forward arrowhead — no box, no
+            # arrowhead=none override.
+            self.assertNotIn("arrowhead=box", line)
+            self.assertNotIn("arrowhead=none", line)
+
+
+class InvisibleRespRefNodeTests(unittest.TestCase):
+    """In UCM style, the RespRef node itself is invisible — the marker
+    visible on the diagram is the box arrowhead drawn by the
+    incoming edge. The node uses ``shape=point`` with transparent
+    colours so the edge endpoint just sits at a pixel, with the
+    arrowhead drawn around it."""
+
+    def test_respref_is_invisible_point_in_ucm_style(self):
+        ucm = UCM(name="V")
+        m = ucm.add_map(name="M")
+        a = m.add_node(UCM.RespRef(
+            resp_def=ucm.get_or_add_responsibility("A"), name="A",
+        ))
+        g = visualizer.apply(ucm, parameters={"style": "ucm"})
+        a_tok = f"n{id(a)}"
+        node_lines = [line for line in g.source.splitlines()
+                      if a_tok in line and "->" not in line]
+        self.assertTrue(node_lines)
+        for line in node_lines:
+            self.assertIn("shape=point", line)
+            self.assertIn("color=transparent", line)
+            self.assertIn("fillcolor=transparent", line)
+
+
+class ArrowVisibilityTests(unittest.TestCase):
+    """Arrowheads at OR-join / OR-fork targets must be visible enough
+    to convey flow direction. Achieved by raising ``arrowsize`` from
+    the previous 0.7 to 1.0 and pinning ``dir=forward`` so back-edges
+    in loops always show the arrowhead at the target end."""
+
+    def test_default_arrowsize_one(self):
+        ucm = UCM(name="V")
+        m = ucm.add_map(name="M")
+        sp = m.add_node(UCM.StartPoint(name="start"))
+        ep = m.add_node(UCM.EndPoint(name="end"))
+        m.add_connection(sp, ep)
+        g = visualizer.apply(ucm)
+        self.assertRegex(g.source, r'arrowsize="?1(\.0)?"?')
+
+    def test_dir_forward_set_globally(self):
+        ucm = UCM(name="V")
+        m = ucm.add_map(name="M")
+        sp = m.add_node(UCM.StartPoint(name="start"))
+        ep = m.add_node(UCM.EndPoint(name="end"))
+        m.add_connection(sp, ep)
+        g = visualizer.apply(ucm)
+        # graphviz-python may emit ``dir=forward`` either quoted or
+        # unquoted depending on version.
+        self.assertRegex(g.source, r'dir="?forward"?')
+
+
+class SmoothSplinesTests(unittest.TestCase):
+    def test_splines_curved(self):
+        ucm = UCM(name="V")
+        m = ucm.add_map(name="M")
+        sp = m.add_node(UCM.StartPoint(name="start"))
+        ep = m.add_node(UCM.EndPoint(name="end"))
+        m.add_connection(sp, ep)
+        g = visualizer.apply(ucm)
+        self.assertIn("splines=curved", g.source)
+
+
+class UCMLabelPlacementTests(unittest.TestCase):
+    """In UCM style, unbound RespRef and Stub labels float outside the
+    symbol via ``xlabel`` so the path-line area stays clean. Bound
+    elements (inside a ComponentRef cluster) keep their inline label
+    since the cluster gives the name space."""
+
+    def test_unbound_respref_uses_xlabel_in_ucm_style(self):
+        ucm = UCM(name="V")
+        m = ucm.add_map(name="M")
+        m.add_node(UCM.RespRef(
+            resp_def=ucm.get_or_add_responsibility("Solo"),
+            name="Solo",
+        ))
+        g = visualizer.apply(ucm, parameters={"style": "ucm"})
+        # The RespRef node carries the name as an xlabel — the
+        # × glyph itself is gone (replaced by a box arrowhead on
+        # the incoming edge).
+        self.assertIn("xlabel=Solo", g.source)
+        self.assertNotIn("×", g.source)
+
+    def test_bound_respref_also_uses_xlabel_in_ucm_style(self):
+        """Both bound and unbound RespRefs use ``xlabel`` for the
+        name now — keeps the path-line area clean, and the
+        surrounding ComponentRef cluster gives the xlabel room."""
+        ucm = UCM(name="V")
+        m = ucm.add_map(name="M")
+        comp = ucm.get_or_add_component("Team")
+        cr = m.add_component_ref(comp)
+        a = m.add_node(UCM.RespRef(
+            resp_def=ucm.get_or_add_responsibility("Bound"),
+            name="Bound",
+        ))
+        a.cont_ref = cr
+        g = visualizer.apply(ucm, parameters={"style": "ucm"})
+        self.assertIn("xlabel=Bound", g.source)
+        self.assertNotIn("×\nBound", g.source)
+
+    def test_unbound_stub_uses_xlabel_in_ucm_style(self):
+        ucm = UCM(name="V")
+        m = ucm.add_map(name="M")
+        m.add_node(UCM.Stub(name="Phase"))
+        g = visualizer.apply(ucm, parameters={"style": "ucm"})
+        # Diamond stays empty, name floats as xlabel.
+        self.assertRegex(g.source, r'label=""[^\]]*xlabel=Phase')
+
+    def test_cluster_label_top_left(self):
+        ucm = UCM(name="V")
+        m = ucm.add_map(name="M")
+        comp = ucm.get_or_add_component("Team")
+        cr = m.add_component_ref(comp)
+        a = m.add_node(UCM.RespRef(
+            resp_def=ucm.get_or_add_responsibility("R"), name="R",
+        ))
+        a.cont_ref = cr
+        g = visualizer.apply(ucm, parameters={"style": "ucm"})
+        self.assertIn("labeljust=l", g.source)
+        self.assertIn("labelloc=t", g.source)
 
 
 class StubRenderingTests(unittest.TestCase):

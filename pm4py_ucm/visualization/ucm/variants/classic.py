@@ -35,6 +35,7 @@ from ...ucm.parameters import (
     DEFAULT_SHOW_CONDITIONS,
 )
 from ....objects.ucm.obj import UCM
+from ....objects.ucm.util.component_colors import component_color as _component_color
 from ....objects.ucm.util.name_wrap import wrap_name as _wrap_name
 
 
@@ -163,10 +164,15 @@ _UCM_STYLES: Dict[type, Dict[str, str]] = {
         fixedsize="true", width="0.06", height="0.40", label="",
     ),
     UCM.RespRef: dict(
-        # UCM responsibility reference: an "X" glyph with the name on a
-        # second line. ``shape="plaintext"`` removes the border so the
-        # rendering looks like the path runs through a labelled X.
-        shape="plaintext",
+        # UCM responsibility reference: the node itself is invisible
+        # (single transparent point) — the responsibility marker is
+        # drawn as a small black box arrowhead on the incoming edge
+        # (see ``_emit_map`` below). This puts the marker *on* the
+        # path line rather than as a separate × glyph floating
+        # above the line. The activity name floats as an
+        # ``xlabel`` (graphviz positions it externally).
+        shape="point", width="0.01", height="0.01",
+        color="transparent", fillcolor="transparent", label="",
     ),
     UCM.OrFork: dict(
         # OR-fork: the path simply branches; render as a small dot.
@@ -257,16 +263,16 @@ def _node_style(
 
     if isinstance(node, UCM.RespRef):
         # RespRef labels need special treatment per style:
-        #   - BPMN: name inside a yellow rounded box
-        #   - UCM : a small "×" glyph above the name, no border. We use
-        #     the Latin-1 MULTIPLICATION SIGN (U+00D7) rather than the
-        #     less-widely-available MULTIPLICATION X (U+2715), since the
-        #     former is present in virtually every Latin font (Helvetica,
-        #     Arial, Times, Liberation, …) while the latter renders as
-        #     a tofu box on systems with limited Unicode coverage.
+        #   - BPMN: name inside a yellow rounded box.
+        #   - UCM : node is invisible; the responsibility marker is
+        #     a graphviz box arrowhead on the incoming edge (see
+        #     ``_emit_map``). The activity name always floats as an
+        #     ``xlabel``, both for bound (inside a cluster) and
+        #     unbound RespRefs — keeps the text off the path line.
         resp_name = _wrapped_resp_name(node)
         if style_name == STYLE_UCM:
-            style["label"] = f"×\n{resp_name}"
+            style["label"] = ""
+            style["xlabel"] = resp_name
         else:
             style["label"] = resp_name
         return style
@@ -370,9 +376,17 @@ def apply(ucm: UCM, parameters: Optional[Dict[str, Any]] = None) -> Digraph:
                 graph_attr={
                     "rankdir": rankdir,
                     "bgcolor": bgcolor,
-                    "splines": "spline",
-                    "nodesep": "0.40",
-                    "ranksep": "0.55",
+                    # ``curved`` produces softer bezier-style edges
+                    # than the default ``spline`` routing; the result
+                    # reads more like a hand-drawn UCM path and less
+                    # like a railway diagram with right-angled bends.
+                    "splines": "curved",
+                    # Wider spacing gives the external (``xlabel``)
+                    # names of unbound RespRefs and Stubs room to
+                    # breathe instead of overlapping adjacent
+                    # paths and component boxes.
+                    "nodesep": "0.75",
+                    "ranksep": "1.00",
                     "fontname": DEFAULT_FONT,
                     "fontsize": font_size,
                     # newrank=true lets rankdir apply uniformly across
@@ -380,6 +394,11 @@ def apply(ucm: UCM, parameters: Optional[Dict[str, Any]] = None) -> Digraph:
                     # the component boundaries.
                     "newrank": "true",
                     "compound": "true",
+                    # External (xlabel) labels are now used for the
+                    # name of unbound RespRef and Stub elements. Force
+                    # them to render even when graphviz would otherwise
+                    # drop them under tight spacing.
+                    "forcelabels": "true",
                 },
                 node_attr={
                     "fontname": DEFAULT_FONT,
@@ -389,7 +408,18 @@ def apply(ucm: UCM, parameters: Optional[Dict[str, Any]] = None) -> Digraph:
                     "fontname": DEFAULT_FONT,
                     "fontsize": str(max(8, int(font_size) - 2)),
                     "color": "#444444",
-                    "arrowsize": "0.7",
+                    # arrowsize 1.0 (graphviz default) — at the
+                    # previous 0.7 the arrowheads at tiny target
+                    # shapes (OR-fork / OR-join dots) were too small
+                    # to read direction at a glance.
+                    "arrowsize": "1.0",
+                    # ``dir=forward`` is the graphviz default, but we
+                    # set it explicitly so curved-spline routing of
+                    # back-edges (e.g. the redo branch of a loop)
+                    # always draws the arrowhead at the *target*
+                    # side — even when graphviz lays the source out
+                    # to the right of the target.
+                    "dir": "forward",
                 })
     g.format = fmt
 
@@ -453,7 +483,15 @@ def _emit_map(
                         .replace(">", "&gt;")
                         .replace("\n", "<BR/>"))
                 attrs["label"] = f"<{safe}<BR/><B>+</B>>"
+            elif node.cont_ref is None:
+                # UCM, unbound: the diamond stays empty and the name
+                # floats next to it as an external label, so the
+                # path-line area around the diamond stays clean.
+                attrs["label"] = ""
+                attrs["xlabel"] = label
             else:
+                # UCM, bound to a ComponentRef: the cluster gives the
+                # label space, so we keep it compact inside.
                 attrs["label"] = label
         g_target.node(node_id(node), **attrs)
 
@@ -464,14 +502,27 @@ def _emit_map(
         cluster_name = f"cluster_{prefix}c{id(cr)}"
         with parent_graph.subgraph(name=cluster_name) as sub:
             is_actor = getattr(cr.cont_def.kind, "value", "") == "Actor"
+            # Pastel colour chosen deterministically from the component
+            # name. Different components get different colours, the
+            # same component keeps its colour across maps and runs.
+            comp_name = cr.cont_def.name or cr.name or ""
+            fill, border = _component_color(comp_name)
             sub.attr(
-                label=cr.cont_def.name or cr.name or "Component",
-                style="rounded" if not is_actor else "rounded,bold",
-                color="#3F7A3F" if is_actor else "#666666",
-                bgcolor="#FAFFFA" if is_actor else "#F4F4F8",
-                fontname=DEFAULT_FONT,
+                label=comp_name or "Component",
+                # ``labeljust=l, labelloc=t`` pins the component name to
+                # the top-left of its rectangle — matches jUCMNav's
+                # convention and keeps the name away from path lines
+                # crossing through the middle of the box.
+                labeljust="l",
+                labelloc="t",
+                style="rounded,bold" if is_actor else "rounded",
+                color=border,
+                bgcolor=fill,
+                # Bold font for the component name so it pops against
+                # the pastel fill and the in-cluster nodes.
+                fontname=f"{DEFAULT_FONT}-Bold",
                 fontsize=str(int(DEFAULT_FONT_SIZE) + 1),
-                penwidth="1.5" if is_actor else "1.0",
+                penwidth="2" if is_actor else "1.2",
                 margin="14",
             )
             for node in ucm_map.nodes:
@@ -505,6 +556,19 @@ def _emit_map(
         # arrowhead when terminating at an EmptyPoint so the segment
         # before the empty point ends as a plain line, matching the
         # segment after it.
+        #
+        # In the UCM style, edges terminating at a RespRef draw a
+        # small black ``box`` arrowhead — the responsibility marker
+        # is the arrowhead itself, sitting *on* the path line.
+        # Edges leaving a RespRef draw no tail decoration; the path
+        # continues from the box. The BPMN style keeps the standard
+        # forward arrowhead since its activities are boxed
+        # destinations.
         if isinstance(c.target, UCM.EmptyPoint):
             edge_attrs["arrowhead"] = "none"
+        elif (style_name == STYLE_UCM
+                and isinstance(c.target, UCM.RespRef)):
+            edge_attrs["arrowhead"] = "box"
+            edge_attrs["arrowsize"] = "0.55"
+            edge_attrs["color"] = "black"
         g.edge(node_id(c.source), node_id(c.target), **edge_attrs)
