@@ -182,6 +182,51 @@ class RespRefMarkerTests(unittest.TestCase):
             self.assertNotIn("arrowhead=none", line)
 
 
+class DirectionArrowRenderingTests(unittest.TestCase):
+    """DirectionArrow nodes — produced when re-importing a `.jucm`
+    that contains the exporter's EmptyPoint→DirectionArrow promotion
+    around a loop's OR-join — render in the PNG just like
+    EmptyPoints: a tiny edge-coloured pixel with no arrowhead on
+    incoming edges. The path lines already convey direction; an
+    extra arrow glyph would only add visual noise."""
+
+    def _build(self):
+        ucm = UCM(name="D")
+        m = ucm.add_map(name="M")
+        sp = m.add_node(UCM.StartPoint(name="start"))
+        da = m.add_node(UCM.DirectionArrow(name="hint"))
+        ep = m.add_node(UCM.EndPoint(name="end"))
+        m.add_connection(sp, da)
+        m.add_connection(da, ep)
+        return ucm, da
+
+    def test_direction_arrow_is_invisible_point(self):
+        for style in ("ucm", "bpmn"):
+            ucm, da = self._build()
+            g = visualizer.apply(ucm, parameters={"style": style})
+            da_tok = f"n{id(da)}"
+            node_lines = [line for line in g.source.splitlines()
+                          if da_tok in line and "->" not in line]
+            self.assertTrue(node_lines)
+            for line in node_lines:
+                self.assertIn("shape=point", line,
+                               f"{style!r}: DirectionArrow not a point: {line}")
+                self.assertNotIn("rarrow", line)
+
+    def test_edges_into_direction_arrow_have_no_arrowhead(self):
+        for style in ("ucm", "bpmn"):
+            ucm, da = self._build()
+            g = visualizer.apply(ucm, parameters={"style": style})
+            da_tok = f"n{id(da)}"
+            edges_in = [line for line in g.source.splitlines()
+                        if "->" in line and f"-> {da_tok}" in line]
+            self.assertTrue(edges_in)
+            for line in edges_in:
+                self.assertIn("arrowhead=none", line,
+                              f"{style!r}: edge into DirectionArrow "
+                              f"should drop arrowhead: {line}")
+
+
 class InvisibleRespRefNodeTests(unittest.TestCase):
     """In UCM style, the RespRef node itself is invisible — the marker
     visible on the diagram is the box arrowhead drawn by the
@@ -233,15 +278,21 @@ class ArrowVisibilityTests(unittest.TestCase):
         self.assertRegex(g.source, r'dir="?forward"?')
 
 
-class SmoothSplinesTests(unittest.TestCase):
-    def test_splines_curved(self):
+class SplineRoutingTests(unittest.TestCase):
+    def test_splines_spline(self):
+        """We use ``splines=spline`` (graphviz default — b-splines
+        routed around nodes). The alternative ``splines=curved`` was
+        smoother in isolation but mis-oriented arrowheads on
+        rank-back edges, e.g. the redo branch of a loop, so the
+        UCM-style ``arrowhead=box`` marker ended up at the wrong
+        end of the edge."""
         ucm = UCM(name="V")
         m = ucm.add_map(name="M")
         sp = m.add_node(UCM.StartPoint(name="start"))
         ep = m.add_node(UCM.EndPoint(name="end"))
         m.add_connection(sp, ep)
         g = visualizer.apply(ucm)
-        self.assertIn("splines=curved", g.source)
+        self.assertIn("splines=spline", g.source)
 
 
 class UCMLabelPlacementTests(unittest.TestCase):

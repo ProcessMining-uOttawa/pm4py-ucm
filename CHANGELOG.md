@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (PNG arrow direction + DirectionArrow rendering)
+
+- **`splines=curved` reverted to `splines=spline`**. The curved
+  variant routed rank-back edges (e.g. the redo branch of a loop)
+  with their arrowhead at the wrong end — the UCM `box` marker and
+  BPMN normal arrowhead would land on the empty point upstream of
+  the OR-join instead of on the OR-join itself. `splines=spline`
+  (graphviz's b-spline routing around nodes) keeps direction
+  consistent.
+- **`DirectionArrow` nodes now render as edge-coloured pixels in
+  PNG**, identical to `EmptyPoint`. When a `.jucm` produced by
+  this exporter is re-imported, the two empty points before a
+  loop's OR-join come back as `DirectionArrow` objects (per the
+  exporter's promotion rule). Rendering them as the previous
+  `rarrow` shape produced large duplicate arrow glyphs on top of
+  the path lines, which already carry their own arrowheads.
+  Edges into DirectionArrows also drop their arrowhead (matching
+  the EmptyPoint treatment), so re-imported models look the same
+  as the originals.
+
 ### Changed (UCM × marker + label placement)
 
 - **PNG**: the × glyph that used to float above the path as plaintext

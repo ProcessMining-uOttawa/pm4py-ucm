@@ -126,8 +126,17 @@ _BPMN_STYLES: Dict[type, Dict[str, str]] = {
         shape="point", width="0.10", height="0.10", label="",
     ),
     UCM.DirectionArrow: dict(
-        shape="rarrow", style="filled", fillcolor="#888888",
-        fixedsize="true", width="0.40", height="0.20", label="",
+        # In the model, DirectionArrow is a routing hint (e.g. the
+        # EmptyPoint→DirectionArrow promotion the .jucm exporter
+        # makes for the two empty points feeding a loop's
+        # OR-join). In the PNG the path lines already carry their
+        # own arrowheads at every fork/join, so an extra arrow
+        # glyph here would just clutter the diagram. We render
+        # DirectionArrow the same way as EmptyPoint — an
+        # edge-coloured pixel — so re-imported models look like
+        # the originals.
+        shape="point", width="0.01", height="0.01",
+        color="#444444", fillcolor="#444444", label="",
     ),
     UCM.FailurePoint: dict(
         shape="invtriangle", style="filled", fillcolor="#FFB0B0",
@@ -214,8 +223,17 @@ _UCM_STYLES: Dict[type, Dict[str, str]] = {
         shape="point", width="0.10", height="0.10", label="",
     ),
     UCM.DirectionArrow: dict(
-        shape="rarrow", style="filled", fillcolor="#888888",
-        fixedsize="true", width="0.40", height="0.20", label="",
+        # In the model, DirectionArrow is a routing hint (e.g. the
+        # EmptyPoint→DirectionArrow promotion the .jucm exporter
+        # makes for the two empty points feeding a loop's
+        # OR-join). In the PNG the path lines already carry their
+        # own arrowheads at every fork/join, so an extra arrow
+        # glyph here would just clutter the diagram. We render
+        # DirectionArrow the same way as EmptyPoint — an
+        # edge-coloured pixel — so re-imported models look like
+        # the originals.
+        shape="point", width="0.01", height="0.01",
+        color="#444444", fillcolor="#444444", label="",
     ),
     UCM.FailurePoint: dict(
         # Lightning-style failure marker — represented here as an
@@ -376,11 +394,13 @@ def apply(ucm: UCM, parameters: Optional[Dict[str, Any]] = None) -> Digraph:
                 graph_attr={
                     "rankdir": rankdir,
                     "bgcolor": bgcolor,
-                    # ``curved`` produces softer bezier-style edges
-                    # than the default ``spline`` routing; the result
-                    # reads more like a hand-drawn UCM path and less
-                    # like a railway diagram with right-angled bends.
-                    "splines": "curved",
+                    # ``spline`` is graphviz's default — b-spline
+                    # curves routed *around* nodes. The shorter
+                    # ``curved`` alternative is smoother in isolation
+                    # but mis-orients arrowheads on rank-back edges
+                    # (the redo branch of a loop draws its arrow on
+                    # the wrong end), so we stay with ``spline``.
+                    "splines": "spline",
                     # Wider spacing gives the external (``xlabel``)
                     # names of unbound RespRefs and Stubs room to
                     # breathe instead of overlapping adjacent
@@ -564,7 +584,7 @@ def _emit_map(
         # continues from the box. The BPMN style keeps the standard
         # forward arrowhead since its activities are boxed
         # destinations.
-        if isinstance(c.target, UCM.EmptyPoint):
+        if isinstance(c.target, (UCM.EmptyPoint, UCM.DirectionArrow)):
             edge_attrs["arrowhead"] = "none"
         elif (style_name == STYLE_UCM
                 and isinstance(c.target, UCM.RespRef)):
