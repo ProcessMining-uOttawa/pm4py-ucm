@@ -1,21 +1,39 @@
-"""pm4py-ucm web front-end (MVP).
+"""pm4py-ucm web front-end.
 
 Run locally:
     streamlit run web/streamlit_app.py
 
-Flow: upload XES -> inductive-mine a UCM -> render PNG -> download .jucm.
-Later iterations add notation toggle, decomposition, performer config, CSV.
+Flow: upload XES -> inductive-mine a UCM -> render high-DPI PNG in the
+selected notation (UCM or BPMN) -> download .jucm.
+
+Resolution note: pm4py-ucm's visualizer builds a :class:`graphviz.Digraph`
+with hardcoded ``graph_attr`` and no DPI knob. To get a crisp PNG without
+touching the package, we call the visualizer to obtain the Digraph,
+inject ``dpi`` into its ``graph_attr``, then render. For multi-map UCMs
+we render each map individually and composite with the package's own
+``stacked._composite`` helper so we get the same titled, separated layout
+the CLI produces.
 """
 from __future__ import annotations
 
 import hashlib
+import os
 import tempfile
 from pathlib import Path
+from typing import List, Tuple
 
 import streamlit as st
 
 import pm4py
 import pm4py_ucm
+from pm4py_ucm.visualization.ucm import visualizer as _visualizer
+from pm4py_ucm.visualization.ucm import stacked as _stacked
+
+
+# DPI for the rendered PNG. 220 roughly doubles graphviz's default of 96
+# (graphviz scales fonts and line widths with DPI, so the result is a
+# straight up-res rather than just a bigger bitmap of the same image).
+_PNG_DPI = 220
 
 
 st.set_page_config(page_title="pm4py-ucm", layout="wide")
@@ -23,9 +41,46 @@ st.title("pm4py-ucm")
 st.caption("Mine a Use Case Map from an XES event log and export to jUCMNav.")
 
 
+def _render_high_dpi_png(ucm, style: str, out_path: str) -> str:
+    """Render ``ucm`` to ``out_path`` at :data:`_PNG_DPI`.
+
+    Handles the single-map case directly and uses the package's
+    composite helper for multi-map UCMs.
+    """
+    params = {"style": style}
+
+    if len(ucm.maps) <= 1:
+        gviz = _visualizer.apply(ucm, parameters=params)
+        gviz.graph_attr["dpi"] = str(_PNG_DPI)
+        return _visualizer.save(gviz, out_path)
+
+    # Multi-map: replicate stacked._render_each but with DPI injection,
+    # then reuse the package's compositor for the title strips and
+    # separators.
+    from pm4py_ucm.visualization.ucm.variants import classic as _classic
+
+    panels: List[Tuple[str, str]] = []
+    tmpdir = tempfile.mkdtemp(prefix="pm4py_ucm_web_")
+    for idx, ucm_map in enumerate(ucm.maps):
+        per = dict(params)
+        per["map_index"] = idx
+        per["format"] = "png"
+        gviz = _classic.apply(ucm, parameters=per)
+        gviz.graph_attr["dpi"] = str(_PNG_DPI)
+        gviz.format = "png"
+        base = os.path.join(tmpdir, f"map_{idx:03d}")
+        rendered = gviz.render(filename=base, cleanup=True)
+        panels.append((ucm_map.name or f"Map{idx}", rendered))
+    return _stacked._composite(panels, out_path)
+
+
 @st.cache_data(show_spinner="Mining UCM...")
-def _mine(xes_bytes: bytes, _file_hash: str):
-    """Read XES, mine UCM, render PNG, serialize .jucm. Cached per file hash."""
+def _mine(xes_bytes: bytes, style: str, _file_hash: str):
+    """Read XES, mine UCM, render high-DPI PNG, serialize .jucm.
+
+    Cached per (file hash, style) so toggling notation re-renders without
+    re-mining the log.
+    """
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
         xes_path = td / "log.xes"
@@ -35,7 +90,7 @@ def _mine(xes_bytes: bytes, _file_hash: str):
         ucm = pm4py_ucm.discover_ucm_inductive(log)
 
         png_path = td / "model.png"
-        pm4py_ucm.save_vis_ucm(ucm, str(png_path))
+        _render_high_dpi_png(ucm, style, str(png_path))
         jucm_path = td / "model.jucm"
         pm4py_ucm.write_ucm(ucm, str(jucm_path))
 
@@ -46,6 +101,18 @@ def _mine(xes_bytes: bytes, _file_hash: str):
             "n_nodes": sum(len(m.nodes) for m in ucm.maps),
         }
 
+
+with st.sidebar:
+    st.header("Options")
+    notation = st.radio(
+        "Notation",
+        options=["UCM", "BPMN"],
+        index=0,
+        help=(
+            "UCM: Z.151 / jUCMNav-style Use Case Map. "
+            "BPMN: BPMN-friendly look (activity boxes, gateway diamonds)."
+        ),
+    )
 
 uploaded = st.file_uploader(
     "Upload an XES event log",
@@ -59,19 +126,25 @@ if uploaded is None:
 
 xes_bytes = uploaded.getvalue()
 file_hash = hashlib.sha256(xes_bytes).hexdigest()[:16]
+style = notation.lower()  # "ucm" / "bpmn"
 
 try:
-    result = _mine(xes_bytes, file_hash)
+    result = _mine(xes_bytes, style, file_hash)
 except Exception as exc:
     st.error(f"Mining failed: {exc}")
     st.stop()
 
-c1, c2, c3 = st.columns(3)
+c1, c2, c3, c4 = st.columns(4)
 c1.metric("File", uploaded.name)
-c2.metric("Maps", result["n_maps"])
-c3.metric("Nodes", result["n_nodes"])
+c2.metric("Notation", notation)
+c3.metric("Maps", result["n_maps"])
+c4.metric("Nodes", result["n_nodes"])
 
-st.image(result["png"], caption="Mined UCM", use_column_width=True)
+st.image(
+    result["png"],
+    caption=f"Mined model ({notation})",
+    use_column_width=True,
+)
 
 st.download_button(
     "Download .jucm",
