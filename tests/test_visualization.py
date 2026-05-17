@@ -280,6 +280,74 @@ class ArrowVisibilityTests(unittest.TestCase):
         self.assertRegex(g.source, r'dir="?forward"?')
 
 
+class UCMOnlyEdgePenwidthTests(unittest.TestCase):
+    """UCM paths are thicker (penwidth 1.8 pt) than BPMN edges
+    (default 1.0 pt). The change is style-scoped so BPMN renders
+    keep the lighter look."""
+
+    def _ucm(self):
+        ucm = UCM(name="V")
+        m = ucm.add_map(name="M")
+        sp = m.add_node(UCM.StartPoint(name="start"))
+        ep = m.add_node(UCM.EndPoint(name="end"))
+        m.add_connection(sp, ep)
+        return ucm
+
+    def test_ucm_edges_have_thicker_penwidth(self):
+        g = visualizer.apply(self._ucm(), parameters={"style": "ucm"})
+        self.assertRegex(g.source, r'edge \[[^\]]*penwidth="?1\.8"?[^\]]*\]')
+
+    def test_bpmn_edges_have_default_penwidth(self):
+        g = visualizer.apply(self._ucm(), parameters={"style": "bpmn"})
+        self.assertRegex(g.source, r'edge \[[^\]]*penwidth="?1(\.0)?"?[^\]]*\]')
+
+
+class UCMOnlyClusterLabelTests(unittest.TestCase):
+    """UCM gets a larger component-label font than BPMN so the
+    actor name reads at a glance. Both styles keep Helvetica-Bold."""
+
+    def _ucm_with_cluster(self):
+        ucm = UCM(name="V")
+        m = ucm.add_map(name="M")
+        comp = ucm.get_or_add_component("Team")
+        cr = m.add_component_ref(comp)
+        a = m.add_node(UCM.RespRef(
+            resp_def=ucm.get_or_add_responsibility("R"), name="R",
+        ))
+        a.cont_ref = cr
+        return ucm
+
+    def _cluster_fontsize(self, source: str) -> int:
+        """Extract the cluster subgraph's fontsize.
+
+        graphviz-python emits cluster attributes inline on a single
+        attribute line inside the subgraph block — we identify the
+        cluster's line by looking for ``fontname="Helvetica-Bold"``
+        (only the cluster sets that)."""
+        import re
+        for line in source.splitlines():
+            if 'fontname="Helvetica-Bold"' in line:
+                m = re.search(r'fontsize=(\d+)', line)
+                if m:
+                    return int(m.group(1))
+        raise AssertionError("no cluster-label line found in source")
+
+    def test_ucm_cluster_label_larger(self):
+        from pm4py_ucm.visualization.ucm.parameters import DEFAULT_FONT_SIZE
+        g = visualizer.apply(self._ucm_with_cluster(),
+                              parameters={"style": "ucm"})
+        self.assertEqual(self._cluster_fontsize(g.source),
+                          DEFAULT_FONT_SIZE + 5)
+        self.assertIn("Helvetica-Bold", g.source)
+
+    def test_bpmn_cluster_label_modest(self):
+        from pm4py_ucm.visualization.ucm.parameters import DEFAULT_FONT_SIZE
+        g = visualizer.apply(self._ucm_with_cluster(),
+                              parameters={"style": "bpmn"})
+        self.assertEqual(self._cluster_fontsize(g.source),
+                          DEFAULT_FONT_SIZE + 1)
+
+
 class SplineRoutingTests(unittest.TestCase):
     def test_splines_spline(self):
         """We use ``splines=spline`` (graphviz default — b-splines

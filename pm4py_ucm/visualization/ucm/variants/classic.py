@@ -446,6 +446,14 @@ def apply(ucm: UCM, parameters: Optional[Dict[str, Any]] = None) -> Digraph:
                     # side — even when graphviz lays the source out
                     # to the right of the target.
                     "dir": "forward",
+                    # Thicker UCM paths (1.8 pt) match jUCMNav's
+                    # rendering and read more clearly through the
+                    # responsibility-marker squares; BPMN keeps
+                    # graphviz's default 1.0 pt for the activity-box
+                    # look.
+                    "penwidth": (
+                        "1.8" if style_name == STYLE_UCM else "1.0"
+                    ),
                 })
     g.format = fmt
 
@@ -533,6 +541,13 @@ def _emit_map(
             # same component keeps its colour across maps and runs.
             comp_name = cr.cont_def.name or cr.name or ""
             fill, border = _component_color(comp_name)
+            # UCM gets a noticeably larger, heavier component label
+            # so the actor's name reads at a glance — jUCMNav uses a
+            # similar visual emphasis. BPMN keeps a more restrained
+            # +1pt over the node-label size.
+            cluster_fontsize = str(int(DEFAULT_FONT_SIZE) + (
+                5 if style_name == STYLE_UCM else 1
+            ))
             sub.attr(
                 label=comp_name or "Component",
                 # ``labeljust=l, labelloc=t`` pins the component name to
@@ -547,7 +562,7 @@ def _emit_map(
                 # Bold font for the component name so it pops against
                 # the pastel fill and the in-cluster nodes.
                 fontname=f"{DEFAULT_FONT}-Bold",
-                fontsize=str(int(DEFAULT_FONT_SIZE) + 1),
+                fontsize=cluster_fontsize,
                 penwidth="2" if is_actor else "1.2",
                 margin="14",
             )

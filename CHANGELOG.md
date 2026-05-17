@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (UCM-only PNG polish)
+
+- **Thicker UCM paths.** Graph-level `penwidth` raised from
+  graphviz's default `1.0` to `1.8` for the UCM style only —
+  matches jUCMNav's heavier line weight and reads more clearly
+  through the responsibility-marker squares. BPMN keeps the
+  default 1.0 pt line.
+- **Larger, bolder component labels in UCM.** Cluster label
+  fontsize bumped from `DEFAULT_FONT_SIZE + 1` to
+  `DEFAULT_FONT_SIZE + 5` for the UCM style only; Helvetica-Bold
+  unchanged. BPMN keeps the more restrained `+1` pt.
+
 ### Fixed (UCM RespRef marker — continuous path)
 
 - The UCM `RespRef` marker is now a small filled **black square
