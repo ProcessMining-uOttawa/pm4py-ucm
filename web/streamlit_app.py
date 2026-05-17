@@ -125,7 +125,7 @@ def _autopick_column(columns, candidates, *, include_none, fallback_index):
     return columns[min(fallback_index, len(columns) - 1)]
 
 
-def _seed_csv_selectors(columns):
+def _seed_csv_selectors(columns, *, only_invalid: bool = False):
     """Pre-populate the column selectors with autodetected values.
 
     Writing to ``st.session_state`` before the selectboxes render means
@@ -135,8 +135,22 @@ def _seed_csv_selectors(columns):
     to the selectbox's ``index=`` parameter, which is only consulted
     when the key has no session_state value: across reruns that can
     produce confusing transient states.
+
+    When ``only_invalid=True``, existing session_state values that are
+    valid options for the current ``columns`` are LEFT ALONE — only
+    keys that are missing or hold a value no longer in ``columns`` are
+    re-seeded. This is the safe form used by the per-rerun defensive
+    check so the user's previously-applied role / resource choices are
+    not silently overwritten when something else triggers a rerun.
     """
+    valid_required = set(columns)
+    valid_optional = valid_required | {_NONE_OPT}
     for i, (key, cands, with_none) in enumerate(_CSV_AUTOPICK):
+        if only_invalid:
+            current = st.session_state.get(key)
+            valid = valid_optional if with_none else valid_required
+            if current in valid:
+                continue
         st.session_state[key] = _autopick_column(
             columns, cands,
             include_none=with_none,
@@ -562,19 +576,13 @@ if log_kind == "csv":
         st.stop()
 
     st.subheader("CSV columns")
-    # Defensive sanity check: if any seeded value (e.g. from a previous
-    # CSV) is no longer a valid option for the current file's columns,
-    # re-seed from this file's header. Without this guard, Streamlit's
-    # selectbox would raise when it can't find the saved value in the
-    # options list.
-    _valid_required = set(columns)
-    _valid_optional = _valid_required | {_NONE_OPT}
-    if (st.session_state.get("csv_case") not in _valid_required
-            or st.session_state.get("csv_activity") not in _valid_required
-            or st.session_state.get("csv_timestamp") not in _valid_required
-            or st.session_state.get("csv_role") not in _valid_optional
-            or st.session_state.get("csv_resource") not in _valid_optional):
-        _seed_csv_selectors(columns)
+    # Defensive sanity check, per-key: if any saved selector value is
+    # missing or no longer a valid option for the current file's
+    # columns, re-seed JUST that key (preserves the user's other
+    # picks). All-key reseeding here would silently overwrite the
+    # role / resource choices that the user explicitly made on the
+    # initial Apply column mapping click.
+    _seed_csv_selectors(columns, only_invalid=True)
 
     cc1, cc2, cc3 = st.columns(3)
     case_col = cc1.selectbox(
