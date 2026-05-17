@@ -29,6 +29,26 @@ pm4py_ucm.write_ucm(ucm, "running-example.jucm")  # opens in jUCMNav
 [ucm-wiki]: https://en.wikipedia.org/wiki/Use_Case_Maps
 [jucmnav]: https://github.com/JUCMNAV/projetseg-update
 
+## Web front-end
+
+If you would rather click than code, a [Streamlit](https://streamlit.io)
+front-end ships in the [`web/`](web/) directory. Upload an event log
+(XES or CSV), tune the inductive miner / decomposition / performer
+settings interactively, preview the diagram in UCM or BPMN notation, and
+download the rendered PNG plus the `.jucm` file.
+
+![Overview of the PM4Py-UCM web interface](web/WebInterfaceOverview.png)
+
+Run locally with:
+
+```bash
+pip install -r web/requirements.txt
+streamlit run web/streamlit_app.py
+```
+
+See [`web/README.md`](web/README.md) for the full feature walkthrough and
+Streamlit Community Cloud deployment instructions.
+
 ## Why UCM alongside BPMN?
 
 BPMN is excellent for procedural choreographies, but it forces a single
