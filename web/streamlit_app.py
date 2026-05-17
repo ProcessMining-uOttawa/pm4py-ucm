@@ -90,6 +90,60 @@ def _render_png(ucm, style: str, out_path: str) -> str:
     return _stacked._composite(panels, out_path)
 
 
+# ---- CSV column autodetect --------------------------------------------------
+# Common XES / process-mining column names. The mapping value is the
+# session_state key the autopick result is written to so the column
+# selectors below read it as their initial value. ``include_none`` means
+# the option list starts with a "(none)" sentinel — used for optional
+# role / resource columns where "no column" is a valid choice.
+_CSV_AUTOPICK = [
+    # (session key,        candidate names,                                                include_none)
+    ("csv_case",       ("case:concept:name", "case_id", "case", "caseid"),                  False),
+    ("csv_activity",   ("concept:name", "activity", "activityname", "event", "task"),       False),
+    ("csv_timestamp",  ("time:timestamp", "timestamp", "time", "datetime", "date"),         False),
+    ("csv_role",       ("org:role", "role"),                                                True),
+    ("csv_resource",   ("org:resource", "resource", "user", "performer"),                   True),
+]
+_NONE_OPT = "(none)"
+
+
+def _autopick_column(columns, candidates, *, include_none, fallback_index):
+    """Pick the best column from ``columns`` matching any of ``candidates``.
+
+    Case-insensitive match. When ``include_none`` is True the result is
+    one of ``columns`` or :data:`_NONE_OPT` (no match -> "(none)").
+    When False the result is always one of ``columns`` (no match ->
+    columns[fallback_index]).
+    """
+    lower = {c.lower(): c for c in columns}
+    for cand in candidates:
+        hit = lower.get(cand.lower())
+        if hit is not None:
+            return hit
+    if include_none:
+        return _NONE_OPT
+    return columns[min(fallback_index, len(columns) - 1)]
+
+
+def _seed_csv_selectors(columns):
+    """Pre-populate the column selectors with autodetected values.
+
+    Writing to ``st.session_state`` before the selectboxes render means
+    the new CSV's auto-detected mapping is the deterministic initial
+    display — the user sees the proposed columns immediately and can
+    confirm or modify them. Without this step Streamlit would fall back
+    to the selectbox's ``index=`` parameter, which is only consulted
+    when the key has no session_state value: across reruns that can
+    produce confusing transient states.
+    """
+    for i, (key, cands, with_none) in enumerate(_CSV_AUTOPICK):
+        st.session_state[key] = _autopick_column(
+            columns, cands,
+            include_none=with_none,
+            fallback_index=i,
+        )
+
+
 @st.cache_data(show_spinner="Reading CSV columns...")
 def _csv_columns(csv_bytes: bytes, _file_hash: str) -> List[str]:
     """Read just the header row of a CSV and return its column names.
@@ -435,13 +489,23 @@ if uploaded is not None:
         st.session_state["log_kind"] = (
             "csv" if name_lower.endswith(".csv") else "xes"
         )
-        # A genuinely new file: reset prior CSV column mapping.
-        # ``applied_csv_columns`` is the *committed* mapping the miner
-        # sees; ``csv_<col>`` are the live selectbox values. Both are
-        # cleared so a second CSV starts from a clean slate.
-        for k in ("csv_case", "csv_activity", "csv_timestamp",
-                  "csv_role", "csv_resource", "applied_csv_columns"):
-            st.session_state.pop(k, None)
+        # A genuinely new file: reset the committed CSV column mapping
+        # so mining waits for explicit confirmation on the new file.
+        st.session_state.pop("applied_csv_columns", None)
+        # For CSV uploads, seed the column selectors with autodetected
+        # defaults based on the new file's header. This makes the
+        # proposed mapping visible immediately on first render of the
+        # new file, so the user can confirm/modify before clicking
+        # Apply column mapping.
+        if st.session_state["log_kind"] == "csv":
+            _new_columns = _csv_columns(new_bytes, new_hash)
+            if _new_columns:
+                _seed_csv_selectors(_new_columns)
+            else:
+                # Header read failed — clear stale values so we don't
+                # surface a previous file's choices.
+                for k, _, _ in _CSV_AUTOPICK:
+                    st.session_state.pop(k, None)
 
 if "log_bytes" not in st.session_state:
     st.info("Upload a log to begin.")
@@ -465,90 +529,82 @@ if log_kind == "csv":
         st.stop()
 
     st.subheader("CSV columns")
-    # Try to autodetect common column names so the user usually only has
-    # to confirm. Match case-insensitively against a small library.
-    def _autopick(candidates, default_index=0):
-        lower = {c.lower(): c for c in columns}
-        for cand in candidates:
-            if cand.lower() in lower:
-                return columns.index(lower[cand.lower()])
-        return default_index
+    # Defensive sanity check: if any seeded value (e.g. from a previous
+    # CSV) is no longer a valid option for the current file's columns,
+    # re-seed from this file's header. Without this guard, Streamlit's
+    # selectbox would raise when it can't find the saved value in the
+    # options list.
+    _valid_required = set(columns)
+    _valid_optional = _valid_required | {_NONE_OPT}
+    if (st.session_state.get("csv_case") not in _valid_required
+            or st.session_state.get("csv_activity") not in _valid_required
+            or st.session_state.get("csv_timestamp") not in _valid_required
+            or st.session_state.get("csv_role") not in _valid_optional
+            or st.session_state.get("csv_resource") not in _valid_optional):
+        _seed_csv_selectors(columns)
 
-    none_opt = "(none)"
     cc1, cc2, cc3 = st.columns(3)
     case_col = cc1.selectbox(
-        "Case id column", options=columns,
-        index=_autopick(["case:concept:name", "case_id", "case", "caseid"]),
-        key="csv_case",
+        "Case id column", options=columns, key="csv_case",
     )
     activity_col = cc2.selectbox(
-        "Activity column", options=columns,
-        index=_autopick(
-            ["concept:name", "activity", "activityname", "event", "task"],
-            default_index=min(1, len(columns) - 1),
-        ),
-        key="csv_activity",
+        "Activity column", options=columns, key="csv_activity",
     )
     ts_col = cc3.selectbox(
-        "Timestamp column", options=columns,
-        index=_autopick(
-            ["time:timestamp", "timestamp", "time", "datetime", "date"],
-            default_index=min(2, len(columns) - 1),
-        ),
-        key="csv_timestamp",
+        "Timestamp column", options=columns, key="csv_timestamp",
     )
 
     cc4, cc5 = st.columns(2)
-    _role_opts = [none_opt] + columns
-    _resource_opts = [none_opt] + columns
+    _role_opts = [_NONE_OPT] + columns
+    _resource_opts = [_NONE_OPT] + columns
     role_col = cc4.selectbox(
-        "Role column (optional)", options=_role_opts,
-        index=_autopick(["org:role", "role"]) + 1
-        if any(c.lower() in ("org:role", "role") for c in columns)
-        else 0,
-        key="csv_role",
+        "Role column (optional)", options=_role_opts, key="csv_role",
     )
     resource_col = cc5.selectbox(
-        "Resource column (optional)", options=_resource_opts,
-        index=_autopick(["org:resource", "resource", "user", "performer"]) + 1
-        if any(c.lower() in ("org:resource", "resource", "user", "performer")
-               for c in columns)
-        else 0,
-        key="csv_resource",
+        "Resource column (optional)", options=_resource_opts, key="csv_resource",
     )
 
     candidate_csv_columns = (
         case_col,
         activity_col,
         ts_col,
-        "" if role_col == none_opt else role_col,
-        "" if resource_col == none_opt else resource_col,
+        "" if role_col == _NONE_OPT else role_col,
+        "" if resource_col == _NONE_OPT else resource_col,
     )
 
-    # Buffered apply: mining waits for the user to explicitly confirm
-    # the column mapping (same pattern as the decomposition Advanced
-    # section). This avoids crashes when a second CSV is uploaded with
-    # different headers and the autodetect picks a column that doesn't
-    # match the user's intent — they get a chance to inspect and
-    # correct the mapping before the miner runs.
+    # Buffered apply: mining uses the *committed* mapping
+    # (``applied_csv_columns``). On a fresh upload (no committed
+    # mapping yet) mining is blocked until the user clicks Apply.
+    # Once a mapping is committed, subsequent edits to the selectors
+    # show a warning + remine button but do NOT block mining — this
+    # way changes to other settings (notation, decomposition, etc.)
+    # do not require re-confirming a column mapping that the user
+    # happened to fiddle with.
     applied_csv_columns = st.session_state.get("applied_csv_columns")
-    if applied_csv_columns != candidate_csv_columns:
-        if applied_csv_columns is None:
-            st.info(
-                "Review the column mapping above, then click "
-                "**Apply column mapping** to start mining."
-            )
-        else:
-            st.warning(
-                "Column mapping has unapplied changes. "
-                "Click **Apply column mapping** to remine."
-            )
-        if st.button("Apply column mapping", type="primary"):
+    if applied_csv_columns is None:
+        st.info(
+            "Review the column mapping above, then click "
+            "**Apply column mapping** to start mining."
+        )
+        if st.button("Apply column mapping", type="primary",
+                     key="apply_csv_initial"):
             st.session_state["applied_csv_columns"] = candidate_csv_columns
             st.rerun()
         st.stop()
+    elif applied_csv_columns != candidate_csv_columns:
+        st.warning(
+            "Column mapping has unapplied changes. "
+            "Click **Apply column mapping** to remine."
+        )
+        if st.button("Apply column mapping", type="primary",
+                     key="apply_csv_update"):
+            st.session_state["applied_csv_columns"] = candidate_csv_columns
+            st.rerun()
+        # Do NOT st.stop() — mining continues with the previously
+        # applied mapping so toggles elsewhere (notation, decomposition)
+        # remain responsive.
 
-    csv_columns = applied_csv_columns
+    csv_columns = st.session_state["applied_csv_columns"]
 # Effective min_support: when the slider is disabled, pass 0.0 to keep
 # the cache key stable (so dragging the disabled slider — which Streamlit
 # still records as a state change — doesn't invalidate the mining cache).
