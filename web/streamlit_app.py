@@ -331,14 +331,14 @@ with st.sidebar:
     st.subheader("Inductive miner")
     noise_threshold = st.slider(
         "Noise threshold",
-        min_value=0.0, max_value=1.0, value=0.0, step=0.05,
+        min_value=0.0, max_value=1.0, value=0.2, step=0.05,
         help=(
             "Infrequent inductive miner (IMf) threshold. "
-            "0.0 (default) - keep every observed behaviour (classic "
-            "Inductive Miner); higher values filter out increasingly "
-            "rare arcs / activities, producing smaller and more "
-            "abstract models at the cost of perfect fitness. Typical "
-            "useful range is 0.1-0.4."
+            "0.0 keeps every observed behaviour (classic Inductive "
+            "Miner, perfect fitness, often noisy). Higher values "
+            "filter out increasingly rare arcs / activities, producing "
+            "smaller and more abstract models. 0.2 is a common "
+            "practical default; useful range is roughly 0.1-0.4."
         ),
     )
 
