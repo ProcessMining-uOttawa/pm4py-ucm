@@ -1,10 +1,11 @@
-"""pm4py-ucm web front-end.
+"""PM4Py-UCM web front-end.
 
 Run locally:
     streamlit run web/streamlit_app.py
 
-Flow: upload XES -> inductive-mine a UCM -> render PNG in the selected
-notation (UCM or BPMN) -> download the PNG and/or the .jucm.
+Flow: upload an event log (XES or CSV) -> inductive-mine a UCM ->
+render PNG in the selected notation (UCM or BPMN) -> download the PNG
+and/or the .jucm.
 
 Mining and rendering are cached separately so toggling the notation
 (UCM <-> BPMN) only re-renders the PNG; the inductive miner runs only
@@ -19,11 +20,13 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import os
 import tempfile
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
+import pandas as pd
 import streamlit as st
 
 import pm4py
@@ -49,9 +52,12 @@ _PILImage.MAX_IMAGE_PIXELS = None
 _DISPLAY_WIDTH_PX = 1100
 
 
-st.set_page_config(page_title="pm4py-ucm", layout="wide")
-st.title("pm4py-ucm")
-st.caption("Mine a Use Case Map from an XES event log and export to jUCMNav.")
+st.set_page_config(page_title="PM4Py-UCM", layout="wide")
+st.title("PM4Py-UCM")
+st.caption(
+    "Mine a Use Case Map model from an XES event log and export it to "
+    "jUCMNav, or to PNG files with BPMN or UCM views."
+)
 
 
 def _render_png(ucm, style: str, out_path: str) -> str:
@@ -84,20 +90,52 @@ def _render_png(ucm, style: str, out_path: str) -> str:
     return _stacked._composite(panels, out_path)
 
 
+@st.cache_data(show_spinner="Reading CSV columns...")
+def _csv_columns(csv_bytes: bytes, _file_hash: str) -> List[str]:
+    """Read just the header row of a CSV and return its column names.
+
+    Cheap to compute and shared across reruns, so the column selectors
+    in the main pane stay snappy even on large CSVs. Falls back to
+    Python's csv module when pandas can't sniff the dialect.
+    """
+    try:
+        # nrows=0 reads the header only.
+        df_head = pd.read_csv(io.BytesIO(csv_bytes), nrows=0)
+        return list(df_head.columns)
+    except Exception:
+        # Last-resort fallback so the user still gets a list to pick from.
+        import csv as _csv
+        text = csv_bytes.decode("utf-8", errors="replace").splitlines()
+        if not text:
+            return []
+        reader = _csv.reader(text[:1])
+        return next(reader, [])
+
+
 @st.cache_data(show_spinner="Mining UCM...")
 def _mine(
-    xes_bytes: bytes,
-    decomposition_spec,  # str "off" or tuple-of-(key, value) pairs
+    log_bytes: bytes,
+    log_kind: str,                  # "xes" or "csv"
+    csv_columns,                    # tuple (case, activity, timestamp, role, resource) or None
+    decomposition_spec,             # str "off" or tuple-of-(key, value) pairs
     resource_attribute: str,
     min_support: float,
     _file_hash: str,
 ):
-    """Read XES and mine a UCM. Returns the .jucm bytes plus metadata.
+    """Read the event log and mine a UCM. Returns .jucm bytes + metadata.
 
-    Cached per (file, decomposition_spec, resource_attribute, min_support).
-    Notation does **not** affect mining, so it is intentionally absent
-    from the cache key — toggling UCM <-> BPMN goes through
-    :func:`_render_cached` without rerunning the inductive miner.
+    Cached per (file, kind, csv columns, decomposition_spec,
+    resource_attribute, min_support). Notation does **not** affect
+    mining, so it is intentionally absent from the cache key — toggling
+    UCM <-> BPMN goes through :func:`_render_cached` without rerunning
+    the inductive miner.
+
+    For ``log_kind="csv"``, ``csv_columns`` is a 5-tuple
+    ``(case_col, activity_col, timestamp_col, role_col, resource_col)``
+    (role/resource may be empty strings). The CSV is converted to a
+    PM4Py-formatted DataFrame via ``pm4py.format_dataframe`` and the
+    role/resource columns are renamed to the standard XES attribute
+    names so the performer miner picks them up.
 
     ``decomposition_spec`` is either the literal string ``"off"`` or a
     sorted tuple of ``(key, value)`` pairs (so the cache key is hashable
@@ -114,10 +152,40 @@ def _mine(
     """
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
-        xes_path = td / "log.xes"
-        xes_path.write_bytes(xes_bytes)
 
-        log = pm4py.read_xes(str(xes_path))
+        if log_kind == "csv":
+            if not csv_columns:
+                raise ValueError("CSV column mapping is required.")
+            case_col, activity_col, ts_col, role_col, resource_col = csv_columns
+            if not (case_col and activity_col and ts_col):
+                raise ValueError(
+                    "Case, activity, and timestamp columns are required "
+                    "for CSV import."
+                )
+            df = pd.read_csv(io.BytesIO(log_bytes))
+            # format_dataframe renames the three required columns to the
+            # PM4Py standard (case:concept:name, concept:name, time:timestamp).
+            df = pm4py.format_dataframe(
+                df,
+                case_id=case_col,
+                activity_key=activity_col,
+                timestamp_key=ts_col,
+            )
+            # Rename role/resource columns to the standard XES attribute
+            # names so the performer miner finds them via "org:role" /
+            # "org:resource".
+            renames = {}
+            if role_col and role_col != "org:role":
+                renames[role_col] = "org:role"
+            if resource_col and resource_col != "org:resource":
+                renames[resource_col] = "org:resource"
+            if renames:
+                df = df.rename(columns=renames)
+            log = df
+        else:
+            xes_path = td / "log.xes"
+            xes_path.write_bytes(log_bytes)
+            log = pm4py.read_xes(str(xes_path))
 
         # Build the parameters dict the inductive variant understands.
         # An empty resource_attribute means "disable performer mining"
@@ -335,10 +403,14 @@ with st.sidebar:
     )
 
 uploaded = st.file_uploader(
-    "Upload an XES event log",
-    type=["xes", "gz"],
-    help="Standard XES (.xes) or gzip-compressed (.xes.gz).",
-    key="xes_uploader",
+    "Upload an event log",
+    type=["xes", "gz", "csv"],
+    help=(
+        "XES (.xes / .xes.gz) is mined directly. "
+        "CSV requires picking the case / activity / timestamp columns "
+        "(and optionally role / resource) after upload."
+    ),
+    key="log_uploader",
 )
 
 # Persist the uploaded bytes in session_state so reruns triggered by
@@ -347,17 +419,98 @@ uploaded = st.file_uploader(
 # in some Streamlit / browser combinations, which would otherwise drop
 # the user back at the upload prompt.
 if uploaded is not None:
-    st.session_state["xes_bytes"] = uploaded.getvalue()
-    st.session_state["xes_name"] = uploaded.name
+    name_lower = uploaded.name.lower()
+    st.session_state["log_bytes"] = uploaded.getvalue()
+    st.session_state["log_name"] = uploaded.name
+    st.session_state["log_kind"] = (
+        "csv" if name_lower.endswith(".csv") else "xes"
+    )
+    # Reset any prior CSV column mapping when a new file is uploaded.
+    for k in ("csv_case", "csv_activity", "csv_timestamp",
+              "csv_role", "csv_resource"):
+        st.session_state.pop(k, None)
 
-if "xes_bytes" not in st.session_state:
+if "log_bytes" not in st.session_state:
     st.info("Upload a log to begin.")
     st.stop()
 
-xes_bytes = st.session_state["xes_bytes"]
-xes_name = st.session_state["xes_name"]
-file_hash = hashlib.sha256(xes_bytes).hexdigest()[:16]
+log_bytes = st.session_state["log_bytes"]
+log_name = st.session_state["log_name"]
+log_kind = st.session_state["log_kind"]
+file_hash = hashlib.sha256(log_bytes).hexdigest()[:16]
 style = notation.lower()  # "ucm" / "bpmn"
+
+# ---- CSV column mapping -----------------------------------------------------
+# For CSV uploads, the user picks which columns hold the case id,
+# activity name, timestamp, and optionally role / resource. Mining is
+# blocked until the three required columns are chosen.
+csv_columns: Optional[Tuple[str, str, str, str, str]] = None
+if log_kind == "csv":
+    columns = _csv_columns(log_bytes, file_hash)
+    if not columns:
+        st.error("Could not read columns from the uploaded CSV.")
+        st.stop()
+
+    st.subheader("CSV columns")
+    # Try to autodetect common column names so the user usually only has
+    # to confirm. Match case-insensitively against a small library.
+    def _autopick(candidates, default_index=0):
+        lower = {c.lower(): c for c in columns}
+        for cand in candidates:
+            if cand.lower() in lower:
+                return columns.index(lower[cand.lower()])
+        return default_index
+
+    none_opt = "(none)"
+    cc1, cc2, cc3 = st.columns(3)
+    case_col = cc1.selectbox(
+        "Case id column", options=columns,
+        index=_autopick(["case:concept:name", "case_id", "case", "caseid"]),
+        key="csv_case",
+    )
+    activity_col = cc2.selectbox(
+        "Activity column", options=columns,
+        index=_autopick(
+            ["concept:name", "activity", "activityname", "event", "task"],
+            default_index=min(1, len(columns) - 1),
+        ),
+        key="csv_activity",
+    )
+    ts_col = cc3.selectbox(
+        "Timestamp column", options=columns,
+        index=_autopick(
+            ["time:timestamp", "timestamp", "time", "datetime", "date"],
+            default_index=min(2, len(columns) - 1),
+        ),
+        key="csv_timestamp",
+    )
+
+    cc4, cc5 = st.columns(2)
+    _role_opts = [none_opt] + columns
+    _resource_opts = [none_opt] + columns
+    role_col = cc4.selectbox(
+        "Role column (optional)", options=_role_opts,
+        index=_autopick(["org:role", "role"]) + 1
+        if any(c.lower() in ("org:role", "role") for c in columns)
+        else 0,
+        key="csv_role",
+    )
+    resource_col = cc5.selectbox(
+        "Resource column (optional)", options=_resource_opts,
+        index=_autopick(["org:resource", "resource", "user", "performer"]) + 1
+        if any(c.lower() in ("org:resource", "resource", "user", "performer")
+               for c in columns)
+        else 0,
+        key="csv_resource",
+    )
+
+    csv_columns = (
+        case_col,
+        activity_col,
+        ts_col,
+        "" if role_col == none_opt else role_col,
+        "" if resource_col == none_opt else resource_col,
+    )
 # Effective min_support: when the slider is disabled, pass 0.0 to keep
 # the cache key stable (so dragging the disabled slider — which Streamlit
 # still records as a state change — doesn't invalidate the mining cache).
@@ -372,7 +525,8 @@ decomposition_spec = st.session_state["applied_decomp"]
 
 try:
     mined = _mine(
-        xes_bytes, decomposition_spec,
+        log_bytes, log_kind, csv_columns,
+        decomposition_spec,
         resource_attribute, effective_min_support,
         file_hash,
     )
@@ -382,7 +536,7 @@ except Exception as exc:
     st.stop()
 
 c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("File", xes_name)
+c1.metric("File", log_name)
 c2.metric("Notation", notation)
 c3.metric("Decomposition", decomposition_preset)
 c4.metric("Maps", mined["n_maps"])
@@ -410,12 +564,12 @@ d1, d2 = st.columns(2)
 d1.download_button(
     "Download PNG",
     data=png_bytes,
-    file_name=Path(xes_name).stem + ".png",
+    file_name=Path(log_name).stem + ".png",
     mime="image/png",
 )
 d2.download_button(
     "Download .jucm",
     data=mined["jucm"],
-    file_name=Path(xes_name).stem + ".jucm",
+    file_name=Path(log_name).stem + ".jucm",
     mime="application/xml",
 )
