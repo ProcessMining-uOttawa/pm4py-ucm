@@ -173,15 +173,21 @@ _UCM_STYLES: Dict[type, Dict[str, str]] = {
         fixedsize="true", width="0.06", height="0.40", label="",
     ),
     UCM.RespRef: dict(
-        # UCM responsibility reference: the node itself is invisible
-        # (single transparent point) — the responsibility marker is
-        # drawn as a small black box arrowhead on the incoming edge
-        # (see ``_emit_map`` below). This puts the marker *on* the
-        # path line rather than as a separate × glyph floating
-        # above the line. The activity name floats as an
-        # ``xlabel`` (graphviz positions it externally).
-        shape="point", width="0.01", height="0.01",
-        color="transparent", fillcolor="transparent", label="",
+        # UCM responsibility marker: a small filled black square that
+        # sits *on* the path. We render the marker as the node
+        # itself (rather than as a graphviz arrowhead glyph) so
+        # adjacent path segments meet at the square's bbox boundary
+        # with no offset — the line reads as uninterrupted through
+        # the marker. The activity name floats next to the square
+        # as an ``xlabel`` (graphviz positions it externally).
+        # Edges in/out of the RespRef drop their arrowheads in
+        # :func:`_emit_map` so the square is the only decoration
+        # on the line.
+        shape="square", style="filled",
+        fillcolor="black", color="black",
+        width="0.10", height="0.10",
+        fixedsize="true", margin="0",
+        label="",
     ),
     UCM.OrFork: dict(
         # OR-fork: the path simply branches; render as a small dot.
@@ -577,18 +583,17 @@ def _emit_map(
         # before the empty point ends as a plain line, matching the
         # segment after it.
         #
-        # In the UCM style, edges terminating at a RespRef draw a
-        # small black ``box`` arrowhead — the responsibility marker
-        # is the arrowhead itself, sitting *on* the path line.
-        # Edges leaving a RespRef draw no tail decoration; the path
-        # continues from the box. The BPMN style keeps the standard
-        # forward arrowhead since its activities are boxed
+        # In the UCM style, the RespRef is itself a small filled
+        # black square that visually marks the responsibility on
+        # the path. Edges in/out of it drop their arrowheads so the
+        # square is the only decoration — the path then reads as
+        # uninterrupted, meeting at the square's bbox boundary on
+        # each side. The BPMN style keeps the standard forward
+        # arrowhead since its activities are boxed flow
         # destinations.
         if isinstance(c.target, (UCM.EmptyPoint, UCM.DirectionArrow)):
             edge_attrs["arrowhead"] = "none"
         elif (style_name == STYLE_UCM
                 and isinstance(c.target, UCM.RespRef)):
-            edge_attrs["arrowhead"] = "box"
-            edge_attrs["arrowsize"] = "0.55"
-            edge_attrs["color"] = "black"
+            edge_attrs["arrowhead"] = "none"
         g.edge(node_id(c.source), node_id(c.target), **edge_attrs)

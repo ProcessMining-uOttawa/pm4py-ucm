@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (UCM RespRef marker — continuous path)
+
+- The UCM `RespRef` marker is now a small filled **black square
+  node** rather than a graphviz `box`-arrowhead glyph. The previous
+  approach (invisible point + `arrowhead=box` on incoming edges)
+  left a visible white-space gap between the line and the marker
+  because `splines=spline` routes around the (still-present) node
+  bbox and graphviz places arrowheads with a small offset from
+  the target. With a real square node and `arrowhead=none` on the
+  edges that touch it, adjacent path segments now meet at the
+  square's bbox boundary and the line reads as uninterrupted
+  through the marker. The activity name still floats as an
+  `xlabel`; BPMN style unchanged.
+
 ### Fixed (PNG arrow direction + DirectionArrow rendering)
 
 - **`splines=curved` reverted to `splines=spline`**. The curved

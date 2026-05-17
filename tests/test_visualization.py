@@ -60,18 +60,19 @@ class UCMVisualizationTests(unittest.TestCase):
         # belongs to a stub, of which there are none in this fixture.
         self.assertNotIn("diamond", g.source)
 
-    def test_ucm_respref_uses_box_arrowhead_marker(self):
-        """The text × glyph previously stacked above the path is now
-        replaced by a graphviz ``box`` arrowhead drawn at the end of
-        each edge entering a RespRef. The marker sits on the line
-        itself, keeping the path-line area uncluttered. RespRef nodes
-        themselves are invisible (transparent points)."""
+    def test_ucm_respref_uses_black_square_marker(self):
+        """The text × glyph previously stacked above the path is gone.
+        UCM responsibilities now render as a small filled black
+        square sitting *on* the path line — the square is the node
+        itself, so adjacent path segments meet at its bbox boundary
+        and the line reads as uninterrupted through the marker."""
         ucm = self._build()
         g = visualizer.apply(ucm, parameters={"style": "ucm"})
         # No leftover × glyph from the old style.
         self.assertNotIn("×", g.source)
-        # The marker comes from a ``box`` arrowhead on incoming edges.
-        self.assertIn("arrowhead=box", g.source)
+        # Each RespRef renders as a filled black square node.
+        self.assertIn("shape=square", g.source)
+        self.assertIn("fillcolor=black", g.source)
 
     def test_invalid_style_rejected(self):
         ucm = self._build()
@@ -141,10 +142,11 @@ class ComponentColorTests(unittest.TestCase):
 
 
 class RespRefMarkerTests(unittest.TestCase):
-    """In UCM style, the responsibility marker is a ``box`` arrowhead
-    on incoming edges (the × glyph used to sit above the line).
-    The RespRef node itself is invisible. BPMN keeps the standard
-    arrowhead and a yellow activity box."""
+    """In UCM style, the responsibility marker is the RespRef node
+    itself rendered as a small filled black square. Edges into and
+    out of it drop their arrowheads so the path reads as
+    uninterrupted, with the square sitting *on* the line. BPMN
+    keeps the standard arrowhead and a yellow activity box."""
 
     def _ucm(self):
         ucm = UCM(name="V")
@@ -158,7 +160,7 @@ class RespRefMarkerTests(unittest.TestCase):
         m.add_connection(a, ep)
         return ucm, sp, a, ep
 
-    def test_ucm_edges_into_respref_have_box_arrowhead(self):
+    def test_ucm_edges_into_respref_drop_arrowhead(self):
         ucm, sp, a, ep = self._ucm()
         g = visualizer.apply(ucm, parameters={"style": "ucm"})
         a_tok = f"n{id(a)}"
@@ -166,7 +168,7 @@ class RespRefMarkerTests(unittest.TestCase):
                  if "->" in line and f"-> {a_tok}" in line]
         self.assertTrue(edges)
         for line in edges:
-            self.assertIn("arrowhead=box", line)
+            self.assertIn("arrowhead=none", line)
 
     def test_bpmn_keeps_default_arrowhead_into_respref(self):
         ucm, sp, a, ep = self._ucm()
@@ -176,9 +178,8 @@ class RespRefMarkerTests(unittest.TestCase):
                  if "->" in line and f"-> {a_tok}" in line]
         self.assertTrue(edges)
         for line in edges:
-            # BPMN keeps the standard forward arrowhead — no box, no
-            # arrowhead=none override.
-            self.assertNotIn("arrowhead=box", line)
+            # BPMN keeps the standard forward arrowhead — no UCM-style
+            # override.
             self.assertNotIn("arrowhead=none", line)
 
 
@@ -227,14 +228,13 @@ class DirectionArrowRenderingTests(unittest.TestCase):
                               f"should drop arrowhead: {line}")
 
 
-class InvisibleRespRefNodeTests(unittest.TestCase):
-    """In UCM style, the RespRef node itself is invisible — the marker
-    visible on the diagram is the box arrowhead drawn by the
-    incoming edge. The node uses ``shape=point`` with transparent
-    colours so the edge endpoint just sits at a pixel, with the
-    arrowhead drawn around it."""
+class RespRefSquareNodeTests(unittest.TestCase):
+    """In UCM style, the RespRef node renders as a small filled
+    black square — the visible marker on the path. The path
+    segments terminate at the square's bbox boundary on each
+    side, so the line reads as continuous through the marker."""
 
-    def test_respref_is_invisible_point_in_ucm_style(self):
+    def test_respref_is_filled_black_square_in_ucm_style(self):
         ucm = UCM(name="V")
         m = ucm.add_map(name="M")
         a = m.add_node(UCM.RespRef(
@@ -246,9 +246,11 @@ class InvisibleRespRefNodeTests(unittest.TestCase):
                       if a_tok in line and "->" not in line]
         self.assertTrue(node_lines)
         for line in node_lines:
-            self.assertIn("shape=point", line)
-            self.assertIn("color=transparent", line)
-            self.assertIn("fillcolor=transparent", line)
+            self.assertIn("shape=square", line)
+            self.assertIn("fillcolor=black", line)
+            # Tight bbox so the path meets the square's boundary with
+            # no extra padding.
+            self.assertIn("margin=0", line)
 
 
 class ArrowVisibilityTests(unittest.TestCase):
