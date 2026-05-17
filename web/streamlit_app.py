@@ -174,6 +174,7 @@ def _mine(
     decomposition_spec,             # str "off" or tuple-of-(key, value) pairs
     resource_attribute: str,
     min_support: float,
+    noise_threshold: float,
     _file_hash: str,
 ):
     """Read the event log and mine a UCM. Returns .jucm bytes + metadata.
@@ -272,6 +273,18 @@ def _mine(
         else:
             decomp_arg = dict(decomposition_spec)
 
+        # Pre-mine the process tree with the user-configured threshold,
+        # then hand it to discover_ucm_inductive via parameters
+        # ["process_tree"]. The package pops that key from parameters
+        # and uses the pre-built tree instead of remining with default
+        # settings (see pm4py_ucm/algo/discovery/ucm/variants/inductive.py).
+        # This lets us expose noise_threshold without touching the
+        # package's public API.
+        tree = pm4py.discover_process_tree_inductive(
+            log, noise_threshold=float(noise_threshold),
+        )
+        params["process_tree"] = tree
+
         ucm = pm4py_ucm.discover_ucm_inductive(
             log, parameters=params, decomposition=decomp_arg,
         )
@@ -315,6 +328,20 @@ with st.sidebar:
             "BPMN: BPMN-friendly look (activity boxes, gateway diamonds)."
         ),
     )
+    st.subheader("Inductive miner")
+    noise_threshold = st.slider(
+        "Noise threshold",
+        min_value=0.0, max_value=1.0, value=0.0, step=0.05,
+        help=(
+            "Infrequent inductive miner (IMf) threshold. "
+            "0.0 (default) - keep every observed behaviour (classic "
+            "Inductive Miner); higher values filter out increasingly "
+            "rare arcs / activities, producing smaller and more "
+            "abstract models at the cost of perfect fitness. Typical "
+            "useful range is 0.1-0.4."
+        ),
+    )
+
     decomposition_preset = st.selectbox(
         "Decomposition",
         options=["off", "auto", "aggressive"],
@@ -628,6 +655,7 @@ try:
         log_bytes, log_kind, csv_columns,
         decomposition_spec,
         resource_attribute, effective_min_support,
+        noise_threshold,
         file_hash,
     )
     png_bytes = _render_cached(mined["jucm"], style)
