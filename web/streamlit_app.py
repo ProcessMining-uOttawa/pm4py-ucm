@@ -207,6 +207,12 @@ with st.sidebar:
     # without expanding the section. When the user changes the preset,
     # the widget identity (the ``key=`` argument) is preset-specific so
     # Streamlit re-runs them from their new defaults.
+    #
+    # Widget edits do NOT trigger an immediate remine. The user makes as
+    # many changes as they want, then clicks "Apply changes" to commit
+    # them. The committed state is held in ``st.session_state`` under
+    # ``applied_decomp``; the mining cache key reads from that, not from
+    # the live widget values.
     decomposition_overrides: dict = {}
     if decomposition_preset != "off":
         from pm4py_ucm.objects.ucm.conversion.decomposition import (
@@ -261,6 +267,27 @@ with st.sidebar:
                     "this fraction."
                 ),
             )
+
+    # ---- Buffered apply ----------------------------------------------------
+    # Convert the live widget state to the cache-friendly spec form.
+    if decomposition_preset == "off":
+        candidate_spec: object = "off"
+    else:
+        candidate_spec = tuple(sorted(decomposition_overrides.items()))
+
+    # First render: seed applied state from candidate so the initial
+    # mine actually runs without waiting for an Apply click.
+    if "applied_decomp" not in st.session_state:
+        st.session_state["applied_decomp"] = candidate_spec
+
+    if candidate_spec != st.session_state["applied_decomp"]:
+        st.warning(
+            "Decomposition settings have unapplied changes. "
+            "Click **Apply changes** to remine."
+        )
+        if st.button("Apply changes", type="primary"):
+            st.session_state["applied_decomp"] = candidate_spec
+            st.rerun()
 
     st.subheader("Performers")
     _RES_BUILTIN = ["org:role", "org:resource"]
@@ -325,14 +352,12 @@ style = notation.lower()  # "ucm" / "bpmn"
 # still records as a state change — doesn't invalidate the mining cache).
 effective_min_support = 0.0 if _min_support_disabled else min_support
 
-# Build the cache-friendly decomposition spec. "off" stays a literal
-# string; otherwise we pass a sorted tuple of (key, value) pairs so the
-# cache key is hashable and order-independent. The miner reconstructs
-# the dict.
-if decomposition_preset == "off":
-    decomposition_spec: object = "off"
-else:
-    decomposition_spec = tuple(sorted(decomposition_overrides.items()))
+# Use the *applied* decomposition spec rather than the live widget
+# values: the user can tweak the advanced controls freely; only
+# clicking "Apply changes" (handled in the sidebar above) promotes the
+# widget state into ``applied_decomp`` and triggers a remine on the
+# next rerun.
+decomposition_spec = st.session_state["applied_decomp"]
 
 try:
     mined = _mine(
