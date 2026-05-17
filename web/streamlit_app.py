@@ -426,8 +426,11 @@ if uploaded is not None:
         "csv" if name_lower.endswith(".csv") else "xes"
     )
     # Reset any prior CSV column mapping when a new file is uploaded.
+    # ``applied_csv_columns`` is the *committed* mapping the miner sees;
+    # ``csv_<col>`` are the live selectbox values. Both are cleared so a
+    # second CSV starts from a clean slate.
     for k in ("csv_case", "csv_activity", "csv_timestamp",
-              "csv_role", "csv_resource"):
+              "csv_role", "csv_resource", "applied_csv_columns"):
         st.session_state.pop(k, None)
 
 if "log_bytes" not in st.session_state:
@@ -504,13 +507,38 @@ if log_kind == "csv":
         key="csv_resource",
     )
 
-    csv_columns = (
+    candidate_csv_columns = (
         case_col,
         activity_col,
         ts_col,
         "" if role_col == none_opt else role_col,
         "" if resource_col == none_opt else resource_col,
     )
+
+    # Buffered apply: mining waits for the user to explicitly confirm
+    # the column mapping (same pattern as the decomposition Advanced
+    # section). This avoids crashes when a second CSV is uploaded with
+    # different headers and the autodetect picks a column that doesn't
+    # match the user's intent — they get a chance to inspect and
+    # correct the mapping before the miner runs.
+    applied_csv_columns = st.session_state.get("applied_csv_columns")
+    if applied_csv_columns != candidate_csv_columns:
+        if applied_csv_columns is None:
+            st.info(
+                "Review the column mapping above, then click "
+                "**Apply column mapping** to start mining."
+            )
+        else:
+            st.warning(
+                "Column mapping has unapplied changes. "
+                "Click **Apply column mapping** to remine."
+            )
+        if st.button("Apply column mapping", type="primary"):
+            st.session_state["applied_csv_columns"] = candidate_csv_columns
+            st.rerun()
+        st.stop()
+
+    csv_columns = applied_csv_columns
 # Effective min_support: when the slider is disabled, pass 0.0 to keep
 # the cache key stable (so dragging the disabled slider — which Streamlit
 # still records as a state change — doesn't invalidate the mining cache).
