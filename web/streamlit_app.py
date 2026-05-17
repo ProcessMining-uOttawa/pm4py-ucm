@@ -3,19 +3,21 @@
 Run locally:
     streamlit run web/streamlit_app.py
 
-Flow: upload XES -> inductive-mine a UCM -> render high-DPI PNG in the
-selected notation (UCM or BPMN) -> download .jucm.
+Flow: upload XES -> inductive-mine a UCM -> render PNG in the selected
+notation (UCM or BPMN) -> download the PNG and/or the .jucm.
 
-Resolution note: pm4py-ucm's visualizer builds a :class:`graphviz.Digraph`
-with hardcoded ``graph_attr`` and no DPI knob. To get a crisp PNG without
-touching the package, we call the visualizer to obtain the Digraph,
-inject ``dpi`` into its ``graph_attr``, then render. For multi-map UCMs
-we render each map individually and composite with the package's own
-``stacked._composite`` helper so we get the same titled, separated layout
-the CLI produces.
+Mining and rendering are cached separately so toggling the notation
+(UCM <-> BPMN) only re-renders the PNG; the inductive miner runs only
+when the log, decomposition, or performer settings change.
+
+PNG resolution is left at graphviz's default (96 dpi). The browser
+display shows the original bitmap inside a fixed-width <img>, so the
+user can scroll-zoom the page or open the image in a new tab to view
+the file at its native resolution.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import os
 import tempfile
@@ -29,23 +31,22 @@ import pm4py_ucm
 from pm4py_ucm.visualization.ucm import visualizer as _visualizer
 from pm4py_ucm.visualization.ucm import stacked as _stacked
 
-# Pillow ships a ~179M-pixel "decompression bomb" guard. At 600 DPI a
-# multi-map UCM mined from a sizeable log (PMM4RPA etc.) easily exceeds
-# that, which makes ``stacked._composite`` (which loads each panel via
-# Pillow) crash with ``DecompressionBombError``. We render these images
-# ourselves with graphviz, so the safety check isn't doing useful work
-# here — disable it. Larger logs simply produce larger PNGs.
+# Pillow ships a ~179M-pixel "decompression bomb" guard. Even at
+# graphviz's default DPI, very large multi-map UCMs can exceed it
+# (PMM4RPA and similarly broad logs), which would make
+# ``stacked._composite`` crash with ``DecompressionBombError``. Disable
+# the check — we render the PNGs ourselves so the guard is not doing
+# useful work here.
 from PIL import Image as _PILImage
 _PILImage.MAX_IMAGE_PIXELS = None
 
 
-# DPI for the rendered PNG. 600 ppi gives near print-grade resolution
-# (graphviz scales fonts and line widths with DPI, so the result is a
-# straight up-res rather than a pixel-doubled bitmap of the same image).
-# The cost is bigger PNGs (a few MB instead of a few hundred kB) — fine
-# for the Streamlit display loop, and the right default for users who
-# may want to drop the image into a paper or slide deck.
-_PNG_DPI = 600
+# Display width (CSS pixels) for the in-browser preview. The underlying
+# PNG keeps its native pixel dimensions — the browser scales the IMG
+# element down, which means right-click "Open image in new tab" still
+# shows the bitmap at full resolution and the user can scroll-zoom in
+# place if they want a closer look.
+_DISPLAY_WIDTH_PX = 1100
 
 
 st.set_page_config(page_title="pm4py-ucm", layout="wide")
@@ -53,8 +54,8 @@ st.title("pm4py-ucm")
 st.caption("Mine a Use Case Map from an XES event log and export to jUCMNav.")
 
 
-def _render_high_dpi_png(ucm, style: str, out_path: str) -> str:
-    """Render ``ucm`` to ``out_path`` at :data:`_PNG_DPI`.
+def _render_png(ucm, style: str, out_path: str) -> str:
+    """Render ``ucm`` to ``out_path`` at graphviz's default resolution.
 
     Handles the single-map case directly and uses the package's
     composite helper for multi-map UCMs.
@@ -63,12 +64,10 @@ def _render_high_dpi_png(ucm, style: str, out_path: str) -> str:
 
     if len(ucm.maps) <= 1:
         gviz = _visualizer.apply(ucm, parameters=params)
-        gviz.graph_attr["dpi"] = str(_PNG_DPI)
         return _visualizer.save(gviz, out_path)
 
-    # Multi-map: replicate stacked._render_each but with DPI injection,
-    # then reuse the package's compositor for the title strips and
-    # separators.
+    # Multi-map: render each panel individually and reuse the package's
+    # compositor for the title strips and separators.
     from pm4py_ucm.visualization.ucm.variants import classic as _classic
 
     panels: List[Tuple[str, str]] = []
@@ -78,7 +77,6 @@ def _render_high_dpi_png(ucm, style: str, out_path: str) -> str:
         per["map_index"] = idx
         per["format"] = "png"
         gviz = _classic.apply(ucm, parameters=per)
-        gviz.graph_attr["dpi"] = str(_PNG_DPI)
         gviz.format = "png"
         base = os.path.join(tmpdir, f"map_{idx:03d}")
         rendered = gviz.render(filename=base, cleanup=True)
@@ -89,18 +87,17 @@ def _render_high_dpi_png(ucm, style: str, out_path: str) -> str:
 @st.cache_data(show_spinner="Mining UCM...")
 def _mine(
     xes_bytes: bytes,
-    style: str,
     decomposition: str,
     resource_attribute: str,
     min_support: float,
     _file_hash: str,
 ):
-    """Read XES, mine UCM, render high-DPI PNG, serialize .jucm.
+    """Read XES and mine a UCM. Returns the .jucm bytes plus metadata.
 
-    Cached per (file hash, style, decomposition, resource_attribute,
-    min_support) so toggling notation re-renders without re-mining,
-    while changes to anything that affects the mined model (decomposition
-    or performer configuration) trigger a remine.
+    Cached per (file, decomposition, resource_attribute, min_support).
+    Notation does **not** affect mining, so it is intentionally absent
+    from the cache key — toggling UCM <-> BPMN goes through
+    :func:`_render_cached` without rerunning the inductive miner.
 
     ``resource_attribute`` may be:
 
@@ -139,17 +136,32 @@ def _mine(
             log, parameters=params, decomposition=decomposition,
         )
 
-        png_path = td / "model.png"
-        _render_high_dpi_png(ucm, style, str(png_path))
         jucm_path = td / "model.jucm"
         pm4py_ucm.write_ucm(ucm, str(jucm_path))
 
         return {
-            "png": png_path.read_bytes(),
             "jucm": jucm_path.read_bytes(),
             "n_maps": len(ucm.maps),
             "n_nodes": sum(len(m.nodes) for m in ucm.maps),
         }
+
+
+@st.cache_data(show_spinner="Rendering diagram...")
+def _render_cached(jucm_bytes: bytes, style: str) -> bytes:
+    """Render the UCM (round-tripped from .jucm bytes) to PNG bytes.
+
+    Cached per (jucm hash, style). The first argument is hashable, so
+    flipping the notation toggle hits the cache after one render per
+    style.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        jucm_path = td / "model.jucm"
+        jucm_path.write_bytes(jucm_bytes)
+        ucm = pm4py_ucm.read_ucm(str(jucm_path))
+        png_path = td / "model.png"
+        _render_png(ucm, style, str(png_path))
+        return png_path.read_bytes()
 
 
 with st.sidebar:
@@ -188,6 +200,15 @@ with st.sidebar:
             "mining."
         ),
     )
+    # Min support is meaningful only when both:
+    #   * a resource attribute is configured (otherwise no performer
+    #     mining happens at all), and
+    #   * decomposition is on (the support filter is most useful when
+    #     deciding which performer "owns" a sub-map; with decomposition
+    #     off the slider has no visible effect on the rendered diagram).
+    _min_support_disabled = (
+        not resource_attribute.strip() or decomposition == "off"
+    )
     min_support = st.slider(
         "Min support",
         min_value=0.0, max_value=1.0, value=0.0, step=0.05,
@@ -196,9 +217,10 @@ with st.sidebar:
             "on the same performer before the binding is kept. 0.0 "
             "(default) accepts the modal performer even when the resource "
             "pool is highly dispersed; raise (e.g. 0.5) to require a "
-            "clear majority."
+            "clear majority. Disabled when performer mining is off, or "
+            "when decomposition is off."
         ),
-        disabled=not resource_attribute.strip(),
+        disabled=_min_support_disabled,
     )
 
 uploaded = st.file_uploader(
@@ -214,13 +236,18 @@ if uploaded is None:
 xes_bytes = uploaded.getvalue()
 file_hash = hashlib.sha256(xes_bytes).hexdigest()[:16]
 style = notation.lower()  # "ucm" / "bpmn"
+# Effective min_support: when the slider is disabled, pass 0.0 to keep
+# the cache key stable (so dragging the disabled slider — which Streamlit
+# still records as a state change — doesn't invalidate the mining cache).
+effective_min_support = 0.0 if _min_support_disabled else min_support
 
 try:
-    result = _mine(
-        xes_bytes, style, decomposition,
-        resource_attribute, min_support,
+    mined = _mine(
+        xes_bytes, decomposition,
+        resource_attribute, effective_min_support,
         file_hash,
     )
+    png_bytes = _render_cached(mined["jucm"], style)
 except Exception as exc:
     st.error(f"Mining failed: {exc}")
     st.stop()
@@ -229,34 +256,37 @@ c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("File", uploaded.name)
 c2.metric("Notation", notation)
 c3.metric("Decomposition", decomposition)
-c4.metric("Maps", result["n_maps"])
-c5.metric("Nodes", result["n_nodes"])
+c4.metric("Maps", mined["n_maps"])
+c5.metric("Nodes", mined["n_nodes"])
 
-# Streamlit 1.36+ deprecated ``use_column_width``; ``width="stretch"``
-# is the supported replacement (image fills its container width).
-# Note: the in-browser preview is downscaled to the column width — at
-# 600 DPI the original PNG is far larger than the display column, so it
-# will look softened in the page. Use the "Download PNG" button below
-# to grab the full-resolution file for papers / slides.
-st.image(
-    result["png"],
-    caption=(
-        f"Mined model ({notation}, decomposition={decomposition}) — "
-        f"preview is scaled to fit; download for full {_PNG_DPI} ppi."
-    ),
-    width="stretch",
+# Embed the PNG via a raw <img> tag so the original bitmap is sent to
+# the browser unchanged. ``width=`` is a CSS pixel size, NOT a resample:
+# the browser only scales the displayed element. Right-click → "Open
+# image in new tab" yields the file at its native resolution, and
+# scroll-zooming the page magnifies the rendered bitmap directly.
+_b64 = base64.b64encode(png_bytes).decode("ascii")
+st.markdown(
+    f'<img src="data:image/png;base64,{_b64}" '
+    f'width="{_DISPLAY_WIDTH_PX}" '
+    f'style="max-width:100%; height:auto;" '
+    f'alt="Mined {notation} model" />',
+    unsafe_allow_html=True,
+)
+st.caption(
+    f"Mined model ({notation}, decomposition={decomposition}) — "
+    f"open in a new tab or zoom in for a closer look."
 )
 
 d1, d2 = st.columns(2)
 d1.download_button(
     "Download PNG",
-    data=result["png"],
+    data=png_bytes,
     file_name=Path(uploaded.name).stem + ".png",
     mime="image/png",
 )
 d2.download_button(
     "Download .jucm",
-    data=result["jucm"],
+    data=mined["jucm"],
     file_name=Path(uploaded.name).stem + ".jucm",
     mime="application/xml",
 )
