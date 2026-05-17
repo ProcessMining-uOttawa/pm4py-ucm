@@ -338,13 +338,24 @@ uploaded = st.file_uploader(
     "Upload an XES event log",
     type=["xes", "gz"],
     help="Standard XES (.xes) or gzip-compressed (.xes.gz).",
+    key="xes_uploader",
 )
 
-if uploaded is None:
+# Persist the uploaded bytes in session_state so reruns triggered by
+# the sidebar (notation toggle, "Apply changes", etc.) don't lose the
+# log — st.file_uploader can return None on a programmatic st.rerun()
+# in some Streamlit / browser combinations, which would otherwise drop
+# the user back at the upload prompt.
+if uploaded is not None:
+    st.session_state["xes_bytes"] = uploaded.getvalue()
+    st.session_state["xes_name"] = uploaded.name
+
+if "xes_bytes" not in st.session_state:
     st.info("Upload a log to begin.")
     st.stop()
 
-xes_bytes = uploaded.getvalue()
+xes_bytes = st.session_state["xes_bytes"]
+xes_name = st.session_state["xes_name"]
 file_hash = hashlib.sha256(xes_bytes).hexdigest()[:16]
 style = notation.lower()  # "ucm" / "bpmn"
 # Effective min_support: when the slider is disabled, pass 0.0 to keep
@@ -371,7 +382,7 @@ except Exception as exc:
     st.stop()
 
 c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("File", uploaded.name)
+c1.metric("File", xes_name)
 c2.metric("Notation", notation)
 c3.metric("Decomposition", decomposition_preset)
 c4.metric("Maps", mined["n_maps"])
@@ -399,12 +410,12 @@ d1, d2 = st.columns(2)
 d1.download_button(
     "Download PNG",
     data=png_bytes,
-    file_name=Path(uploaded.name).stem + ".png",
+    file_name=Path(xes_name).stem + ".png",
     mime="image/png",
 )
 d2.download_button(
     "Download .jucm",
     data=mined["jucm"],
-    file_name=Path(uploaded.name).stem + ".jucm",
+    file_name=Path(xes_name).stem + ".jucm",
     mime="application/xml",
 )
