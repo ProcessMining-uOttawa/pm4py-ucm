@@ -87,17 +87,21 @@ def _render_png(ucm, style: str, out_path: str) -> str:
 @st.cache_data(show_spinner="Mining UCM...")
 def _mine(
     xes_bytes: bytes,
-    decomposition: str,
+    decomposition_spec,  # str "off" or tuple-of-(key, value) pairs
     resource_attribute: str,
     min_support: float,
     _file_hash: str,
 ):
     """Read XES and mine a UCM. Returns the .jucm bytes plus metadata.
 
-    Cached per (file, decomposition, resource_attribute, min_support).
+    Cached per (file, decomposition_spec, resource_attribute, min_support).
     Notation does **not** affect mining, so it is intentionally absent
     from the cache key — toggling UCM <-> BPMN goes through
     :func:`_render_cached` without rerunning the inductive miner.
+
+    ``decomposition_spec`` is either the literal string ``"off"`` or a
+    sorted tuple of ``(key, value)`` pairs (so the cache key is hashable
+    and order-independent); the dict is reconstructed before the call.
 
     ``resource_attribute`` may be:
 
@@ -132,8 +136,16 @@ def _mine(
         if attrs:
             params["resource_parameters"] = {"min_support": float(min_support)}
 
+        # Reconstruct the decomposition argument from the cache-friendly
+        # spec. "off" stays a string; a tuple of pairs becomes a dict
+        # that the discoverer's parse_decomposition merges onto AUTO_DEFAULTS.
+        if decomposition_spec == "off":
+            decomp_arg = "off"
+        else:
+            decomp_arg = dict(decomposition_spec)
+
         ucm = pm4py_ucm.discover_ucm_inductive(
-            log, parameters=params, decomposition=decomposition,
+            log, parameters=params, decomposition=decomp_arg,
         )
 
         jucm_path = td / "model.jucm"
@@ -175,7 +187,7 @@ with st.sidebar:
             "BPMN: BPMN-friendly look (activity boxes, gateway diamonds)."
         ),
     )
-    decomposition = st.selectbox(
+    decomposition_preset = st.selectbox(
         "Decomposition",
         options=["off", "auto", "aggressive"],
         index=0,
@@ -184,31 +196,104 @@ with st.sidebar:
             "auto: split into a root map plus plug-in maps when the "
             "model is large enough to benefit. "
             "aggressive: same boundary rules with a tighter cap, "
-            "producing more / smaller plug-ins."
+            "producing more / smaller plug-ins. "
+            "Use the Advanced section to override individual keys."
         ),
     )
 
+    # Decomposition advanced keys. Visible only when decomposition is on.
+    # The widget defaults are seeded from the chosen preset so the
+    # "auto vs aggressive" choice still has an immediate effect even
+    # without expanding the section. When the user changes the preset,
+    # the widget identity (the ``key=`` argument) is preset-specific so
+    # Streamlit re-runs them from their new defaults.
+    decomposition_overrides: dict = {}
+    if decomposition_preset != "off":
+        from pm4py_ucm.objects.ucm.conversion.decomposition import (
+            AUTO_DEFAULTS, AGGRESSIVE_DEFAULTS,
+        )
+        _preset_defaults = (
+            AUTO_DEFAULTS if decomposition_preset == "auto"
+            else AGGRESSIVE_DEFAULTS
+        )
+        with st.expander("Decomposition - advanced", expanded=False):
+            kp = f"decomp_{decomposition_preset}_"
+            decomposition_overrides["on_root_sequence"] = st.checkbox(
+                "on_root_sequence",
+                value=bool(_preset_defaults["on_root_sequence"]),
+                key=kp + "rs",
+                help="Each child of a top-level sequence becomes a plug-in map.",
+            )
+            decomposition_overrides["on_parallel"] = st.checkbox(
+                "on_parallel",
+                value=bool(_preset_defaults["on_parallel"]),
+                key=kp + "par",
+                help="Each branch of a parallel (+) becomes a plug-in map.",
+            )
+            decomposition_overrides["on_loop"] = st.checkbox(
+                "on_loop",
+                value=bool(_preset_defaults["on_loop"]),
+                key=kp + "lp",
+                help="Each loop (*) expansion becomes a plug-in map.",
+            )
+            decomposition_overrides["max_leaves_per_map"] = st.number_input(
+                "max_leaves_per_map",
+                min_value=1, max_value=500,
+                value=int(_preset_defaults["max_leaves_per_map"]),
+                step=1, key=kp + "mx",
+                help="Hard cap on the activity-leaf count of any single map.",
+            )
+            decomposition_overrides["min_leaves_to_decompose"] = st.number_input(
+                "min_leaves_to_decompose",
+                min_value=1, max_value=100,
+                value=int(_preset_defaults["min_leaves_to_decompose"]),
+                step=1, key=kp + "mn",
+                help="Subtrees smaller than this are never cut.",
+            )
+            decomposition_overrides["balance_ratio"] = st.slider(
+                "balance_ratio",
+                min_value=0.0, max_value=1.0,
+                value=float(_preset_defaults["balance_ratio"]),
+                step=0.05, key=kp + "br",
+                help=(
+                    "Siblings under a + or top-level -> are only extracted "
+                    "when their share of the parent's leaves is at least "
+                    "this fraction."
+                ),
+            )
+
     st.subheader("Performers")
-    resource_attribute = st.text_input(
+    _RES_BUILTIN = ["org:role", "org:resource"]
+    _RES_OTHER = "Other..."
+    resource_choice = st.selectbox(
         "Resource attribute",
-        value="org:resource",
+        options=_RES_BUILTIN + [_RES_OTHER, "(none)"],
+        index=0,
         help=(
             "Event attribute holding the performer name. "
-            "Pass a fallback list like "
-            "`org:role, org:resource, org:group` to use the first one "
-            "that's set on each event. Leave empty to disable performer "
-            "mining."
+            "Choose org:role / org:resource, pick 'Other...' to type a "
+            "custom attribute name (or a fallback list like "
+            "`org:role, org:resource, org:group`), or '(none)' to "
+            "disable performer mining."
         ),
     )
-    # Min support is meaningful only when both:
-    #   * a resource attribute is configured (otherwise no performer
-    #     mining happens at all), and
-    #   * decomposition is on (the support filter is most useful when
-    #     deciding which performer "owns" a sub-map; with decomposition
-    #     off the slider has no visible effect on the rendered diagram).
-    _min_support_disabled = (
-        not resource_attribute.strip() or decomposition == "off"
-    )
+    if resource_choice == _RES_OTHER:
+        resource_attribute = st.text_input(
+            "Custom attribute(s)",
+            value="org:role, org:resource, org:group",
+            help=(
+                "Single attribute name, or a comma/whitespace-separated "
+                "fallback list (first one set on each event wins)."
+            ),
+        )
+    elif resource_choice == "(none)":
+        resource_attribute = ""
+    else:
+        resource_attribute = resource_choice
+
+    # Min support is meaningful only when a resource attribute is configured
+    # (otherwise no performer mining happens at all).
+    _min_support_disabled = not resource_attribute.strip()
     min_support = st.slider(
         "Min support",
         min_value=0.0, max_value=1.0, value=0.0, step=0.05,
@@ -217,8 +302,7 @@ with st.sidebar:
             "on the same performer before the binding is kept. 0.0 "
             "(default) accepts the modal performer even when the resource "
             "pool is highly dispersed; raise (e.g. 0.5) to require a "
-            "clear majority. Disabled when performer mining is off, or "
-            "when decomposition is off."
+            "clear majority. Disabled when performer mining is off."
         ),
         disabled=_min_support_disabled,
     )
@@ -241,9 +325,18 @@ style = notation.lower()  # "ucm" / "bpmn"
 # still records as a state change — doesn't invalidate the mining cache).
 effective_min_support = 0.0 if _min_support_disabled else min_support
 
+# Build the cache-friendly decomposition spec. "off" stays a literal
+# string; otherwise we pass a sorted tuple of (key, value) pairs so the
+# cache key is hashable and order-independent. The miner reconstructs
+# the dict.
+if decomposition_preset == "off":
+    decomposition_spec: object = "off"
+else:
+    decomposition_spec = tuple(sorted(decomposition_overrides.items()))
+
 try:
     mined = _mine(
-        xes_bytes, decomposition,
+        xes_bytes, decomposition_spec,
         resource_attribute, effective_min_support,
         file_hash,
     )
@@ -255,7 +348,7 @@ except Exception as exc:
 c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("File", uploaded.name)
 c2.metric("Notation", notation)
-c3.metric("Decomposition", decomposition)
+c3.metric("Decomposition", decomposition_preset)
 c4.metric("Maps", mined["n_maps"])
 c5.metric("Nodes", mined["n_nodes"])
 
@@ -273,7 +366,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.caption(
-    f"Mined model ({notation}, decomposition={decomposition}) — "
+    f"Mined model ({notation}, decomposition={decomposition_preset}) — "
     f"open in a new tab or zoom in for a closer look."
 )
 
