@@ -30,10 +30,13 @@ from pm4py_ucm.visualization.ucm import visualizer as _visualizer
 from pm4py_ucm.visualization.ucm import stacked as _stacked
 
 
-# DPI for the rendered PNG. 220 roughly doubles graphviz's default of 96
+# DPI for the rendered PNG. 600 ppi gives near print-grade resolution
 # (graphviz scales fonts and line widths with DPI, so the result is a
-# straight up-res rather than just a bigger bitmap of the same image).
-_PNG_DPI = 220
+# straight up-res rather than a pixel-doubled bitmap of the same image).
+# The cost is bigger PNGs (a few MB instead of a few hundred kB) — fine
+# for the Streamlit display loop, and the right default for users who
+# may want to drop the image into a paper or slide deck.
+_PNG_DPI = 600
 
 
 st.set_page_config(page_title="pm4py-ucm", layout="wide")
@@ -75,13 +78,29 @@ def _render_high_dpi_png(ucm, style: str, out_path: str) -> str:
 
 
 @st.cache_data(show_spinner="Mining UCM...")
-def _mine(xes_bytes: bytes, style: str, decomposition: str, _file_hash: str):
+def _mine(
+    xes_bytes: bytes,
+    style: str,
+    decomposition: str,
+    resource_attribute: str,
+    min_support: float,
+    _file_hash: str,
+):
     """Read XES, mine UCM, render high-DPI PNG, serialize .jucm.
 
-    Cached per (file hash, style, decomposition) so toggling notation or
-    the decomposition mode re-renders without redoing the steps that
-    haven't changed (mining is rerun only when the decomposition mode
-    changes — it affects the mined model itself).
+    Cached per (file hash, style, decomposition, resource_attribute,
+    min_support) so toggling notation re-renders without re-mining,
+    while changes to anything that affects the mined model (decomposition
+    or performer configuration) trigger a remine.
+
+    ``resource_attribute`` may be:
+
+    * an empty string — disables performer mining (passes
+      ``resource_attribute=False`` to the discoverer);
+    * a single attribute name like ``"org:resource"``;
+    * a comma- or whitespace-separated fallback list like
+      ``"org:role, org:resource, org:group"`` — the first attribute
+      that is set on each event wins.
     """
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
@@ -89,8 +108,26 @@ def _mine(xes_bytes: bytes, style: str, decomposition: str, _file_hash: str):
         xes_path.write_bytes(xes_bytes)
 
         log = pm4py.read_xes(str(xes_path))
+
+        # Build the parameters dict the inductive variant understands.
+        # An empty resource_attribute means "disable performer mining"
+        # — pass False explicitly so the discoverer doesn't fall back
+        # to its default attribute list.
+        params: dict = {}
+        attrs = [a.strip() for a in resource_attribute.replace(",", " ").split()
+                 if a.strip()]
+        if not attrs:
+            params["resource_attribute"] = False
+        elif len(attrs) == 1:
+            params["resource_attribute"] = attrs[0]
+        else:
+            params["resource_attribute"] = attrs
+        # min_support only applies when resource mining is on.
+        if attrs:
+            params["resource_parameters"] = {"min_support": float(min_support)}
+
         ucm = pm4py_ucm.discover_ucm_inductive(
-            log, decomposition=decomposition,
+            log, parameters=params, decomposition=decomposition,
         )
 
         png_path = td / "model.png"
@@ -130,6 +167,31 @@ with st.sidebar:
         ),
     )
 
+    st.subheader("Performers")
+    resource_attribute = st.text_input(
+        "Resource attribute",
+        value="org:resource",
+        help=(
+            "Event attribute holding the performer name. "
+            "Pass a fallback list like "
+            "`org:role, org:resource, org:group` to use the first one "
+            "that's set on each event. Leave empty to disable performer "
+            "mining."
+        ),
+    )
+    min_support = st.slider(
+        "Min support",
+        min_value=0.0, max_value=1.0, value=0.0, step=0.05,
+        help=(
+            "Minimum fraction of events for an activity that must agree "
+            "on the same performer before the binding is kept. 0.0 "
+            "(default) accepts the modal performer even when the resource "
+            "pool is highly dispersed; raise (e.g. 0.5) to require a "
+            "clear majority."
+        ),
+        disabled=not resource_attribute.strip(),
+    )
+
 uploaded = st.file_uploader(
     "Upload an XES event log",
     type=["xes", "gz"],
@@ -145,7 +207,11 @@ file_hash = hashlib.sha256(xes_bytes).hexdigest()[:16]
 style = notation.lower()  # "ucm" / "bpmn"
 
 try:
-    result = _mine(xes_bytes, style, decomposition, file_hash)
+    result = _mine(
+        xes_bytes, style, decomposition,
+        resource_attribute, min_support,
+        file_hash,
+    )
 except Exception as exc:
     st.error(f"Mining failed: {exc}")
     st.stop()
