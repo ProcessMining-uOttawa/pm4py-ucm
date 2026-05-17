@@ -419,19 +419,29 @@ uploaded = st.file_uploader(
 # in some Streamlit / browser combinations, which would otherwise drop
 # the user back at the upload prompt.
 if uploaded is not None:
-    name_lower = uploaded.name.lower()
-    st.session_state["log_bytes"] = uploaded.getvalue()
-    st.session_state["log_name"] = uploaded.name
-    st.session_state["log_kind"] = (
-        "csv" if name_lower.endswith(".csv") else "xes"
-    )
-    # Reset any prior CSV column mapping when a new file is uploaded.
-    # ``applied_csv_columns`` is the *committed* mapping the miner sees;
-    # ``csv_<col>`` are the live selectbox values. Both are cleared so a
-    # second CSV starts from a clean slate.
-    for k in ("csv_case", "csv_activity", "csv_timestamp",
-              "csv_role", "csv_resource", "applied_csv_columns"):
-        st.session_state.pop(k, None)
+    # ``st.file_uploader`` returns the same UploadedFile on every rerun,
+    # so we must only react when the upload is *new* — otherwise the
+    # CSV column-mapping reset below would fire after every button
+    # click and undo what the user just applied. Detect "new" by
+    # hashing the bytes and comparing to the stored hash.
+    new_bytes = uploaded.getvalue()
+    new_hash = hashlib.sha256(new_bytes).hexdigest()[:16]
+    prev_hash = st.session_state.get("log_hash")
+    if new_hash != prev_hash:
+        name_lower = uploaded.name.lower()
+        st.session_state["log_bytes"] = new_bytes
+        st.session_state["log_name"] = uploaded.name
+        st.session_state["log_hash"] = new_hash
+        st.session_state["log_kind"] = (
+            "csv" if name_lower.endswith(".csv") else "xes"
+        )
+        # A genuinely new file: reset prior CSV column mapping.
+        # ``applied_csv_columns`` is the *committed* mapping the miner
+        # sees; ``csv_<col>`` are the live selectbox values. Both are
+        # cleared so a second CSV starts from a clean slate.
+        for k in ("csv_case", "csv_activity", "csv_timestamp",
+                  "csv_role", "csv_resource", "applied_csv_columns"):
+            st.session_state.pop(k, None)
 
 if "log_bytes" not in st.session_state:
     st.info("Upload a log to begin.")
@@ -440,7 +450,7 @@ if "log_bytes" not in st.session_state:
 log_bytes = st.session_state["log_bytes"]
 log_name = st.session_state["log_name"]
 log_kind = st.session_state["log_kind"]
-file_hash = hashlib.sha256(log_bytes).hexdigest()[:16]
+file_hash = st.session_state["log_hash"]
 style = notation.lower()  # "ucm" / "bpmn"
 
 # ---- CSV column mapping -----------------------------------------------------
