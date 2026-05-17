@@ -281,7 +281,7 @@ class ArrowVisibilityTests(unittest.TestCase):
 
 
 class UCMOnlyEdgePenwidthTests(unittest.TestCase):
-    """UCM paths are thicker (penwidth 1.8 pt) than BPMN edges
+    """UCM paths are thicker (penwidth 2.6 pt) than BPMN edges
     (default 1.0 pt). The change is style-scoped so BPMN renders
     keep the lighter look."""
 
@@ -295,7 +295,7 @@ class UCMOnlyEdgePenwidthTests(unittest.TestCase):
 
     def test_ucm_edges_have_thicker_penwidth(self):
         g = visualizer.apply(self._ucm(), parameters={"style": "ucm"})
-        self.assertRegex(g.source, r'edge \[[^\]]*penwidth="?1\.8"?[^\]]*\]')
+        self.assertRegex(g.source, r'edge \[[^\]]*penwidth="?2\.6"?[^\]]*\]')
 
     def test_bpmn_edges_have_default_penwidth(self):
         g = visualizer.apply(self._ucm(), parameters={"style": "bpmn"})
@@ -337,7 +337,7 @@ class UCMOnlyClusterLabelTests(unittest.TestCase):
         g = visualizer.apply(self._ucm_with_cluster(),
                               parameters={"style": "ucm"})
         self.assertEqual(self._cluster_fontsize(g.source),
-                          DEFAULT_FONT_SIZE + 5)
+                          DEFAULT_FONT_SIZE + 7)
         self.assertIn("Helvetica-Bold", g.source)
 
     def test_bpmn_cluster_label_modest(self):
@@ -345,7 +345,7 @@ class UCMOnlyClusterLabelTests(unittest.TestCase):
         g = visualizer.apply(self._ucm_with_cluster(),
                               parameters={"style": "bpmn"})
         self.assertEqual(self._cluster_fontsize(g.source),
-                          DEFAULT_FONT_SIZE + 1)
+                          DEFAULT_FONT_SIZE + 4)
 
 
 class SplineRoutingTests(unittest.TestCase):

@@ -211,7 +211,8 @@ _UCM_STYLES: Dict[type, Dict[str, str]] = {
     UCM.Stub: dict(
         # Diamonds are reserved for stubs in UCM — keep them prominent.
         shape="diamond", style="filled", fillcolor="#FFFFFF",
-        color="#444444", fixedsize="true", width="0.55", height="0.40",
+        color="#444444", penwidth="2.5",
+        fixedsize="true", width="0.55", height="0.40",
     ),
     UCM.WaitingPlace: dict(
         # UCM waiting place: hollow circle.
@@ -452,7 +453,7 @@ def apply(ucm: UCM, parameters: Optional[Dict[str, Any]] = None) -> Digraph:
                     # graphviz's default 1.0 pt for the activity-box
                     # look.
                     "penwidth": (
-                        "1.8" if style_name == STYLE_UCM else "1.0"
+                        "2.6" if style_name == STYLE_UCM else "1.0"
                     ),
                 })
     g.format = fmt
@@ -546,7 +547,7 @@ def _emit_map(
             # similar visual emphasis. BPMN keeps a more restrained
             # +1pt over the node-label size.
             cluster_fontsize = str(int(DEFAULT_FONT_SIZE) + (
-                5 if style_name == STYLE_UCM else 1
+                7 if style_name == STYLE_UCM else 4
             ))
             sub.attr(
                 label=comp_name or "Component",
@@ -563,7 +564,11 @@ def _emit_map(
                 # the pastel fill and the in-cluster nodes.
                 fontname=f"{DEFAULT_FONT}-Bold",
                 fontsize=cluster_fontsize,
-                penwidth="2" if is_actor else "1.2",
+                penwidth=(
+                    ("3" if is_actor else "2.2")
+                    if style_name == STYLE_UCM
+                    else ("2" if is_actor else "1.2")
+                ),
                 margin="14",
             )
             for node in ucm_map.nodes:
