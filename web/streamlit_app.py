@@ -249,8 +249,15 @@ def _csv_columns(csv_bytes: bytes, _file_hash: str) -> List[str]:
         return next(reader, [])
 
 
-# show_spinner=False because we drive our own multi-step ``st.status``
-# panel inside the function (single phase-by-phase progress UI).
+# show_spinner=False so cache hits leave no UI trace at all. The
+# orchestrating code below wraps the call in ``st.spinner`` (transient,
+# only visible during actual computation) so the user sees feedback on
+# a cache miss but nothing on a cache hit. Per-phase status updates are
+# pushed through the ``_status`` parameter when one is supplied —
+# Streamlit passes the live ``st.status`` handle so the cached function
+# can call ``.update()`` mid-run. The ``_status`` arg is prefixed with
+# underscore to keep it out of the cache key (different status handles
+# across reruns must not invalidate cached results).
 @st.cache_data(show_spinner=False)
 def _mine(
     log_bytes: bytes,
@@ -261,6 +268,7 @@ def _mine(
     min_support: float,
     noise_threshold: float,
     _file_hash: str,
+    _status=None,
 ):
     """Read the event log and mine a UCM. Returns .jucm bytes + metadata.
 
@@ -290,12 +298,14 @@ def _mine(
       ``"org:role, org:resource, org:group"`` — the first attribute
       that is set on each event wins.
     """
-    # Multi-step progress via ``st.status``. On a 100k-event log the
-    # process-tree mining step can take a couple of minutes; without
-    # phase-level feedback the user has no way to tell the app from a
-    # hung worker.
-    with st.status("Mining UCM...", expanded=False) as status, \
-            tempfile.TemporaryDirectory() as td:
+    # Local helper so we either push to a real ``st.status`` panel (when
+    # the orchestrator provided one) or stay silent (programmatic call,
+    # e.g. cache-warming).
+    def _phase(label: str) -> None:
+        if _status is not None:
+            _status.update(label=label)
+
+    with tempfile.TemporaryDirectory() as td:
         td = Path(td)
 
         if log_kind == "csv":
@@ -313,11 +323,11 @@ def _mine(
             # for different chunks and trigger DtypeWarning + downstream
             # type confusion. Cost is higher peak RAM; benefit is robust
             # column types for the miner.
-            status.update(label="Reading CSV...")
+            _phase("Reading CSV...")
             df = pd.read_csv(io.BytesIO(log_bytes), low_memory=False)
             # format_dataframe renames the three required columns to the
             # PM4Py standard (case:concept:name, concept:name, time:timestamp).
-            status.update(label=f"Formatting {len(df):,} events...")
+            _phase(f"Formatting {len(df):,} events...")
             df = pm4py.format_dataframe(
                 df,
                 case_id=case_col,
@@ -345,13 +355,13 @@ def _mine(
                 or (len(log_bytes) >= 2 and log_bytes[:2] == b"PK")
             )
             if is_zip:
-                status.update(label="Extracting XES from zip...")
+                _phase("Extracting XES from zip...")
                 xes_bytes = _extract_xes_from_zip(log_bytes)
             else:
                 xes_bytes = log_bytes
             xes_path = td / "log.xes"
             xes_path.write_bytes(xes_bytes)
-            status.update(label="Reading XES...")
+            _phase("Reading XES...")
             log = pm4py.read_xes(str(xes_path))
 
         # Build the parameters dict the inductive variant understands.
@@ -386,28 +396,25 @@ def _mine(
         # settings (see pm4py_ucm/algo/discovery/ucm/variants/inductive.py).
         # This lets us expose noise_threshold without touching the
         # package's public API.
-        status.update(
-            label=(
-                "Discovering process tree "
-                f"(noise threshold {noise_threshold:.2f})... "
-                "this can take a few minutes on large logs."
-            ),
+        _phase(
+            "Discovering process tree "
+            f"(noise threshold {noise_threshold:.2f})... "
+            "this can take a few minutes on large logs."
         )
         tree = pm4py.discover_process_tree_inductive(
             log, noise_threshold=float(noise_threshold),
         )
         params["process_tree"] = tree
 
-        status.update(label="Converting process tree to UCM...")
+        _phase("Converting process tree to UCM...")
         ucm = pm4py_ucm.discover_ucm_inductive(
             log, parameters=params, decomposition=decomp_arg,
         )
 
-        status.update(label="Writing .jucm...")
+        _phase("Writing .jucm...")
         jucm_path = td / "model.jucm"
         pm4py_ucm.write_ucm(ucm, str(jucm_path))
 
-        status.update(label="Done.", state="complete")
         return {
             "jucm": jucm_path.read_bytes(),
             "n_maps": len(ucm.maps),
@@ -415,7 +422,11 @@ def _mine(
         }
 
 
-@st.cache_data(show_spinner="Rendering diagram...")
+# show_spinner=False so cache hits (e.g. flipping back to a notation
+# already rendered) do not display any spinner at all. The orchestrator
+# wraps the call in ``st.spinner`` so the user sees feedback only when
+# the renderer actually has work to do.
+@st.cache_data(show_spinner=False)
 def _render_cached(jucm_bytes: bytes, style: str) -> bytes:
     """Render the UCM (round-tripped from .jucm bytes) to PNG bytes.
 
@@ -627,17 +638,17 @@ def _accept_log_bytes(name: str, payload: bytes) -> None:
     st.session_state["log_hash"] = new_hash
     st.session_state["log_kind"] = kind
     # Reset the committed CSV column mapping so mining waits for
-    # explicit confirmation on the new file.
+    # explicit confirmation on the new file. Also clear the seeding
+    # gate so the CSV section's one-time per-file seed fires fresh
+    # against this file's columns.
     st.session_state.pop("applied_csv_columns", None)
+    st.session_state.pop("csv_seeded_for_hash", None)
     if kind == "csv":
-        cols = _csv_columns(payload, new_hash)
-        if cols:
-            _seed_csv_selectors(cols)
-        else:
-            # Header read failed — clear stale values so we don't
-            # surface a previous file's choices.
-            for k, _, _ in _CSV_AUTOPICK:
-                st.session_state.pop(k, None)
+        # Clear any previous selector state so the seeding gate
+        # downstream doesn't see leftover values that happened to be
+        # valid for the new columns (which would skip the autopick).
+        for k, _, _ in _CSV_AUTOPICK:
+            st.session_state.pop(k, None)
 
 
 # ---- Log source ------------------------------------------------------------
@@ -719,13 +730,33 @@ if log_kind == "csv":
         st.stop()
 
     st.subheader("CSV columns")
-    # Defensive sanity check, per-key: if any saved selector value is
-    # missing or no longer a valid option for the current file's
-    # columns, re-seed JUST that key (preserves the user's other
-    # picks). All-key reseeding here would silently overwrite the
-    # role / resource choices that the user explicitly made on the
-    # initial Apply column mapping click.
-    _seed_csv_selectors(columns, only_invalid=True)
+    # Seeding is gated strictly by file_hash. _accept_log_bytes() seeded
+    # the selectors when this CSV was loaded; we do NOT touch them
+    # again here on subsequent reruns. This guarantees the user's
+    # role / resource picks cannot be silently overwritten by any
+    # defensive re-seed pass — they only change when the user
+    # interacts with the selectbox or uploads a different file.
+    # The recovery path below covers the (rare) edge case where a
+    # stored value is somehow no longer a valid option.
+    _seeded_for = st.session_state.get("csv_seeded_for_hash")
+    if _seeded_for != file_hash:
+        _seed_csv_selectors(columns)
+        st.session_state["csv_seeded_for_hash"] = file_hash
+    else:
+        # Safety net: if any stored value is no longer a valid option
+        # (corrupted state, manual edit, etc.), reseed JUST that key so
+        # Streamlit's selectbox doesn't crash. Valid values are
+        # untouched.
+        _valid_req = set(columns)
+        _valid_opt = _valid_req | {_NONE_OPT}
+        for _i, (_k, _cands, _with_none) in enumerate(_CSV_AUTOPICK):
+            _valid = _valid_opt if _with_none else _valid_req
+            if st.session_state.get(_k) not in _valid:
+                st.session_state[_k] = _autopick_column(
+                    columns, _cands,
+                    include_none=_with_none,
+                    fallback_index=_i,
+                )
 
     cc1, cc2, cc3 = st.columns(3)
     case_col = cc1.selectbox(
@@ -801,15 +832,64 @@ effective_min_support = 0.0 if _min_support_disabled else min_support
 # next rerun.
 decomposition_spec = st.session_state["applied_decomp"]
 
+# Cache-hit short circuit: detect whether the call would hit the cache
+# by comparing the arg fingerprint to the one we stored on the prior
+# run. On a cache hit we skip the st.status / st.spinner wrappers
+# entirely so flipping the notation toggle (which doesn't affect
+# mining) leaves no UI trace. On a cache miss we wrap the call in
+# st.status (mining) / st.spinner (rendering) for live feedback.
+def _arg_fingerprint(*args) -> str:
+    """Stable hash over a tuple of args, used to detect cache-key
+    changes across reruns."""
+    return hashlib.sha256(repr(args).encode("utf-8")).hexdigest()
+
+_mining_fp = _arg_fingerprint(
+    file_hash, log_kind, csv_columns, decomposition_spec,
+    resource_attribute, effective_min_support, noise_threshold,
+)
+_mining_cache_hit = (
+    st.session_state.get("last_mining_fp") == _mining_fp
+)
+
 try:
-    mined = _mine(
-        log_bytes, log_kind, csv_columns,
-        decomposition_spec,
-        resource_attribute, effective_min_support,
-        noise_threshold,
-        file_hash,
+    if _mining_cache_hit:
+        # Same inputs as last run -> guaranteed cache hit. Skip the
+        # status panel so notation toggles, etc. look silent.
+        mined = _mine(
+            log_bytes, log_kind, csv_columns,
+            decomposition_spec,
+            resource_attribute, effective_min_support,
+            noise_threshold,
+            file_hash,
+        )
+    else:
+        with st.status("Mining UCM...", expanded=False) as status:
+            mined = _mine(
+                log_bytes, log_kind, csv_columns,
+                decomposition_spec,
+                resource_attribute, effective_min_support,
+                noise_threshold,
+                file_hash,
+                _status=status,
+            )
+            status.update(label="Done.", state="complete")
+    st.session_state["last_mining_fp"] = _mining_fp
+
+    # Same trick for rendering, keyed on (jucm hash, style). Switching
+    # back to a notation we've already rendered hits the cache and
+    # shows no spinner; first render of a new style shows the spinner.
+    _render_fp = _arg_fingerprint(
+        hashlib.sha256(mined["jucm"]).hexdigest(), style,
     )
-    png_bytes = _render_cached(mined["jucm"], style)
+    _render_cache_hit = (
+        st.session_state.get("last_render_fp") == _render_fp
+    )
+    if _render_cache_hit:
+        png_bytes = _render_cached(mined["jucm"], style)
+    else:
+        with st.spinner(f"Rendering {notation} diagram..."):
+            png_bytes = _render_cached(mined["jucm"], style)
+    st.session_state["last_render_fp"] = _render_fp
 except Exception as exc:
     # Surface the short message inline; tuck the full traceback into
     # an expander so power users can debug without exposing a Python
