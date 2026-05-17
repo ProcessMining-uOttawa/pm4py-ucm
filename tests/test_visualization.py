@@ -337,7 +337,7 @@ class UCMOnlyClusterLabelTests(unittest.TestCase):
         g = visualizer.apply(self._ucm_with_cluster(),
                               parameters={"style": "ucm"})
         self.assertEqual(self._cluster_fontsize(g.source),
-                          DEFAULT_FONT_SIZE + 7)
+                          DEFAULT_FONT_SIZE + 3)
         self.assertIn("Helvetica-Bold", g.source)
 
     def test_bpmn_cluster_label_modest(self):
@@ -382,7 +382,7 @@ class UCMLabelPlacementTests(unittest.TestCase):
         # The RespRef node carries the name as an xlabel — the
         # × glyph itself is gone (replaced by a box arrowhead on
         # the incoming edge).
-        self.assertIn("xlabel=Solo", g.source)
+        self.assertIn("xlabel=<<B>Solo</B>>", g.source)
         self.assertNotIn("×", g.source)
 
     def test_bound_respref_also_uses_xlabel_in_ucm_style(self):
@@ -399,7 +399,7 @@ class UCMLabelPlacementTests(unittest.TestCase):
         ))
         a.cont_ref = cr
         g = visualizer.apply(ucm, parameters={"style": "ucm"})
-        self.assertIn("xlabel=Bound", g.source)
+        self.assertIn("xlabel=<<B>Bound</B>>", g.source)
         self.assertNotIn("×\nBound", g.source)
 
     def test_unbound_stub_uses_xlabel_in_ucm_style(self):
@@ -408,7 +408,7 @@ class UCMLabelPlacementTests(unittest.TestCase):
         m.add_node(UCM.Stub(name="Phase"))
         g = visualizer.apply(ucm, parameters={"style": "ucm"})
         # Diamond stays empty, name floats as xlabel.
-        self.assertRegex(g.source, r'label=""[^\]]*xlabel=Phase')
+        self.assertRegex(g.source, r'label=""[^\]]*xlabel=<<B>Phase</B>>')
 
     def test_cluster_label_top_left(self):
         ucm = UCM(name="V")

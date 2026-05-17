@@ -297,7 +297,9 @@ def _node_style(
         resp_name = _wrapped_resp_name(node)
         if style_name == STYLE_UCM:
             style["label"] = ""
-            style["xlabel"] = resp_name
+            # Bold responsibility name so it stands out from path-line
+            # labels and edge condition glyphs around the marker square.
+            style["xlabel"] = _html_bold(resp_name)
         else:
             style["label"] = resp_name
         return style
@@ -317,6 +319,18 @@ def _node_style(
         elif node.name:
             style["label"] = wrap_name(node.name)
     return style
+
+
+def _html_bold(label: str) -> str:
+    """Wrap a wrapped (``\\n``-separated) plain label in a graphviz
+    HTML-like ``<B>…</B>`` string. Escapes ``&``/``<``/``>`` and turns
+    newlines into ``<BR/>`` so multi-line wrapped names still render."""
+    safe = (label
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\n", "<BR/>"))
+    return f"<<B>{safe}</B>>"
 
 
 def _wrapped_resp_name(node: "UCM.RespRef") -> str:
@@ -523,11 +537,11 @@ def _emit_map(
                 # floats next to it as an external label, so the
                 # path-line area around the diamond stays clean.
                 attrs["label"] = ""
-                attrs["xlabel"] = label
+                attrs["xlabel"] = _html_bold(label)
             else:
                 # UCM, bound to a ComponentRef: the cluster gives the
                 # label space, so we keep it compact inside.
-                attrs["label"] = label
+                attrs["label"] = _html_bold(label)
         g_target.node(node_id(node), **attrs)
 
     # Find root ComponentRefs (no parent), and emit clusters top-down.
@@ -547,7 +561,7 @@ def _emit_map(
             # similar visual emphasis. BPMN keeps a more restrained
             # +1pt over the node-label size.
             cluster_fontsize = str(int(DEFAULT_FONT_SIZE) + (
-                7 if style_name == STYLE_UCM else 4
+                3 if style_name == STYLE_UCM else 4
             ))
             sub.attr(
                 label=comp_name or "Component",
