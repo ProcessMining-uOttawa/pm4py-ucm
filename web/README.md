@@ -31,17 +31,26 @@ so they stay out of the package's own dev workflow (`pip install -e ".[dev]"`).
 
 ## Using the app
 
-### 1 · Upload a log
+### 1 · Pick or upload a log
 
-The file uploader at the top of the page accepts:
+Two tabs at the top of the page:
 
-- **`.xes`** / **`.xes.gz`** — standard XES files are mined directly; the
-  inductive miner runs as soon as the file is uploaded.
-- **`.csv`** — a column-mapping section appears after upload (see step 2).
+- **Sample log** — pick one of the bundled XES logs and click **Load
+  sample**. This is the quickest way to try the tool when you don't
+  have an event log handy. Extending the list is just dropping more
+  `.xes` / `.xes.gz` / `.zip` files into [`web/samples/`](samples) —
+  the selector picks them up automatically on next deploy / restart.
+- **Upload your own** — the file uploader accepts:
+  - **`.xes`** / **`.xes.gz`** — standard XES files are mined directly.
+  - **`.zip`** — searched for the first `.xes` / `.xes.gz` entry inside.
+  - **`.csv`** — a column-mapping section appears after upload (see step 2).
+  - Upload size is capped at 75 MB by `.streamlit/config.toml` (raise it
+    there if you genuinely need bigger files).
 
-Once a file is uploaded its bytes are cached for the rest of the session.
-Changing notation / decomposition / performer settings re-uses the same log,
-so you never have to re-upload to try a different option.
+Once a log is chosen (from a sample or an upload) its bytes are cached
+for the rest of the session. Changing notation / decomposition /
+performer settings re-uses the same log, so you never have to re-pick
+or re-upload to try a different option.
 
 ### 2 · CSV column mapping (CSV uploads only)
 
@@ -142,15 +151,56 @@ Once mining completes, the page shows:
 
 Updates are a `git push` to the tracked branch.
 
+## Adding more sample logs
+
+The **Sample log** tab is populated by scanning
+[`web/samples/`](samples) for `.xes`, `.xes.gz`, and `.zip` files.
+Drop a new file in there and it shows up on the next app start — no
+code change. Display names are derived from the file name (underscores
+become spaces, archive/compression suffixes stripped).
+
+## Robustness & security notes
+
+The app is designed for a low-traffic public demo (Streamlit Community
+Cloud or similar). A few hardening points worth knowing:
+
+- `maxUploadSize` is capped at **75 MB** in [`.streamlit/config.toml`](../.streamlit/config.toml).
+  Bigger logs need to be either mined locally or have the cap raised.
+- The Pillow decompression-bomb guard is raised to **1 billion pixels**
+  rather than disabled. Realistic mined UCMs are far below that.
+- CSV reading uses `low_memory=False` so columns with mid-file dtype
+  changes don't trigger `DtypeWarning` or downstream type confusion.
+- ZIP archives (sample logs and user uploads) are scanned defensively —
+  entries with `..` or absolute paths are skipped to prevent
+  zip-slip-style path traversal.
+- Downloaded file names are sanitised (only `[A-Za-z0-9._-]` survives).
+- Mining failures show a one-line error inline plus an expandable
+  technical-details panel — no raw Python traceback is displayed by
+  default to casual visitors.
+- Large logs (e.g. 100k+ events) can take a couple of minutes in the
+  inductive miner; a multi-phase status panel reports the current step
+  so the page never looks hung. The mining function is wrapped in
+  `st.cache_data` keyed on the log bytes + settings, so toggling
+  notation / re-mining identical inputs is instant.
+
+If you deploy publicly and care deeply about XML safety, also review
+PM4Py's XES parser — it relies on `lxml` under the hood; XXE / billion-
+laughs hardening upstream is the right place for those concerns rather
+than this Streamlit layer.
+
 ## Layout
 
 ```
+.streamlit/
+  config.toml                  # upload-size cap, telemetry off
 web/
   streamlit_app.py             # entry point
   requirements.txt             # streamlit + pm4py + `-e .` (the package itself)
   packages.txt                 # apt: graphviz
   WebInterfaceOverview.png     # screenshot used in this README
   README.md                    # this file
+  samples/
+    *.zip / *.xes / *.xes.gz   # bundled sample logs; auto-listed in the UI
 ```
 
 `-e .` is a relative path resolved against pip's working directory, which is

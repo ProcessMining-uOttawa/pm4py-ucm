@@ -1,0 +1,21 @@
+# Streamlit config for the pm4py-ucm web front-end.
+#
+# Values picked for a public deployment (Streamlit Community Cloud):
+# we want to keep the demo usable for "normal" event logs but not let a
+# single user trivially DoS the server with very large uploads.
+
+[server]
+# Hard cap on uploaded file size, in megabytes. The Streamlit default
+# is 200 MB. Typical XES / CSV event logs for a demo are well under
+# 50 MB; lower the ceiling to reduce both the disk- and the RAM-DoS
+# blast radius. Bump this if you legitimately need larger files.
+maxUploadSize = 75
+
+# Cap WebSocket message size (also megabytes). Mostly relevant for
+# render outputs (PNG bytes). 100 MB is well above any realistic
+# graphviz render.
+maxMessageSize = 100
+
+[browser]
+# Don't phone home with usage stats.
+gatherUsageStats = false

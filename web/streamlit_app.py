@@ -3,9 +3,9 @@
 Run locally:
     streamlit run web/streamlit_app.py
 
-Flow: upload an event log (XES or CSV) -> inductive-mine a UCM ->
-render PNG in the selected notation (UCM or BPMN) -> download the PNG
-and/or the .jucm.
+Flow: choose a bundled sample OR upload an event log (XES/.xes.gz/.zip
+or CSV) -> inductive-mine a UCM -> render PNG in the selected notation
+(UCM or BPMN) -> download the PNG and/or the .jucm.
 
 Mining and rendering are cached separately so toggling the notation
 (UCM <-> BPMN) only re-renders the PNG; the inductive miner runs only
@@ -22,7 +22,10 @@ import base64
 import hashlib
 import io
 import os
+import re
 import tempfile
+import traceback
+import zipfile
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -37,11 +40,77 @@ from pm4py_ucm.visualization.ucm import stacked as _stacked
 # Pillow ships a ~179M-pixel "decompression bomb" guard. Even at
 # graphviz's default DPI, very large multi-map UCMs can exceed it
 # (PMM4RPA and similarly broad logs), which would make
-# ``stacked._composite`` crash with ``DecompressionBombError``. Disable
-# the check — we render the PNGs ourselves so the guard is not doing
-# useful work here.
+# ``stacked._composite`` crash with ``DecompressionBombError``. Raise
+# the limit to a generous but FINITE cap — leaving it at ``None``
+# trusts unbounded image data, which is unsafe for a public deployment
+# (a maliciously-crafted log producing a giant rendering could OOM the
+# server). 1 billion pixels covers any realistic mined UCM with margin.
 from PIL import Image as _PILImage
-_PILImage.MAX_IMAGE_PIXELS = None
+_PILImage.MAX_IMAGE_PIXELS = 1_000_000_000
+
+
+# Where bundled sample logs live, relative to this file. Add more
+# zipped XES files in this folder and they'll appear in the sample
+# selector automatically.
+_SAMPLES_DIR = Path(__file__).resolve().parent / "samples"
+
+
+def _list_samples() -> List[Path]:
+    """Return every bundled sample log file, sorted by display name.
+
+    Anything ending in .xes, .xes.gz, .gz, or .zip is offered. Drop
+    files into ``web/samples/`` to extend the list — no code changes
+    needed.
+    """
+    if not _SAMPLES_DIR.is_dir():
+        return []
+    out: List[Path] = []
+    for p in _SAMPLES_DIR.iterdir():
+        if not p.is_file():
+            continue
+        name = p.name.lower()
+        if name.endswith((".xes", ".xes.gz", ".gz", ".zip")):
+            out.append(p)
+    return sorted(out, key=lambda p: p.name.lower())
+
+
+def _safe_download_name(stem: str, ext: str) -> str:
+    """Strip characters that would be problematic in a downloaded filename.
+
+    Replaces anything outside ``[A-Za-z0-9._-]`` with an underscore and
+    falls back to ``"model"`` when the result is empty. The download
+    target is fully under our control, but defence-in-depth costs
+    nothing here.
+    """
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._-")
+    if not cleaned:
+        cleaned = "model"
+    return f"{cleaned}{ext}"
+
+
+def _extract_xes_from_zip(zip_bytes: bytes) -> bytes:
+    """Pick a single .xes / .xes.gz entry out of a zip archive.
+
+    Guards against zip-slip-style path traversal in archive entries by
+    only honouring entries whose normalised name has no parent
+    components. Raises ``ValueError`` if no usable entry is found.
+    """
+    with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
+        # Pick the first .xes or .xes.gz that lives at the archive root
+        # or in a single subdirectory with a safe name. Reject any
+        # entry whose path tries to escape (`..`) or starts with `/`.
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            name = info.filename
+            if name.startswith("/") or ".." in Path(name).parts:
+                continue
+            low = name.lower()
+            if low.endswith(".xes") or low.endswith(".xes.gz"):
+                return zf.read(info)
+    raise ValueError(
+        "No .xes / .xes.gz entry found in the uploaded zip archive."
+    )
 
 
 # Display width (CSS pixels) for the in-browser preview. The underlying
@@ -180,10 +249,12 @@ def _csv_columns(csv_bytes: bytes, _file_hash: str) -> List[str]:
         return next(reader, [])
 
 
-@st.cache_data(show_spinner="Mining UCM...")
+# show_spinner=False because we drive our own multi-step ``st.status``
+# panel inside the function (single phase-by-phase progress UI).
+@st.cache_data(show_spinner=False)
 def _mine(
     log_bytes: bytes,
-    log_kind: str,                  # "xes" or "csv"
+    log_kind: str,                  # "xes", "csv", or "zip"
     csv_columns,                    # tuple (case, activity, timestamp, role, resource) or None
     decomposition_spec,             # str "off" or tuple-of-(key, value) pairs
     resource_attribute: str,
@@ -219,7 +290,12 @@ def _mine(
       ``"org:role, org:resource, org:group"`` — the first attribute
       that is set on each event wins.
     """
-    with tempfile.TemporaryDirectory() as td:
+    # Multi-step progress via ``st.status``. On a 100k-event log the
+    # process-tree mining step can take a couple of minutes; without
+    # phase-level feedback the user has no way to tell the app from a
+    # hung worker.
+    with st.status("Mining UCM...", expanded=False) as status, \
+            tempfile.TemporaryDirectory() as td:
         td = Path(td)
 
         if log_kind == "csv":
@@ -237,9 +313,11 @@ def _mine(
             # for different chunks and trigger DtypeWarning + downstream
             # type confusion. Cost is higher peak RAM; benefit is robust
             # column types for the miner.
+            status.update(label="Reading CSV...")
             df = pd.read_csv(io.BytesIO(log_bytes), low_memory=False)
             # format_dataframe renames the three required columns to the
             # PM4Py standard (case:concept:name, concept:name, time:timestamp).
+            status.update(label=f"Formatting {len(df):,} events...")
             df = pm4py.format_dataframe(
                 df,
                 case_id=case_col,
@@ -258,8 +336,22 @@ def _mine(
                 df = df.rename(columns=renames)
             log = df
         else:
+            # Accept .xes, .xes.gz, AND .zip (zipped XES is the form
+            # bundled samples ship in). Detect by extension first;
+            # fall back to magic-bytes sniffing so a user can rename
+            # files without the app guessing wrong.
+            is_zip = (
+                log_kind == "zip"
+                or (len(log_bytes) >= 2 and log_bytes[:2] == b"PK")
+            )
+            if is_zip:
+                status.update(label="Extracting XES from zip...")
+                xes_bytes = _extract_xes_from_zip(log_bytes)
+            else:
+                xes_bytes = log_bytes
             xes_path = td / "log.xes"
-            xes_path.write_bytes(log_bytes)
+            xes_path.write_bytes(xes_bytes)
+            status.update(label="Reading XES...")
             log = pm4py.read_xes(str(xes_path))
 
         # Build the parameters dict the inductive variant understands.
@@ -294,18 +386,28 @@ def _mine(
         # settings (see pm4py_ucm/algo/discovery/ucm/variants/inductive.py).
         # This lets us expose noise_threshold without touching the
         # package's public API.
+        status.update(
+            label=(
+                "Discovering process tree "
+                f"(noise threshold {noise_threshold:.2f})... "
+                "this can take a few minutes on large logs."
+            ),
+        )
         tree = pm4py.discover_process_tree_inductive(
             log, noise_threshold=float(noise_threshold),
         )
         params["process_tree"] = tree
 
+        status.update(label="Converting process tree to UCM...")
         ucm = pm4py_ucm.discover_ucm_inductive(
             log, parameters=params, decomposition=decomp_arg,
         )
 
+        status.update(label="Writing .jucm...")
         jucm_path = td / "model.jucm"
         pm4py_ucm.write_ucm(ucm, str(jucm_path))
 
+        status.update(label="Done.", state="complete")
         return {
             "jucm": jucm_path.read_bytes(),
             "n_maps": len(ucm.maps),
@@ -503,11 +605,84 @@ with st.sidebar:
         disabled=_min_support_disabled,
     )
 
-uploaded = st.file_uploader(
+def _accept_log_bytes(name: str, payload: bytes) -> None:
+    """Common entry point for both uploads and sample loads.
+
+    Hashes the bytes, decides log_kind from the extension, resets any
+    prior CSV column mapping, and seeds the CSV selectors with
+    autodetected defaults when relevant.
+    """
+    new_hash = hashlib.sha256(payload).hexdigest()[:16]
+    if new_hash == st.session_state.get("log_hash"):
+        return  # nothing changed — keep current state intact
+    name_lower = name.lower()
+    if name_lower.endswith(".csv"):
+        kind = "csv"
+    elif name_lower.endswith(".zip"):
+        kind = "zip"
+    else:
+        kind = "xes"
+    st.session_state["log_bytes"] = payload
+    st.session_state["log_name"] = name
+    st.session_state["log_hash"] = new_hash
+    st.session_state["log_kind"] = kind
+    # Reset the committed CSV column mapping so mining waits for
+    # explicit confirmation on the new file.
+    st.session_state.pop("applied_csv_columns", None)
+    if kind == "csv":
+        cols = _csv_columns(payload, new_hash)
+        if cols:
+            _seed_csv_selectors(cols)
+        else:
+            # Header read failed — clear stale values so we don't
+            # surface a previous file's choices.
+            for k, _, _ in _CSV_AUTOPICK:
+                st.session_state.pop(k, None)
+
+
+# ---- Log source ------------------------------------------------------------
+samples = _list_samples()
+src_tabs = (
+    st.tabs(["Sample log", "Upload your own"])
+    if samples else (None, st.container())
+)
+
+if samples:
+    with src_tabs[0]:
+        # Pretty display names: drop the extension(s) and replace
+        # underscores with spaces. The Path object stays the source of
+        # truth for the actual file load.
+        def _label(p: Path) -> str:
+            stem = p.name
+            for suffix in (".xes.gz", ".xes", ".zip", ".gz"):
+                if stem.lower().endswith(suffix):
+                    stem = stem[: -len(suffix)]
+                    break
+            return stem.replace("_", " ").strip() or p.name
+
+        label_to_path = {_label(p): p for p in samples}
+        labels = list(label_to_path.keys())
+        st.selectbox(
+            "Choose a bundled log",
+            options=labels,
+            key="sample_choice",
+            help=(
+                "Pre-bundled XES event logs to make it easy to try the "
+                "tool without hunting for an event log. "
+                "Add more files to `web/samples/` to extend this list."
+            ),
+        )
+        if st.button("Load sample", type="primary", key="load_sample"):
+            chosen = label_to_path[st.session_state["sample_choice"]]
+            _accept_log_bytes(chosen.name, chosen.read_bytes())
+            st.rerun()
+
+uploaded = src_tabs[1].file_uploader(
     "Upload an event log",
-    type=["xes", "gz", "csv"],
+    type=["xes", "gz", "csv", "zip"],
     help=(
         "XES (.xes / .xes.gz) is mined directly. "
+        ".zip archives are searched for the first .xes inside. "
         "CSV requires picking the case / activity / timestamp columns "
         "(and optionally role / resource) after upload."
     ),
@@ -520,39 +695,7 @@ uploaded = st.file_uploader(
 # in some Streamlit / browser combinations, which would otherwise drop
 # the user back at the upload prompt.
 if uploaded is not None:
-    # ``st.file_uploader`` returns the same UploadedFile on every rerun,
-    # so we must only react when the upload is *new* — otherwise the
-    # CSV column-mapping reset below would fire after every button
-    # click and undo what the user just applied. Detect "new" by
-    # hashing the bytes and comparing to the stored hash.
-    new_bytes = uploaded.getvalue()
-    new_hash = hashlib.sha256(new_bytes).hexdigest()[:16]
-    prev_hash = st.session_state.get("log_hash")
-    if new_hash != prev_hash:
-        name_lower = uploaded.name.lower()
-        st.session_state["log_bytes"] = new_bytes
-        st.session_state["log_name"] = uploaded.name
-        st.session_state["log_hash"] = new_hash
-        st.session_state["log_kind"] = (
-            "csv" if name_lower.endswith(".csv") else "xes"
-        )
-        # A genuinely new file: reset the committed CSV column mapping
-        # so mining waits for explicit confirmation on the new file.
-        st.session_state.pop("applied_csv_columns", None)
-        # For CSV uploads, seed the column selectors with autodetected
-        # defaults based on the new file's header. This makes the
-        # proposed mapping visible immediately on first render of the
-        # new file, so the user can confirm/modify before clicking
-        # Apply column mapping.
-        if st.session_state["log_kind"] == "csv":
-            _new_columns = _csv_columns(new_bytes, new_hash)
-            if _new_columns:
-                _seed_csv_selectors(_new_columns)
-            else:
-                # Header read failed — clear stale values so we don't
-                # surface a previous file's choices.
-                for k, _, _ in _CSV_AUTOPICK:
-                    st.session_state.pop(k, None)
+    _accept_log_bytes(uploaded.name, uploaded.getvalue())
 
 if "log_bytes" not in st.session_state:
     st.info("Upload a log to begin.")
@@ -668,7 +811,12 @@ try:
     )
     png_bytes = _render_cached(mined["jucm"], style)
 except Exception as exc:
-    st.error(f"Mining failed: {exc}")
+    # Surface the short message inline; tuck the full traceback into
+    # an expander so power users can debug without exposing a Python
+    # stack to casual visitors.
+    st.error(f"Mining failed: {type(exc).__name__}: {exc}")
+    with st.expander("Show technical details"):
+        st.code(traceback.format_exc(), language="text")
     st.stop()
 
 c1, c2, c3, c4, c5 = st.columns(5)
@@ -700,12 +848,12 @@ d1, d2 = st.columns(2)
 d1.download_button(
     "Download PNG",
     data=png_bytes,
-    file_name=Path(log_name).stem + ".png",
+    file_name=_safe_download_name(Path(log_name).stem, ".png"),
     mime="image/png",
 )
 d2.download_button(
     "Download .jucm",
     data=mined["jucm"],
-    file_name=Path(log_name).stem + ".jucm",
+    file_name=_safe_download_name(Path(log_name).stem, ".jucm"),
     mime="application/xml",
 )
