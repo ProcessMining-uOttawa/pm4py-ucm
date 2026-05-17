@@ -29,6 +29,15 @@ import pm4py_ucm
 from pm4py_ucm.visualization.ucm import visualizer as _visualizer
 from pm4py_ucm.visualization.ucm import stacked as _stacked
 
+# Pillow ships a ~179M-pixel "decompression bomb" guard. At 600 DPI a
+# multi-map UCM mined from a sizeable log (PMM4RPA etc.) easily exceeds
+# that, which makes ``stacked._composite`` (which loads each panel via
+# Pillow) crash with ``DecompressionBombError``. We render these images
+# ourselves with graphviz, so the safety check isn't doing useful work
+# here — disable it. Larger logs simply produce larger PNGs.
+from PIL import Image as _PILImage
+_PILImage.MAX_IMAGE_PIXELS = None
+
 
 # DPI for the rendered PNG. 600 ppi gives near print-grade resolution
 # (graphviz scales fonts and line widths with DPI, so the result is a
@@ -225,13 +234,27 @@ c5.metric("Nodes", result["n_nodes"])
 
 # Streamlit 1.36+ deprecated ``use_column_width``; ``width="stretch"``
 # is the supported replacement (image fills its container width).
+# Note: the in-browser preview is downscaled to the column width — at
+# 600 DPI the original PNG is far larger than the display column, so it
+# will look softened in the page. Use the "Download PNG" button below
+# to grab the full-resolution file for papers / slides.
 st.image(
     result["png"],
-    caption=f"Mined model ({notation}, decomposition={decomposition})",
+    caption=(
+        f"Mined model ({notation}, decomposition={decomposition}) — "
+        f"preview is scaled to fit; download for full {_PNG_DPI} ppi."
+    ),
     width="stretch",
 )
 
-st.download_button(
+d1, d2 = st.columns(2)
+d1.download_button(
+    "Download PNG",
+    data=result["png"],
+    file_name=Path(uploaded.name).stem + ".png",
+    mime="image/png",
+)
+d2.download_button(
     "Download .jucm",
     data=result["jucm"],
     file_name=Path(uploaded.name).stem + ".jucm",
