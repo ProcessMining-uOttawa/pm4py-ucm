@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pm4py-ucm"
-version = "0.1.0"
+version = "0.2.0"
 description = "Use Case Map (URN/UCM) extension for PM4Py — process mining → jUCMNav"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -49,9 +49,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/YOUR-GITHUB-USERNAME/pm4py-ucm"
-Issues = "https://github.com/YOUR-GITHUB-USERNAME/pm4py-ucm/issues"
-Changelog = "https://github.com/YOUR-GITHUB-USERNAME/pm4py-ucm/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/ProcessMining-uOttawa/pm4py-ucm"
+Issues = "https://github.com/ProcessMining-uOttawa/pm4py-ucm/issues"
+Changelog = "https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/CHANGELOG.md"
 
 [tool.setuptools]
 include-package-data = true

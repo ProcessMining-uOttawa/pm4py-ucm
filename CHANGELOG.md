@@ -5,9 +5,36 @@ All notable changes to **pm4py-ucm** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] — 2026-05-17
+
+### Added (web front-end)
+
+- **Streamlit web interface** in `web/`. Upload an XES (`.xes` /
+  `.xes.gz`) or CSV event log, tune the inductive miner / decomposition /
+  performer settings interactively, preview the mined UCM in either UCM
+  or BPMN notation, and download the rendered PNG plus the `.jucm` file.
+  Mining and rendering are cached separately so toggling notation
+  re-renders without re-mining; decomposition advanced overrides and CSV
+  column mappings are buffered behind explicit "Apply" buttons so the
+  user can stage multiple changes before triggering a remine. Ships with
+  Streamlit Community Cloud deployment files (`web/requirements.txt`,
+  `web/packages.txt`). See [`web/README.md`](web/README.md) for the full
+  walkthrough.
 
 ### Changed (UCM-only PNG polish)
+
+- **Thicker UCM paths and contours.** Path penwidth raised from
+  graphviz's default `1.0` to `2.6` for the UCM style only — matches
+  jUCMNav's heavier line weight and reads more clearly through the
+  responsibility-marker squares. Component-cluster border raised to
+  `3.0` pt for actors / `2.2` pt otherwise; stub diamond contour
+  raised to `2.5` pt. BPMN style keeps the lighter defaults.
+- **Bold responsibility and stub labels.** UCM-style `RespRef` and
+  `Stub` names render with graphviz HTML `<B>…</B>` labels so they
+  stand out from path-line decorations. BPMN style unchanged.
+- **Component-reference label sizes tuned.** Bold (`Helvetica-Bold`)
+  cluster labels in both styles, sized at `DEFAULT_FONT_SIZE + 3`
+  for UCM and `+4` for BPMN.
 
 - **Thicker UCM paths.** Graph-level `penwidth` raised from
   graphviz's default `1.0` to `1.8` for the UCM style only —
@@ -137,8 +164,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   clear keep the default `<label/>` so jUCMNav renders the name in
   its standard position above the symbol. ComponentRef labels are
   untouched: jUCMNav's default already places them at the top-left.
-
-## [Unreleased — previously]
 
 ### Added
 
@@ -317,4 +342,5 @@ This release was developed across four engineering sessions; see
 `project-history.md` (if shipped separately) for the development arc
 and design decisions in retrospect.
 
-[0.1.0]: https://github.com/YOUR-GITHUB-USERNAME/pm4py-ucm/releases/tag/v0.1.0
+[0.2.0]: https://github.com/ProcessMining-uOttawa/pm4py-ucm/releases/tag/v0.2.0
+[0.1.0]: https://github.com/ProcessMining-uOttawa/pm4py-ucm/releases/tag/v0.1.0

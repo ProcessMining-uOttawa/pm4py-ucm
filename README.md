@@ -1,6 +1,6 @@
 # pm4py-ucm
 
-[![tests](https://github.com/YOUR-GITHUB-USERNAME/pm4py-ucm/actions/workflows/tests.yml/badge.svg)](https://github.com/YOUR-GITHUB-USERNAME/pm4py-ucm/actions/workflows/tests.yml)
+[![tests](https://github.com/ProcessMining-uOttawa/pm4py-ucm/actions/workflows/tests.yml/badge.svg)](https://github.com/ProcessMining-uOttawa/pm4py-ucm/actions/workflows/tests.yml)
 [![Python](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-blue)](https://www.python.org/)
 [![License: GPL v3+](https://img.shields.io/badge/license-GPLv3%2B-blue.svg)](LICENSE)
 
