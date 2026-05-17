@@ -75,11 +75,13 @@ def _render_high_dpi_png(ucm, style: str, out_path: str) -> str:
 
 
 @st.cache_data(show_spinner="Mining UCM...")
-def _mine(xes_bytes: bytes, style: str, _file_hash: str):
+def _mine(xes_bytes: bytes, style: str, decomposition: str, _file_hash: str):
     """Read XES, mine UCM, render high-DPI PNG, serialize .jucm.
 
-    Cached per (file hash, style) so toggling notation re-renders without
-    re-mining the log.
+    Cached per (file hash, style, decomposition) so toggling notation or
+    the decomposition mode re-renders without redoing the steps that
+    haven't changed (mining is rerun only when the decomposition mode
+    changes — it affects the mined model itself).
     """
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
@@ -87,7 +89,9 @@ def _mine(xes_bytes: bytes, style: str, _file_hash: str):
         xes_path.write_bytes(xes_bytes)
 
         log = pm4py.read_xes(str(xes_path))
-        ucm = pm4py_ucm.discover_ucm_inductive(log)
+        ucm = pm4py_ucm.discover_ucm_inductive(
+            log, decomposition=decomposition,
+        )
 
         png_path = td / "model.png"
         _render_high_dpi_png(ucm, style, str(png_path))
@@ -113,6 +117,18 @@ with st.sidebar:
             "BPMN: BPMN-friendly look (activity boxes, gateway diamonds)."
         ),
     )
+    decomposition = st.selectbox(
+        "Decomposition",
+        options=["off", "auto", "aggressive"],
+        index=0,
+        help=(
+            "off: single flat map. "
+            "auto: split into a root map plus plug-in maps when the "
+            "model is large enough to benefit. "
+            "aggressive: same boundary rules with a tighter cap, "
+            "producing more / smaller plug-ins."
+        ),
+    )
 
 uploaded = st.file_uploader(
     "Upload an XES event log",
@@ -129,21 +145,24 @@ file_hash = hashlib.sha256(xes_bytes).hexdigest()[:16]
 style = notation.lower()  # "ucm" / "bpmn"
 
 try:
-    result = _mine(xes_bytes, style, file_hash)
+    result = _mine(xes_bytes, style, decomposition, file_hash)
 except Exception as exc:
     st.error(f"Mining failed: {exc}")
     st.stop()
 
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("File", uploaded.name)
 c2.metric("Notation", notation)
-c3.metric("Maps", result["n_maps"])
-c4.metric("Nodes", result["n_nodes"])
+c3.metric("Decomposition", decomposition)
+c4.metric("Maps", result["n_maps"])
+c5.metric("Nodes", result["n_nodes"])
 
+# Streamlit 1.36+ deprecated ``use_column_width``; ``width="stretch"``
+# is the supported replacement (image fills its container width).
 st.image(
     result["png"],
-    caption=f"Mined model ({notation})",
-    use_column_width=True,
+    caption=f"Mined model ({notation}, decomposition={decomposition})",
+    width="stretch",
 )
 
 st.download_button(
