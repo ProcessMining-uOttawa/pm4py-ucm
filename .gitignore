@@ -81,3 +81,10 @@ demo/*.png
 
 # Claude Code / agent-harness local settings
 .claude/
+
+# Tutorial notebook output (regenerated on each run)
+demo/output/
+
+# Event logs ship zipped — the notebook unzips them on first use.
+demo/ClaimsPaymentLog.xes
+demo/IssueTracker.xes
