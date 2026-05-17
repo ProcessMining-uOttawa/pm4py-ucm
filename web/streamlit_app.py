@@ -124,8 +124,9 @@ _DISPLAY_WIDTH_PX = 1100
 st.set_page_config(page_title="PM4Py-UCM", layout="wide")
 st.title("PM4Py-UCM")
 st.caption(
-    "Mine a Use Case Map model from an XES event log and export it to "
-    "jUCMNav, or to PNG files with BPMN or UCM views."
+    "Mine a Use Case Map model from an XES or CSV event log and export "
+    "it to jUCMNav, or to PNG files with BPMN or UCM views. Choose an "
+    "existing log or upload your own."
 )
 
 

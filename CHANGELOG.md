@@ -5,6 +5,85 @@ All notable changes to **pm4py-ucm** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-05-17
+
+### Added (web v1.5)
+
+- **Bundled sample logs.** A new *Sample log* tab in the upload area
+  lets users pick a pre-bundled XES (zipped) without having to find
+  their own event log. Two ship out of the box
+  (`IssueTrackerSyntheticLog.zip`, `ClaimsPaymentLog.zip`); drop more
+  files into `web/samples/` to extend the list — they're picked up
+  automatically on next start.
+- **ZIP archives are first-class inputs.** The file uploader accepts
+  `.zip` alongside `.xes` / `.xes.gz` / `.csv`. The miner extracts
+  the first `.xes` / `.xes.gz` entry inside, with zip-slip protection
+  (entries with `..` or absolute paths are rejected).
+- **Per-phase mining progress.** A multi-step `st.status` panel
+  reports the current phase (*Reading CSV* → *Formatting events* →
+  *Discovering process tree* → *Converting to UCM* → *Writing
+  .jucm*), so a 100k+ event log no longer looks hung during the
+  multi-minute inductive-miner step.
+
+### Changed (hardening for public deployment)
+
+- **`.streamlit/config.toml`** caps `maxUploadSize` at 75 MB and turns
+  off Streamlit's usage telemetry.
+- **Pillow's decompression-bomb guard** is now raised to 1 billion
+  pixels (was disabled) — keeps protection while still permitting
+  realistic mined UCMs.
+- **Download filenames are sanitised** to `[A-Za-z0-9._-]`.
+- **Mining failures** surface a clean one-line error inline plus an
+  expandable *Show technical details* panel, instead of dumping a
+  raw traceback to the page.
+- **CSV reads use `low_memory=False`** so columns with mid-file dtype
+  changes no longer trigger `DtypeWarning` or downstream type
+  confusion (root cause of an earlier "import hangs" report).
+
+### Fixed (web bugs)
+
+- **Notation switch no longer flashes "Mining UCM..."** The
+  `st.status` panel was created unconditionally around the cached
+  `_mine` call and rendered briefly even on instant cache hits.
+  An arg-fingerprint check now detects guaranteed cache hits before
+  the call and skips the status panel entirely; only genuine
+  cache misses surface a status panel / spinner.
+- **Role / Resource column selectors no longer reset unexpectedly.**
+  The per-rerun "defensive" `_seed_csv_selectors(only_invalid=True)`
+  pass was replaced by a strict per-file-hash seeding gate — the
+  CSV section seeds the selectors exactly once per uploaded file
+  and never overwrites them afterwards. A safety net reseeds an
+  individual key only if its stored value is no longer a valid
+  option for the current file.
+- **Decomposition Apply no longer requires re-confirming the CSV
+  column mapping.** Once a column mapping has been applied, pending
+  edits to the selectors show a warning + remine button but do not
+  block other settings from triggering a remine — mining continues
+  against the last-applied column mapping.
+- **"Apply column mapping" now reliably starts mining.** The bug
+  where the post-click rerun looped back to the *Click Apply…*
+  prompt (because `st.file_uploader` returns the same UploadedFile
+  on every rerun, and the unconditional reset in the
+  `if uploaded is not None:` block fired afterward) is fixed by
+  hashing the bytes and only resetting state on a genuinely new
+  file.
+
+### Added (inductive miner)
+
+- **Noise-threshold slider** in the sidebar exposes the IMf
+  (Inductive Miner — infrequent) threshold. Default 0.2 (the common
+  practical default in PM4Py tutorials), range 0.0 – 1.0. The web
+  layer pre-mines the process tree with the chosen threshold and
+  hands it to `discover_ucm_inductive` via `parameters["process_tree"]`
+  — no changes to the package's public API.
+
+### Changed (UX)
+
+- **Updated app caption** to mention CSV alongside XES and the
+  sample-log option: "Mine a Use Case Map model from an XES or CSV
+  event log and export it to jUCMNav, or to PNG files with BPMN or
+  UCM views. Choose an existing log or upload your own."
+
 ## [0.2.0] — 2026-05-17
 
 ### Added (web front-end)
@@ -342,5 +421,6 @@ This release was developed across four engineering sessions; see
 `project-history.md` (if shipped separately) for the development arc
 and design decisions in retrospect.
 
+[0.2.1]: https://github.com/ProcessMining-uOttawa/pm4py-ucm/releases/tag/v0.2.1
 [0.2.0]: https://github.com/ProcessMining-uOttawa/pm4py-ucm/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ProcessMining-uOttawa/pm4py-ucm/releases/tag/v0.1.0
