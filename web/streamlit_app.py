@@ -154,7 +154,7 @@ def _csv_columns(csv_bytes: bytes, _file_hash: str) -> List[str]:
     """
     try:
         # nrows=0 reads the header only.
-        df_head = pd.read_csv(io.BytesIO(csv_bytes), nrows=0)
+        df_head = pd.read_csv(io.BytesIO(csv_bytes), nrows=0, low_memory=False)
         return list(df_head.columns)
     except Exception:
         # Last-resort fallback so the user still gets a list to pick from.
@@ -216,7 +216,13 @@ def _mine(
                     "Case, activity, and timestamp columns are required "
                     "for CSV import."
                 )
-            df = pd.read_csv(io.BytesIO(log_bytes))
+            # ``low_memory=False`` reads the whole CSV in one pass and
+            # picks one dtype per column from the full data, instead of
+            # pandas' default chunked read that can guess differently
+            # for different chunks and trigger DtypeWarning + downstream
+            # type confusion. Cost is higher peak RAM; benefit is robust
+            # column types for the miner.
+            df = pd.read_csv(io.BytesIO(log_bytes), low_memory=False)
             # format_dataframe renames the three required columns to the
             # PM4Py standard (case:concept:name, concept:name, time:timestamp).
             df = pm4py.format_dataframe(
