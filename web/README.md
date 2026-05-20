@@ -143,11 +143,13 @@ Once mining completes, the page shows:
 1. Push this repo to GitHub.
 2. At <https://share.streamlit.io>, "New app" → pick the repo and branch.
 3. Set **Main file path** to `web/streamlit_app.py`. Streamlit Cloud picks up
-   `web/requirements.txt` and `web/packages.txt` automatically because they
-   sit next to the main file. If a build ever fails to find them, point at
-   them explicitly under Advanced settings.
-4. Deploy. `packages.txt` installs the `graphviz` apt package, which provides
-   the `dot` binary the layouter shells out to.
+   `web/requirements.txt` automatically (sits next to the main file).
+4. **`packages.txt` (apt packages) MUST be at the repo root** — Streamlit
+   Cloud's apt-install phase only reads from the root, not from the main
+   file's directory. The root `packages.txt` in this repo installs the
+   `graphviz` apt package, which provides the `dot` binary the layouter
+   shells out to.
+5. Deploy.
 
 Updates are a `git push` to the tracked branch.
 
@@ -191,12 +193,12 @@ than this Streamlit layer.
 ## Layout
 
 ```
+packages.txt                   # apt: graphviz  (Streamlit Cloud reads this at repo root)
 .streamlit/
   config.toml                  # upload-size cap, telemetry off
 web/
   streamlit_app.py             # entry point
   requirements.txt             # streamlit + pm4py + `-e .` (the package itself)
-  packages.txt                 # apt: graphviz
   WebInterfaceOverview.png     # screenshot used in this README
   README.md                    # this file
   samples/
