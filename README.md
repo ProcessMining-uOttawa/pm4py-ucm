@@ -3,6 +3,8 @@
 [![tests](https://github.com/ProcessMining-uOttawa/pm4py-ucm/actions/workflows/tests.yml/badge.svg)](https://github.com/ProcessMining-uOttawa/pm4py-ucm/actions/workflows/tests.yml)
 [![Python](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-blue)](https://www.python.org/)
 [![License: GPL v3+](https://img.shields.io/badge/license-GPLv3%2B-blue.svg)](LICENSE)
+[!Deployed Streamlit version](https://pm4py-ucm.streamlit.app/)
+
 
 **Use Case Map (UCM) extension for [PM4Py](https://github.com/process-intelligence-solutions/pm4py).**
 
@@ -36,6 +38,8 @@ front-end ships in the [`web/`](web/) directory. Upload an event log
 (XES or CSV), tune the inductive miner / decomposition / performer
 settings interactively, preview the diagram in UCM or BPMN notation, and
 download the rendered PNG plus the `.jucm` file.
+
+A fully-deployed version is available at https://pm4py-ucm.streamlit.app/ 
 
 ![Overview of the PM4Py-UCM web interface](web/WebInterfaceOverview.png)
 
