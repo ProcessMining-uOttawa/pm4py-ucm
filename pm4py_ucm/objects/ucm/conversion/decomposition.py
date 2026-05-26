@@ -8,7 +8,7 @@ more *plug-in* (sub-)maps connected by UCM :class:`UCM.Stub` nodes via
 :class:`UCM.PluginBinding`. The session-4.6 binding machinery is used
 verbatim — no parallel implementation.
 
-Three semantic boundary rules drive the decomposition:
+Four semantic boundary rules drive the decomposition:
 
 * ``on_root_sequence`` — each child of a top-level ``->`` (sequence)
   operator becomes its own plug-in map. The root map reads as a
@@ -17,9 +17,18 @@ Three semantic boundary rules drive the decomposition:
   becomes its own plug-in map. Parallel branches are usually
   semantically independent units of work, and the AND-fork/join
   vertical-expansion cost is replaced by a single stub.
+* ``on_alternative`` — each branch of an ``×`` (XOR) / ``∨`` (OR)
+  operator becomes its own plug-in map. Alternative branches are
+  semantically distinct paths through the model; replacing each with
+  a single stub keeps the OR-fork/OR-join visible while moving the
+  alternative-body detail to its own map.
 * ``on_loop`` — each ``*`` (loop) operator's entire expansion
   becomes its own plug-in map. The parent map then reads as a
-  forward flow with one stub representing the iteration.
+  forward flow with one stub representing the iteration. When the
+  outermost operator of the input tree is itself a loop, the root
+  map gets a single "loop" stub and the loop expansion is moved
+  into a plug-in — the parent map can't *be* its own stub, so a
+  synthetic root sequence is introduced around the loop.
 
 Layered on top:
 
@@ -60,6 +69,7 @@ from . import from_process_tree as _ft
 VALID_KEYS = {
     "on_root_sequence",
     "on_parallel",
+    "on_alternative",
     "on_loop",
     "max_leaves_per_map",
     "min_leaves_to_decompose",
@@ -71,6 +81,7 @@ VALID_KEYS = {
 AUTO_DEFAULTS: Dict[str, Any] = {
     "on_root_sequence": True,
     "on_parallel": True,
+    "on_alternative": True,
     "on_loop": True,
     "max_leaves_per_map": 20,
     "min_leaves_to_decompose": 4,
@@ -126,7 +137,10 @@ _SEQUENCE = "->"
 _PARALLEL = "+"
 _INTERLEAVING = "o"
 _LOOP = "*"
+_XOR = "X"
+_OR = "O"
 _PARALLEL_OPS = {_PARALLEL, _INTERLEAVING}
+_CHOICE_OPS = {_XOR, _OR}
 
 
 def _op_value(operator):
@@ -203,6 +217,8 @@ def _decide_frontier(
             if is_top_level_seq_child and opts.get("on_root_sequence"):
                 candidate = True
             elif parent_op in _PARALLEL_OPS and opts.get("on_parallel"):
+                candidate = True
+            elif parent_op in _CHOICE_OPS and opts.get("on_alternative"):
                 candidate = True
             elif op == _LOOP and opts.get("on_loop"):
                 candidate = True
@@ -407,6 +423,16 @@ def _derive_name(cut_node, parent_node, used_names: Set[str]) -> str:
             base = first_lab + " to " + last_lab
         else:
             base = first_lab or "parallel"
+    elif parent_op in _CHOICE_OPS:
+        # XOR / OR branches: same first-to-last recipe as parallels.
+        # We don't prefix with "alt" or "branch" — the OR-fork on the
+        # parent already conveys that this map is an alternative.
+        if first_lab == last_lab and first_lab:
+            base = first_lab
+        elif first_lab and last_lab:
+            base = first_lab + " to " + last_lab
+        else:
+            base = first_lab or "alternative"
     elif parent_op == _SEQUENCE:
         if not first_lab:
             base = "stage"
@@ -415,7 +441,7 @@ def _derive_name(cut_node, parent_node, used_names: Set[str]) -> str:
         else:
             base = first_lab + " to " + last_lab
     else:
-        # Fallback for cap-induced cuts inside non-{+, ->} parents.
+        # Fallback for cap-induced cuts inside non-{+, ×, ->} parents.
         base = "sub " + first_lab if first_lab else "sub"
 
     base = _truncate_words(base) or "Map"
@@ -442,6 +468,67 @@ def _cut_handler_active(handler):
         yield
     finally:
         _ft._cut_handler = prev
+
+
+# ---------------------------------------------------------------------------
+# Synthetic root wrapper (root-loop edge case)
+# ---------------------------------------------------------------------------
+#
+# When the input tree's outermost operator is ``*`` (loop) and the user
+# wants ``on_loop`` decomposition, the natural intent is "make the root
+# map a stub pointing to the loop's plug-in." But the cut-frontier walk
+# treats the map root as opaque (a map can't be its own stub), so a
+# top-level loop would otherwise stay drawn inline. Workaround: wrap
+# the tree in a synthetic sequence whose only child is the loop, before
+# the plan is built. The on_loop rule then fires on the loop child
+# normally — the root map ends up with one stub for the loop, and the
+# loop expansion moves into its own plug-in.
+#
+# Symmetric behaviour for top-level ``+`` / ``×`` / ``∨`` would be
+# pointless: with on_parallel / on_alternative the children already
+# become plug-ins. Only ``*`` needs the wrap because its rule cuts
+# *the operator itself* rather than its children.
+
+class _SyntheticOp:
+    """Duck-typed enum-like for the synthetic-sequence wrapper.
+
+    The process-tree converter reads operator value via ``.value``
+    (see :func:`_op_value`), so we expose the symbol the same way as
+    PM4Py's real :class:`Operator` enum.
+    """
+    __slots__ = ("value",)
+
+    def __init__(self, value: str):
+        self.value = value
+
+
+class _SyntheticNode:
+    """Duck-typed wrapper node — a synthetic ``->`` parent around the
+    original loop root, so the existing root-sequence machinery picks
+    it up as a cut candidate.
+    """
+    __slots__ = ("operator", "label", "children")
+
+    def __init__(self, operator: str, children):
+        self.operator = _SyntheticOp(operator)
+        self.label = None
+        self.children = list(children)
+
+
+def _maybe_wrap_root_loop(tree, opts: Dict[str, Any]):
+    """If ``tree`` is a loop and ``on_loop`` is enabled, return a
+    single-child synthetic sequence wrapping it. Otherwise return
+    ``tree`` unchanged. Also enables the wrap silently when only
+    ``on_root_sequence`` is on — a top-level loop wrapped in a
+    single-element sequence is otherwise indistinguishable from the
+    flat root.
+    """
+    op = _op_value(getattr(tree, "operator", None))
+    if op != _LOOP:
+        return tree
+    if not opts.get("on_loop"):
+        return tree
+    return _SyntheticNode(_SEQUENCE, [tree])
 
 
 # ---------------------------------------------------------------------------
@@ -652,6 +739,15 @@ def apply(tree, parameters: Optional[Dict[str, Any]] = None) -> UCM:
     performers = parameters.get("performers")
     performer_kind = parameters.get("performer_kind")
     additional_components = parameters.get("additional_components")
+
+    # Handle the root-loop edge case: when the tree itself is a loop
+    # and on_loop is enabled, wrap in a synthetic single-child sequence
+    # so the loop becomes a cut candidate (the map root cannot be its
+    # own stub). The synthetic wrapper participates in the plan, the
+    # cut, and the converter's ``_attach`` walk transparently — its
+    # only effect is that the root map contains a single stub pointing
+    # at the loop plug-in.
+    tree = _maybe_wrap_root_loop(tree, opts)
 
     plan = _build_plan(tree, opts)
     ucm, stubs_to_bind, map_for = _build_ucm(plan, urn_name, map_name)

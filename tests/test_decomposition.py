@@ -142,6 +142,69 @@ class IndividualRulesTests(unittest.TestCase):
         root_stubs = [n for n in ucm.maps[0].nodes if isinstance(n, UCM.Stub)]
         self.assertEqual(len(root_stubs), 2)
 
+    def test_on_alternative_isolates_each_xor_branch(self):
+        # XOR with two meaty branches. Each becomes its own plug-in.
+        tree = T(operator="X", children=[
+            _seq("A1", "A2", "A3", "A4"),
+            _seq("B1", "B2", "B3", "B4"),
+        ])
+        ucm = convert_to_ucm(tree, decomposition={
+            "on_root_sequence": False,
+            "on_parallel": False,
+            "on_alternative": True,
+            "on_loop": False,
+            "max_leaves_per_map": 1000,
+            "min_leaves_to_decompose": 3,
+            "balance_ratio": 0.0,
+        })
+        # Root + 2 plug-ins.
+        self.assertEqual(len(ucm.maps), 3)
+        # Root still contains the OrFork/OrJoin around the alternative,
+        # plus 2 stubs.
+        self.assertTrue(any(isinstance(n, UCM.OrFork) for n in ucm.maps[0].nodes))
+        self.assertTrue(any(isinstance(n, UCM.OrJoin) for n in ucm.maps[0].nodes))
+        root_stubs = [n for n in ucm.maps[0].nodes if isinstance(n, UCM.Stub)]
+        self.assertEqual(len(root_stubs), 2)
+
+    def test_on_alternative_handles_or_operator_too(self):
+        # PM4Py's "O" (or-of-the-non-empty-subsets) operator gets folded
+        # into XOR by the converter, and on_alternative should fire on
+        # its children too.
+        tree = T(operator="O", children=[
+            _seq("A1", "A2", "A3", "A4"),
+            _seq("B1", "B2", "B3", "B4"),
+        ])
+        ucm = convert_to_ucm(tree, decomposition={
+            "on_root_sequence": False,
+            "on_parallel": False,
+            "on_alternative": True,
+            "on_loop": False,
+            "max_leaves_per_map": 1000,
+            "min_leaves_to_decompose": 3,
+            "balance_ratio": 0.0,
+        })
+        self.assertEqual(len(ucm.maps), 3)
+
+    def test_on_alternative_off_keeps_xor_inline(self):
+        # With on_alternative explicitly off, an XOR of two big branches
+        # stays inline (subject to cap, which is huge here).
+        tree = T(operator="X", children=[
+            _seq("A1", "A2", "A3"),
+            _seq("B1", "B2", "B3"),
+        ])
+        ucm = convert_to_ucm(tree, decomposition={
+            "on_root_sequence": False,
+            "on_parallel": False,
+            "on_alternative": False,
+            "on_loop": False,
+            "max_leaves_per_map": 1000,
+            "min_leaves_to_decompose": 2,
+            "balance_ratio": 0.0,
+        })
+        # Single flat map.
+        self.assertEqual(len(ucm.maps), 1)
+        self.assertEqual(_count_stubs(ucm), 0)
+
     def test_on_loop_collapses_loop_to_a_stub(self):
         # Loop with a body of four activities; everything else stays
         # forward in the root.
@@ -642,6 +705,120 @@ class ParallelNamingTests(unittest.TestCase):
                 n.lower().startswith("branch"),
                 f"parallel plug-in name still starts with 'branch': {n!r}",
             )
+
+
+class RootLoopWrapTests(unittest.TestCase):
+    """When the tree's outermost operator is a loop and ``on_loop`` is
+    enabled, the decomposition wraps the loop in a synthetic
+    single-child sequence so the loop becomes a cut candidate. The
+    root map ends up with a single stub pointing to the loop plug-in;
+    the loop expansion (OrFork / OrJoin / body) moves into the plug-in.
+    """
+
+    def test_root_loop_extracted_into_plugin(self):
+        tree = T(operator="*", children=[
+            _seq("L1", "L2", "L3", "L4"),
+            T(label=None),
+        ])
+        ucm = convert_to_ucm(tree, decomposition={
+            "on_root_sequence": False,
+            "on_parallel": False,
+            "on_alternative": False,
+            "on_loop": True,
+            "max_leaves_per_map": 1000,
+            "min_leaves_to_decompose": 2,
+            "balance_ratio": 0.0,
+        })
+        self.assertEqual(len(ucm.maps), 2, "want root + loop plug-in")
+        root_nodes = ucm.maps[0].nodes
+        root_stubs = [n for n in root_nodes if isinstance(n, UCM.Stub)]
+        self.assertEqual(len(root_stubs), 1, "root should have one stub")
+        # The root no longer contains LoopFork/LoopJoin (OrFork/OrJoin
+        # from the loop machinery).
+        for op_type in (UCM.OrFork, UCM.OrJoin):
+            self.assertFalse(
+                any(isinstance(n, op_type) for n in root_nodes),
+                f"Root still has {op_type.__name__}; loop machinery should be in plug-in",
+            )
+        # The plug-in does contain the loop machinery.
+        plugin_nodes = ucm.maps[1].nodes
+        self.assertTrue(any(isinstance(n, UCM.OrFork) for n in plugin_nodes))
+        self.assertTrue(any(isinstance(n, UCM.OrJoin) for n in plugin_nodes))
+        # And the stub binds to the plug-in.
+        self.assertEqual(len(root_stubs[0].bindings), 1)
+        self.assertIs(root_stubs[0].bindings[0].plugin, ucm.maps[1])
+
+    def test_root_loop_left_alone_when_on_loop_off(self):
+        # With on_loop=False the wrap should not fire — the loop renders
+        # inline in the single (root) map.
+        tree = T(operator="*", children=[
+            _seq("L1", "L2", "L3"),
+            T(label=None),
+        ])
+        ucm = convert_to_ucm(tree, decomposition={
+            "on_root_sequence": False,
+            "on_parallel": False,
+            "on_alternative": False,
+            "on_loop": False,
+            "max_leaves_per_map": 1000,
+            "min_leaves_to_decompose": 2,
+            "balance_ratio": 0.0,
+        })
+        self.assertEqual(len(ucm.maps), 1)
+        self.assertEqual(_count_stubs(ucm), 0)
+        # Loop machinery present inline.
+        self.assertTrue(any(isinstance(n, UCM.OrFork) for n in ucm.maps[0].nodes))
+
+
+class XorNamingTests(unittest.TestCase):
+    """Plug-in names for cuts under ``×`` / ``∨`` follow the same
+    first-to-last recipe as parallel branches — no "alt" or "branch"
+    prefix, since the OR-fork on the parent already conveys the
+    alternative."""
+
+    def test_xor_plugin_names_use_first_to_last(self):
+        tree = T(operator="X", children=[
+            _seq("alpha", "beta", "gamma", "delta"),
+            _seq("xi", "omicron", "pi", "rho"),
+        ])
+        ucm = convert_to_ucm(tree, decomposition={
+            "on_root_sequence": False,
+            "on_parallel": False,
+            "on_alternative": True,
+            "on_loop": False,
+            "max_leaves_per_map": 1000,
+            "min_leaves_to_decompose": 2,
+            "balance_ratio": 0.0,
+        })
+        plugin_names = [m.name for m in ucm.maps[1:]]
+        self.assertTrue(plugin_names)
+        for nm in plugin_names:
+            # No leftover prefixes.
+            self.assertFalse(nm.lower().startswith(("alt", "branch", "sub")),
+                             f"XOR plug-in name {nm!r} has stale prefix")
+        # Specifically: first plug-in starts with "alpha".
+        self.assertEqual(plugin_names[0].split()[0], "alpha")
+
+
+class AutoPresetIncludesAlternativeTests(unittest.TestCase):
+    """``"auto"`` and ``"aggressive"`` presets must include
+    ``on_alternative=True``."""
+
+    def test_auto_includes_on_alternative(self):
+        opts = _decomp.parse_decomposition("auto")
+        self.assertTrue(opts["on_alternative"])
+
+    def test_aggressive_includes_on_alternative(self):
+        opts = _decomp.parse_decomposition("aggressive")
+        self.assertTrue(opts["on_alternative"])
+
+    def test_unknown_key_still_raises(self):
+        # Make sure the new key is recognised as a valid key, and that
+        # other typos still raise.
+        opts = _decomp.parse_decomposition({"on_alternative": False})
+        self.assertFalse(opts["on_alternative"])
+        with self.assertRaises(ValueError):
+            _decomp.parse_decomposition({"on_alternatives": True})  # typo
 
 
 class NameWordLimitTests(unittest.TestCase):

@@ -5,6 +5,44 @@ All notable changes to **pm4py-ucm** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-05-20
+
+### Added (decomposition)
+
+- **`on_alternative` boundary rule.** Each branch of an `×` (XOR) or
+  `∨` (OR) operator becomes its own plug-in map (symmetric to
+  `on_parallel`). The OR-fork / OR-join stays on the parent map; the
+  alternative bodies move into per-branch plug-ins. Included in
+  `AUTO_DEFAULTS` and `AGGRESSIVE_DEFAULTS` as `True`. Exposed in the
+  web app's Decomposition - advanced expander as a checkbox.
+
+### Changed (decomposition)
+
+- **Cap-induced cuts under `×` / `∨` use the same first-to-last
+  naming recipe as parallel branches** instead of the dull
+  `"sub <first-label>"` fallback. Stub names now read e.g.
+  `"alpha to delta"` rather than `"sub alpha"`.
+
+### Fixed (decomposition)
+
+- **Loop at the *root* of the tree is now extracted under `on_loop`.**
+  When the outermost operator of the input tree is `*` and `on_loop`
+  is enabled, the tree is wrapped in a synthetic single-child
+  sequence so the loop becomes a cut candidate. The root map gets a
+  single stub pointing to the loop plug-in (instead of having the
+  full loop machinery — OrFork / OrJoin / body — drawn inline, which
+  was the prior behaviour). When `on_loop` is off, behaviour is
+  unchanged (the loop renders inline).
+
+### Notes
+
+- Bumped to a **minor version** (0.2.x → 0.3.0) because the
+  decomposition `auto` / `aggressive` presets now extract XOR/OR
+  branches by default — output of `discover_ucm_inductive(log,
+  decomposition="auto")` on logs with alternative paths will differ
+  from earlier releases (more, smaller plug-in maps). The `"off"`
+  path is unchanged and byte-stable with all prior releases.
+
 ## [0.2.1] — 2026-05-17
 
 ### Added (web v1.5)
@@ -421,6 +459,7 @@ This release was developed across four engineering sessions; see
 `project-history.md` (if shipped separately) for the development arc
 and design decisions in retrospect.
 
+[0.3.0]: https://github.com/ProcessMining-uOttawa/pm4py-ucm/releases/tag/v0.3.0
 [0.2.1]: https://github.com/ProcessMining-uOttawa/pm4py-ucm/releases/tag/v0.2.1
 [0.2.0]: https://github.com/ProcessMining-uOttawa/pm4py-ucm/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ProcessMining-uOttawa/pm4py-ucm/releases/tag/v0.1.0

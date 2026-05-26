@@ -519,11 +519,25 @@ with st.sidebar:
                 key=kp + "par",
                 help="Each branch of a parallel (+) becomes a plug-in map.",
             )
+            decomposition_overrides["on_alternative"] = st.checkbox(
+                "on_alternative",
+                value=bool(_preset_defaults["on_alternative"]),
+                key=kp + "alt",
+                help=(
+                    "Each branch of an alternative (XOR / OR) becomes a "
+                    "plug-in map. The OR-fork / OR-join stays on the "
+                    "parent map; the branch bodies move to plug-ins."
+                ),
+            )
             decomposition_overrides["on_loop"] = st.checkbox(
                 "on_loop",
                 value=bool(_preset_defaults["on_loop"]),
                 key=kp + "lp",
-                help="Each loop (*) expansion becomes a plug-in map.",
+                help=(
+                    "Each loop (*) expansion becomes a plug-in map. "
+                    "When the entire model is a loop, the root map "
+                    "becomes a single stub pointing to the loop body."
+                ),
             )
             decomposition_overrides["max_leaves_per_map"] = st.number_input(
                 "max_leaves_per_map",

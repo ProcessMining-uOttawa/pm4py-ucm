@@ -313,7 +313,8 @@ Configurable keys:
 |-----------------------------|---------|------------------------------------------------------------------------------------------------------------------------------------------|
 | `on_root_sequence`          | `True`  | Each child of a top-level `→` becomes a plug-in. Root map reads as a chain of phase stubs.                                                |
 | `on_parallel`               | `True`  | Each `+` branch becomes a plug-in. AND-fork/join vertical-expansion cost is replaced by a single stub per branch.                          |
-| `on_loop`                   | `True`  | Each `*` operator's entire expansion becomes a plug-in. Parent map reads as forward flow with one stub for the iteration.                  |
+| `on_alternative`            | `True`  | Each `×` (XOR) / `∨` (OR) branch becomes a plug-in. OR-fork/join stays on the parent map; alternative bodies move into per-branch plug-ins. |
+| `on_loop`                   | `True`  | Each `*` operator's entire expansion becomes a plug-in. Parent map reads as forward flow with one stub for the iteration. A loop at the *root* of the tree is wrapped in a synthetic sequence so the root map gets a single loop stub. |
 | `max_leaves_per_map`        | `20`    | Hard cap; over-sized maps recursively force-cut the largest operator-subtree until the cap is met.                                         |
 | `min_leaves_to_decompose`   | `4`     | Floor — subtrees smaller than this stay inlined regardless of rules.                                                                       |
 | `balance_ratio`             | `0.2`   | Sibling share threshold under `→` and `+`. A child needs at least this fraction of the parent's leaves to be pulled out independently.     |
