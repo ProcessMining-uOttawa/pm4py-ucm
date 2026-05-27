@@ -5,6 +5,38 @@ All notable changes to **pm4py-ucm** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] — 2026-05-20
+
+### Fixed (resource mining — silent attribute override)
+
+- **`resource_attribute="org:role"` and `resource_attribute="org:resource"`
+  produced identical component vocabularies on logs that carried both
+  XES attributes.** Root cause was an enum-aliasing collapse in
+  `pm4py_ucm.algo.discovery.resources.algorithm.Variants`: both
+  `ACTIVITY_ATTRIBUTE` and `ROLE_THEN_RESOURCE` had the same value
+  (the `activity_attribute` module), so `enum.Enum` silently made the
+  second an alias for the first. The guard
+  `if variant is Variants.ROLE_THEN_RESOURCE` then fired on *every*
+  call to `apply()` / `distinct_components()` and injected the
+  role-first `attribute_priority = ["org:role", "org:resource",
+  "org:group"]` list — which overrode the user's
+  `attribute="org:resource"` because the priority list takes
+  precedence in the underlying variant.
+
+  Fix: give the two `Variants` members distinct string values and
+  resolve to the backend module via a separate
+  `_VARIANT_BACKENDS` lookup table. The variant identity check
+  in `apply()` / `distinct_components()` now works correctly,
+  so the role-first priority is only injected when the caller
+  explicitly asks for the `ROLE_THEN_RESOURCE` variant.
+
+  Three regression tests in `tests/test_resources.py` lock in the
+  fix: same log, two attributes, distinct vocabularies; distinct
+  activity bindings; and the enum members are now distinct
+  identities. Visible effect: on `ClaimsPaymentLog.zip`,
+  `resource_attribute="org:resource"` now produces 58 components
+  vs `"org:role"`'s 10 (previously both produced 10).
+
 ## [0.3.0] — 2026-05-20
 
 ### Added (decomposition)
@@ -459,6 +491,7 @@ This release was developed across four engineering sessions; see
 `project-history.md` (if shipped separately) for the development arc
 and design decisions in retrospect.
 
+[0.3.1]: https://github.com/ProcessMining-uOttawa/pm4py-ucm/releases/tag/v0.3.1
 [0.3.0]: https://github.com/ProcessMining-uOttawa/pm4py-ucm/releases/tag/v0.3.0
 [0.2.1]: https://github.com/ProcessMining-uOttawa/pm4py-ucm/releases/tag/v0.2.1
 [0.2.0]: https://github.com/ProcessMining-uOttawa/pm4py-ucm/releases/tag/v0.2.0

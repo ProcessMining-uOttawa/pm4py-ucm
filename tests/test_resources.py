@@ -92,6 +92,61 @@ class ResourceDiscoveryTests(unittest.TestCase):
         self.assertEqual(out["Login"], "Alice")
 
 
+class VariantSelectionTests(unittest.TestCase):
+    """Regression guard for an enum-aliasing bug.
+
+    Both ``Variants`` members used to map to the same ``activity_attribute``
+    module value, which made :class:`enum.Enum` collapse the second into
+    an alias for the first. The ``if variant is Variants.ROLE_THEN_RESOURCE``
+    guard in :func:`apply` then misfired on every call and injected the
+    role-first ``attribute_priority`` list — so caller-supplied
+    ``attribute="org:resource"`` was silently overridden by ``"org:role"``
+    when the log carried both attributes, and both choices produced
+    identical models.
+    """
+
+    def _log_with_both_attrs(self):
+        # Same activity, but the role is coarse-grained ("Dev") and the
+        # resource is fine-grained ("Alice" / "Bob"). Different choices
+        # MUST yield different vocabularies.
+        return [
+            _trace({"concept:name": "Code", "org:role": "Dev", "org:resource": "Alice"},
+                   {"concept:name": "Test", "org:role": "QA",  "org:resource": "Bob"}),
+            _trace({"concept:name": "Code", "org:role": "Dev", "org:resource": "Carol"},
+                   {"concept:name": "Test", "org:role": "QA",  "org:resource": "Dan"}),
+        ]
+
+    def test_role_and_resource_produce_distinct_vocabularies(self):
+        from pm4py_ucm import discover_components
+        log = self._log_with_both_attrs()
+        roles = discover_components(log, attribute="org:role")
+        resources = discover_components(log, attribute="org:resource")
+        self.assertEqual(set(roles), {"Dev", "QA"})
+        self.assertEqual(set(resources), {"Alice", "Bob", "Carol", "Dan"})
+        self.assertNotEqual(set(roles), set(resources))
+
+    def test_role_and_resource_produce_distinct_activity_bindings(self):
+        log = self._log_with_both_attrs()
+        by_role = discover_resources(log, attribute="org:role")
+        by_resource = discover_resources(log, attribute="org:resource")
+        # Role binds each activity to a single role.
+        self.assertEqual(by_role["Code"], "Dev")
+        # Resource binds the same activity to a (one of several) person —
+        # not "Dev" — proving the attribute= parameter was actually honoured.
+        self.assertIn(by_resource["Code"], {"Alice", "Carol"})
+        self.assertNotEqual(by_role["Code"], by_resource["Code"])
+
+    def test_variants_are_distinct_enum_members(self):
+        # Belt and braces: defend against a future refactor that
+        # accidentally reintroduces the aliasing collapse.
+        from pm4py_ucm.algo.discovery.resources.algorithm import Variants
+        self.assertIsNot(
+            Variants.ACTIVITY_ATTRIBUTE, Variants.ROLE_THEN_RESOURCE,
+            "Variants members must be distinct - same-value members "
+            "become aliases under enum.Enum",
+        )
+
+
 class BindPerformersTests(unittest.TestCase):
     """Attaching a {activity: performer} mapping to a UCM."""
 

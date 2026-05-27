@@ -27,8 +27,30 @@ from .variants import activity_attribute
 
 
 class Variants(Enum):
-    ACTIVITY_ATTRIBUTE = activity_attribute
-    ROLE_THEN_RESOURCE = activity_attribute  # presets via parameters
+    """Available resource-mining variants.
+
+    Members **must** have distinct values. Python's :class:`enum.Enum`
+    aliases members that share a value (the second declaration becomes
+    a synonym for the first), so giving both members the same backend
+    module — as a previous version of this file did — silently collapsed
+    ``ROLE_THEN_RESOURCE`` into ``ACTIVITY_ATTRIBUTE``. The
+    ``if variant is Variants.ROLE_THEN_RESOURCE`` guards in
+    :func:`apply` / :func:`distinct_components` then misfired on *every*
+    call and injected the role-first priority list, which overrode any
+    caller-supplied ``attribute=`` parameter (e.g. ``"org:resource"``
+    and ``"org:role"`` produced identical output).
+
+    Both variants share the :mod:`activity_attribute` backend at the
+    moment; the actual backend lookup happens in :data:`_VARIANT_BACKENDS`.
+    """
+    ACTIVITY_ATTRIBUTE = "activity_attribute"
+    ROLE_THEN_RESOURCE = "role_then_resource"
+
+
+_VARIANT_BACKENDS = {
+    Variants.ACTIVITY_ATTRIBUTE: activity_attribute,
+    Variants.ROLE_THEN_RESOURCE: activity_attribute,
+}
 
 
 DEFAULT_VARIANT = Variants.ACTIVITY_ATTRIBUTE
@@ -56,7 +78,7 @@ def apply(
     if variant is Variants.ROLE_THEN_RESOURCE:
         params.setdefault(
             "attribute_priority", ["org:role", "org:resource", "org:group"])
-    return variant.value.apply(log, params)
+    return _VARIANT_BACKENDS[variant].apply(log, params)
 
 
 def distinct_components(
@@ -87,4 +109,4 @@ def distinct_components(
     if variant is Variants.ROLE_THEN_RESOURCE:
         params.setdefault(
             "attribute_priority", ["org:role", "org:resource", "org:group"])
-    return variant.value.distinct_components(log, params)
+    return _VARIANT_BACKENDS[variant].distinct_components(log, params)
