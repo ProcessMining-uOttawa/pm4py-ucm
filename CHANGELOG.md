@@ -5,6 +5,28 @@ All notable changes to **pm4py-ucm** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] — 2026-05-20
+
+### Changed (docs)
+
+- **Demo notebook refreshed for the v0.3.x decomposition changes.**
+  Section 6 (Hierarchical decomposition) now covers the four boundary
+  rules (`on_root_sequence`, `on_parallel`, `on_alternative`,
+  `on_loop`) with a runnable cell each on `ClaimsPaymentLog`. A new
+  6.4 demonstrates `on_alternative` (six maps: root + five
+  alternative plug-ins), and a new 6.8 demonstrates the root-loop
+  wrap fix on a hand-built loop-root tree. The auto-preset wording
+  is updated from "three rules" to "four rules"; the §4.2 footnote
+  is refreshed to match the IssueTracker log actually used in
+  sections 0-5; the §10 wrap-up bullets list `on_alternative` and
+  the root-loop wrap. Notebook re-executed end-to-end so every cell
+  carries fresh outputs.
+- **README polished.** Fixed a malformed Streamlit-app badge (was
+  missing the leading `[` of the image tag), and added a "Three
+  ways to get started" block right after the quick-start snippet
+  pointing readers at the tutorial notebook, the web app, and the
+  reference docs below.
+
 ## [0.3.1] — 2026-05-20
 
 ### Fixed (resource mining — silent attribute override)
@@ -491,6 +513,7 @@ This release was developed across four engineering sessions; see
 `project-history.md` (if shipped separately) for the development arc
 and design decisions in retrospect.
 
+[0.3.2]: https://github.com/ProcessMining-uOttawa/pm4py-ucm/releases/tag/v0.3.2
 [0.3.1]: https://github.com/ProcessMining-uOttawa/pm4py-ucm/releases/tag/v0.3.1
 [0.3.0]: https://github.com/ProcessMining-uOttawa/pm4py-ucm/releases/tag/v0.3.0
 [0.2.1]: https://github.com/ProcessMining-uOttawa/pm4py-ucm/releases/tag/v0.2.1

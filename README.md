@@ -3,8 +3,7 @@
 [![tests](https://github.com/ProcessMining-uOttawa/pm4py-ucm/actions/workflows/tests.yml/badge.svg)](https://github.com/ProcessMining-uOttawa/pm4py-ucm/actions/workflows/tests.yml)
 [![Python](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-blue)](https://www.python.org/)
 [![License: GPL v3+](https://img.shields.io/badge/license-GPLv3%2B-blue.svg)](LICENSE)
-[!Deployed Streamlit version](https://pm4py-ucm.streamlit.app/)
-
+[![Streamlit](https://img.shields.io/badge/Streamlit-deployed-FF4B4B?logo=streamlit&logoColor=white)](https://pm4py-ucm.streamlit.app/)
 
 **Use Case Map (UCM) extension for [PM4Py](https://github.com/process-intelligence-solutions/pm4py).**
 
@@ -27,6 +26,12 @@ ucm = pm4py_ucm.discover_ucm_inductive(log)
 pm4py_ucm.view_ucm(ucm)
 pm4py_ucm.write_ucm(ucm, "running-example.jucm")  # opens in jUCMNav
 ```
+
+**Three ways to get started:**
+
+- [`demo/pm4py_ucm_tutorial.ipynb`](demo/pm4py_ucm_tutorial.ipynb) — end-to-end Jupyter walkthrough on a real claims-payment log (discovery, BPMN/UCM rendering, performer mining, hierarchical decomposition, `.jucm` round-trips).
+- [`web/streamlit_app.py`](web/streamlit_app.py) — click, don't code: upload an XES/CSV, tune the miner, download the result. Hosted at https://pm4py-ucm.streamlit.app/.
+- The rest of this README — reference docs for the public API.
 
 [ucm-wiki]: https://en.wikipedia.org/wiki/Use_Case_Maps
 [jucmnav]: https://github.com/JUCMNAV/projetseg-update
