@@ -359,6 +359,12 @@ emit XMI files that load directly in jUCMNav.
 
 ## Definitions vs references
 
+For the full Python object model in one picture, see
+[`docs/ucm_class_diagram.svg`](docs/ucm_class_diagram.svg) (vector,
+paper-ready) or the [PNG preview](docs/ucm_class_diagram.png). The
+[PlantUML source](docs/ucm_class_diagram.puml) can be re-rendered or
+extended for figures in academic papers.
+
 UCM keeps a sharp distinction between a *definition* (a reusable named
 concept declared once at the URN level) and each visual *reference* to it
 on a map. The object model surfaces this distinction explicitly:

@@ -1,0 +1,240 @@
+@startuml ucm_class_diagram
+title PM4Py-UCM Python domain model\n(used for UCM model generation from a process tree)
+
+skinparam classFontStyle bold
+skinparam classBackgroundColor white
+skinparam classBorderColor #1E293B
+skinparam classArrowColor #1E293B
+skinparam packageStyle rectangle
+skinparam packageBackgroundColor #F8FAFC
+skinparam packageBorderColor #475569
+skinparam noteBackgroundColor #FEF9E7
+skinparam noteBorderColor #B7950B
+skinparam shadowing false
+
+hide empty members
+hide empty methods
+
+' ===========================================================
+' Root container — the UCM (URN spec restricted to UCM)
+' ===========================================================
+class UCM <<container>> #DBEAFE {
+    + name : str
+    + description : str
+    + author : str
+    + maps : List<UCMmap>
+    + responsibilities : List<Responsibility>
+    + components : List<ComponentElement>
+    --
+    + add_map(name) : UCMmap
+    + get_or_add_responsibility(name) : Responsibility
+    + get_or_add_component(name, kind) : ComponentElement
+    + bind_performers(mapping)
+}
+
+' ===========================================================
+' Abstract base for every URN model element
+' ===========================================================
+abstract class URNmodelElement {
+    + id : int
+    + name : str
+    + description : str
+    + metadata : List<Metadata>
+}
+
+class Metadata <<value>> #FEF3C7 {
+    + name : str
+    + value : str
+}
+
+URNmodelElement "1" *-- "0..*" Metadata : metadata
+
+' ===========================================================
+' UCMmap — a single diagram (one entry in UCM.maps)
+' ===========================================================
+class UCMmap {
+    + nodes : List<PathNode>
+    + connections : List<NodeConnection>
+    + cont_refs : List<ComponentRef>
+}
+
+URNmodelElement <|-- UCMmap
+UCM "1" *-- "0..*" UCMmap : maps
+
+' ===========================================================
+' URN-level "definition" half of the URN duality
+' ===========================================================
+package "Definitions (URN-level)" as defs <<Folder>> {
+
+    class Responsibility #CCFBF1 {
+        + expression : str
+        + performer : ComponentElement?
+    }
+
+    class ComponentElement #CCFBF1 {
+        + kind : Kind
+    }
+
+    enum Kind {
+        TEAM
+        OBJECT
+        PROCESS
+        AGENT
+        ACTOR
+        ISR
+        OTHER
+    }
+}
+
+URNmodelElement <|-- Responsibility
+URNmodelElement <|-- ComponentElement
+ComponentElement +-- Kind
+
+UCM "1" *-- "0..*" Responsibility : responsibilities
+UCM "1" *-- "0..*" ComponentElement : components
+
+Responsibility "0..*" --> "0..1" ComponentElement : performer
+
+' ===========================================================
+' Map-level "reference" half — PathNode hierarchy + ComponentRef
+' ===========================================================
+package "References (Map-level)" as refs <<Folder>> {
+
+    abstract class PathNode {
+        + x : int
+        + y : int
+        + width : int
+        + height : int
+        + pred_connections : List<NodeConnection>
+        + succ_connections : List<NodeConnection>
+        + cont_ref : ComponentRef?
+    }
+
+    class StartPoint {
+        + pre_condition : Condition?
+    }
+    class EndPoint {
+        + post_condition : Condition?
+    }
+    class EmptyPoint
+    class RespRef {
+        + resp_def : Responsibility?
+    }
+    class OrFork
+    class OrJoin
+    class AndFork
+    class AndJoin
+    class WaitingPlace
+    class Timer
+    class Connect
+    class DirectionArrow
+    class FailurePoint
+    class Anything
+    class Stub {
+        + dynamic : bool
+        + bindings : List<PluginBinding>
+    }
+
+    PathNode <|-- StartPoint
+    PathNode <|-- EndPoint
+    PathNode <|-- EmptyPoint
+    PathNode <|-- RespRef
+    PathNode <|-- OrFork
+    PathNode <|-- OrJoin
+    PathNode <|-- AndFork
+    PathNode <|-- AndJoin
+    PathNode <|-- WaitingPlace
+    PathNode <|-- Connect
+    PathNode <|-- DirectionArrow
+    PathNode <|-- FailurePoint
+    PathNode <|-- Anything
+    PathNode <|-- Stub
+    WaitingPlace <|-- Timer
+
+    class ComponentRef #E0F2FE {
+        + x : int
+        + y : int
+        + width : int
+        + height : int
+        + cont_def : ComponentElement
+        + parent : ComponentRef?
+        + children : List<ComponentRef>
+    }
+
+    ComponentRef "0..*" --> "0..1" ComponentRef : parent
+}
+
+URNmodelElement <|-- PathNode
+URNmodelElement <|-- ComponentRef
+
+UCMmap "1" *-- "0..*" PathNode : nodes
+UCMmap "1" *-- "0..*" ComponentRef : cont_refs
+
+' The two definition/reference back-pointers (the URN duality)
+RespRef "0..*" --> "0..1" Responsibility : resp_def
+ComponentRef "0..*" --> "1" ComponentElement : cont_def
+PathNode "0..*" --> "0..1" ComponentRef : cont_ref
+
+' ===========================================================
+' Connections between path nodes
+' ===========================================================
+class NodeConnection {
+    + threshold : float
+}
+
+class Condition <<value>> #FEF3C7 {
+    + label : str
+    + expression : str
+    + description : str
+    + delta_x : int
+    + delta_y : int
+}
+
+URNmodelElement <|-- NodeConnection
+
+UCMmap "1" *-- "0..*" NodeConnection : connections
+NodeConnection --> "1" PathNode : source
+NodeConnection --> "1" PathNode : target
+NodeConnection --> "0..1" Condition : condition
+StartPoint --> "0..1" Condition : pre_condition
+EndPoint --> "0..1" Condition : post_condition
+
+' ===========================================================
+' Stub / plug-in binding machinery (multi-map UCMs)
+' ===========================================================
+package "Plug-in binding (Stub <-> sub-map)" as bind <<Folder>> {
+
+    class PluginBinding {
+        + precondition : Condition?
+    }
+    class InBinding
+    class OutBinding
+}
+
+Stub "1" *-- "0..*" PluginBinding : bindings
+PluginBinding --> "1" UCMmap : plugin
+PluginBinding "1" *-- "0..*" InBinding : in_bindings
+PluginBinding "1" *-- "0..*" OutBinding : out_bindings
+
+InBinding  --> "1" NodeConnection : stub_entry
+InBinding  --> "1" StartPoint     : start_point
+OutBinding --> "1" EndPoint       : end_point
+OutBinding --> "1" NodeConnection : stub_exit
+PluginBinding --> "0..1" Condition : precondition
+
+' ===========================================================
+' Notes that highlight the URN duality
+' ===========================================================
+note as N1
+  **Definitions vs References — the URN duality**
+  Each domain concept exists once as a URN-level **definition**
+  (Responsibility / ComponentElement) and zero or more times as
+  a map-level **reference** (RespRef / ComponentRef).
+  resp_def and cont_def are the back-pointers; cont_ref on a
+  PathNode declares which component rectangle visually contains it.
+end note
+
+defs .. N1
+N1 .. refs
+
+@enduml
