@@ -58,6 +58,7 @@ def synthesize_scenarios(
     group_name: str = _DEFAULT_GROUP_NAME,
     map_name: Optional[str] = None,
     emit_conditions: bool = True,
+    max_loop_iterations: Optional[int] = 2,
 ) -> UCM.ScenarioGroup:
     """Populate ``ucm`` with one scenario per variant in ``clustering``.
 
@@ -88,6 +89,16 @@ def synthesize_scenarios(
         inside loops). Pass ``False`` to leave every connection alone
         — useful for debugging scenario load-in jUCMNav independently
         from condition logic.
+    max_loop_iterations
+        Upper bound on the per-variant loop counter initialisation
+        value. Defaults to ``2`` so scenarios traverse the loop body
+        at most twice — enough to demonstrate "loop fires once vs
+        more than once" behaviour without producing 8-deep
+        iteration chains that take forever to step through in
+        jUCMNav. Inside-loop XOR conditions also use this capped
+        ``M_V`` as their counter range. Pass ``None`` to disable
+        capping (counter initialises to the actual max observed in
+        each variant's traces).
 
     Returns
     -------
@@ -136,10 +147,14 @@ def synthesize_scenarios(
         sc._owner = ucm
         sc.add_initialization(variant_var, variant.variant_id)
         # Per-loop integer counter initialisation. Use the variant's
-        # max observed iteration count so the loop runs at least as
-        # often as the heaviest trace in the cluster.
+        # max observed iteration count, optionally capped at
+        # ``max_loop_iterations`` so scenarios remain tractable to
+        # step through in jUCMNav (and so nested loops don't blow up
+        # multiplicatively).
         for tree_loop_id, counter_var in loop_counters.items():
             max_iter = variant.loop_iteration_max.get(tree_loop_id, 0)
+            if max_loop_iterations is not None:
+                max_iter = min(max_iter, max_loop_iterations)
             sc.add_initialization(counter_var, str(max_iter))
         for sp in starts:
             sc.add_start_point(sp, enabled=True)
@@ -154,6 +169,7 @@ def synthesize_scenarios(
     if emit_conditions:
         _emit_orfork_conditions(
             target_map, tree, clustering.variants, loop_counters,
+            max_loop_iterations=max_loop_iterations,
         )
 
     return group
@@ -454,6 +470,7 @@ def _set_inside_loop_xor_conditions(
     enclosing_loop_id: int,
     variants: List[Variant],
     loop_counters: Dict[int, UCM.Variable],
+    max_loop_iterations: Optional[int] = None,
 ) -> None:
     """Wire an inside-loop XOR's outgoing arcs with combined
     ``variant_id`` + ``loop_counter`` conditions so each branch
@@ -504,6 +521,11 @@ def _set_inside_loop_xor_conditions(
         if total == 0:
             continue
         m_v = v.loop_iteration_max.get(enclosing_loop_id, 0)
+        # Cap M_V to match the counter initialisation cap so the
+        # threshold arithmetic stays consistent with what jUCMNav
+        # will actually see in the running scenario.
+        if max_loop_iterations is not None:
+            m_v = min(m_v, max_loop_iterations)
         if m_v <= 0:
             continue
         # Cumulative branch sums => integer thresholds on the counter.
@@ -580,6 +602,7 @@ def _emit_orfork_conditions(
     tree,
     variants: List[Variant],
     loop_counters: Optional[Dict[int, UCM.Variable]] = None,
+    max_loop_iterations: Optional[int] = None,
 ) -> None:
     """Set ``variant_id``-disjunction conditions on outgoing OR-fork
     connections that correspond to non-loop XORs in the process tree.
@@ -613,11 +636,11 @@ def _emit_orfork_conditions(
         if enclosing_loop_id is not None:
             # Inside-loop XOR. We combine variant_id with the
             # enclosing loop's counter to distribute branches across
-            # iterations — see :func:`_inside_loop_branch_expressions`
-            # for the per-variant threshold logic.
+            # iterations.
             _set_inside_loop_xor_conditions(
                 of, tree_xor_id, n_branches, enclosing_loop_id,
                 variants, loop_counters or {},
+                max_loop_iterations=max_loop_iterations,
             )
             continue
         branch_to_variants: Dict[int, List[str]] = {}

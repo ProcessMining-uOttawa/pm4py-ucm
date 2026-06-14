@@ -358,9 +358,9 @@ def test_synthesis_loop_body_responsibility_carries_decrement():
 
 def test_synthesis_per_variant_loop_counter_initialised_to_max_iterations():
     """Each variant's scenario initialises the loop counter to the
-    maximum body-iteration count actually observed in that variant's
-    traces — so the loop runs at least as many times as the heaviest
-    trace in the cluster."""
+    maximum body-iteration count actually observed — capped at the
+    ``max_loop_iterations`` ceiling so scenarios stay tractable. With
+    the cap disabled the value matches the heaviest trace exactly."""
     loop_tree = T(operator="->", children=[
         _leaf("Open"),
         T(operator="*", children=[_leaf("Review"), _leaf("Revise")]),
@@ -373,19 +373,31 @@ def test_synthesis_per_variant_loop_counter_initialised_to_max_iterations():
     )
     ucm = pm4py_ucm.convert_to_ucm(loop_tree)
     result = _clustering.cluster(log, loop_tree)
-    group = _scenarios.synthesize_scenarios(
+    # Uncapped: v2's three iterations come through verbatim.
+    group_uncapped = _scenarios.synthesize_scenarios(
         ucm, loop_tree, result, emit_conditions=True,
+        max_loop_iterations=None,
     )
-    # v1 -> 1 iteration, v2 -> 3 iterations (the >=2 cluster's max).
-    scenarios_by_name = {sc.name: sc for sc in group.scenarios}
+    by_name = {sc.name: sc for sc in group_uncapped.scenarios}
     for vname, expected in (("v1", "1"), ("v2", "3")):
-        sc = scenarios_by_name[vname]
+        sc = by_name[vname]
         counter_inits = [
             i for i in sc.initializations
             if i.variable.name.startswith("loop_counter_")
         ]
         assert len(counter_inits) == 1
         assert counter_inits[0].value == expected
+    # Capped at 2 (default): v2's three iterations clamp to 2.
+    ucm2 = pm4py_ucm.convert_to_ucm(loop_tree)
+    group_capped = _scenarios.synthesize_scenarios(
+        ucm2, loop_tree, result, emit_conditions=True,
+        max_loop_iterations=2,
+    )
+    by_name = {sc.name: sc for sc in group_capped.scenarios}
+    assert next(
+        i for i in by_name["v2"].initializations
+        if i.variable.name.startswith("loop_counter_")
+    ).value == "2"
 
 
 def test_synthesis_synthesises_decrement_resp_when_body_is_tau():

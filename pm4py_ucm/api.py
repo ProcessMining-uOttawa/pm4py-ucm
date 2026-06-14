@@ -246,6 +246,7 @@ def discover_scenarios(
     coarsen_loops: bool = True,
     emit_conditions: bool = True,
     group_name: str = "MinedScenarios",
+    max_loop_iterations: Optional[int] = 2,
 ):
     """End-to-end discovery of an executable UCM with scenarios from a log.
 
@@ -292,6 +293,17 @@ def discover_scenarios(
         to non-loop XORs. Pass ``False`` to leave conditions alone.
     group_name
         Name of the synthesized :class:`UCM.ScenarioGroup`.
+    max_loop_iterations
+        Upper bound on the per-variant loop counter initialisation
+        value (default ``2``). Scenarios traverse each loop body at
+        most this many times — enough to demonstrate "loop fires
+        once vs more than once" behaviour without producing
+        iteration chains that take forever to step through in
+        jUCMNav. Pass ``None`` to disable capping. Nested loops
+        compose multiplicatively, so a default of 2 keeps even
+        deep nesting tractable. See
+        :func:`pm4py_ucm.algo.discovery.scenarios.synthesis.\
+synthesize_scenarios` for details.
 
     Returns
     -------
@@ -336,6 +348,7 @@ def discover_scenarios(
         ucm, tree, clustering,
         group_name=group_name,
         emit_conditions=emit_conditions,
+        max_loop_iterations=max_loop_iterations,
     )
 
     return ucm, clustering
