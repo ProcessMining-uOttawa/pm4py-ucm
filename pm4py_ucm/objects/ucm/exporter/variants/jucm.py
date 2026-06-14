@@ -243,8 +243,86 @@ def _emit_urnspec(w, ucm, wrap_names=True, wrap_width=_DEFAULT_WRAP_WIDTH,
 
 
 def _emit_ucmspec(w, ucm) -> None:
-    """Empty ucmspec — jUCMNav will add scenario groups on first save."""
-    w.empty("ucmspec", [])
+    """Emit ``<ucmspec>`` with any scenario groups attached to the UCM.
+
+    When the UCM carries no scenario groups (the common case for plain
+    mined-only outputs), the element is empty — preserving the legacy
+    byte-for-byte output. When the scenario-synthesis pipeline has
+    populated :attr:`UCM.scenario_groups`, each group is emitted in
+    list order with its scenarios as children."""
+    if not ucm.scenario_groups:
+        w.empty("ucmspec", [])
+        return
+    w.open("ucmspec", [])
+    for sg in ucm.scenario_groups:
+        _emit_scenario_group(w, sg)
+    w.close("ucmspec")
+
+
+def _emit_scenario_group(w, sg: "UCM.ScenarioGroup") -> None:
+    """Emit one ``<scenarioGroups>`` element with its scenarios."""
+    attrs: List = [
+        ("name", sg.effective_name),
+        ("id", str(sg.id)),
+    ]
+    if sg.description:
+        attrs.append(("description", sg.description))
+    if not sg.scenarios:
+        w.empty("scenarioGroups", attrs)
+        return
+    w.open("scenarioGroups", attrs)
+    for sc in sg.scenarios:
+        _emit_scenario_def(w, sc)
+    w.close("scenarioGroups")
+
+
+def _emit_scenario_def(w, sc: "UCM.ScenarioDef") -> None:
+    """Emit one ``<scenarios>`` element representing a ScenarioDef.
+
+    The element carries:
+
+    * the scenario's name + id;
+    * a free-form ``description`` (used by the synthesis pipeline to
+      carry the variant's partial-order expression and the case-ID
+      list — jUCMNav surfaces this in the scenario panel);
+    * one ``<initializations>`` child per variable assignment;
+    * one ``<startPoints>`` child per scenario start;
+    * one ``<endPoints>`` child per scenario end.
+
+    Booleans default to ``true``, matching jUCMNav's own output.
+    """
+    attrs: List = [
+        ("name", sc.effective_name),
+        ("id", str(sc.id)),
+    ]
+    if sc.description:
+        attrs.append(("description", sc.description))
+    has_children = bool(
+        sc.initializations or sc.start_points or sc.end_points,
+    )
+    if not has_children:
+        w.empty("scenarios", attrs)
+        return
+    w.open("scenarios", attrs)
+    for init in sc.initializations:
+        init_attrs: List = [
+            ("variable", str(init.variable.id)),
+            ("value", init.value),
+        ]
+        w.empty("initializations", init_attrs)
+    for sp in sc.start_points:
+        sp_attrs: List = [
+            ("startPoint", str(sp.start_point.id)),
+            ("enabled", "true" if sp.enabled else "false"),
+        ]
+        w.empty("startPoints", sp_attrs)
+    for ep in sc.end_points:
+        ep_attrs: List = [
+            ("endPoint", str(ep.end_point.id)),
+            ("enabled", "true" if ep.enabled else "false"),
+        ]
+        w.empty("endPoints", ep_attrs)
+    w.close("scenarios")
 
 
 def _emit_grlspec(w, ucm) -> None:
@@ -258,7 +336,9 @@ def _emit_grlspec(w, ucm) -> None:
 
 def _emit_urndef(w, ucm, _wrap, emit_conditions=False) -> None:
     """Emit ``<urndef>`` with the canonical child order
-    responsibilities -> specDiagrams -> components.
+    responsibilities -> specDiagrams -> components, plus the scenario-
+    metamodel siblings (``enumerationTypes``, ``variables``) when
+    populated.
 
     Before emitting any diagram we build a *stub context*: a set of
     lookup tables that lets every emit site cheaply find the XPath
@@ -266,7 +346,15 @@ def _emit_urndef(w, ucm, _wrap, emit_conditions=False) -> None:
     carries the per-export filters (which EmptyPoints to emit as
     DirectionArrows, which ComponentRefs to keep, whether to emit
     ``<condition>`` elements at all).
+
+    When the UCM carries scenario groups, ``emit_conditions`` is
+    forced to ``True`` regardless of the caller's preference — the
+    synthesized OR-fork conditions are the bridge between the
+    scenario's ``variant_id`` initialization and the model's branch
+    selection, so they must reach the ``.jucm``.
     """
+    if ucm.scenario_groups and not emit_conditions:
+        emit_conditions = True
     ctx = _build_stub_context(ucm, emit_conditions=emit_conditions)
 
     w.open("urndef", [])
@@ -276,7 +364,42 @@ def _emit_urndef(w, ucm, _wrap, emit_conditions=False) -> None:
         _emit_ucmmap(w, ucm, ucm_map, map_index=i, _wrap=_wrap, ctx=ctx)
     for c in ucm.components:
         _emit_component(w, ucm, c, ctx=ctx)
+    # Scenario-metamodel definitions live on the URN spec root and are
+    # written after components for byte-stability: a UCM with no
+    # scenario synthesis produces a file identical to the legacy
+    # output, since the for-loops below iterate over empty lists.
+    for et in ucm.enumeration_types:
+        _emit_enumeration_type(w, et)
+    for v in ucm.variables:
+        _emit_variable(w, v)
     w.close("urndef")
+
+
+def _emit_enumeration_type(w, et: "UCM.EnumerationType") -> None:
+    """Emit one ``<enumerationTypes>`` element."""
+    attrs: List = [
+        ("name", et.effective_name),
+        ("id", str(et.id)),
+        ("values", ",".join(et.values)),
+    ]
+    if et.description:
+        attrs.append(("description", et.description))
+    w.empty("enumerationTypes", attrs)
+
+
+def _emit_variable(w, v: "UCM.Variable") -> None:
+    """Emit one ``<variables>`` element with its type discriminator
+    and (for enumerations) the back-link to its EnumerationType."""
+    attrs: List = [
+        ("name", v.effective_name),
+        ("id", str(v.id)),
+        ("type", v.type),
+    ]
+    if v.enumeration_type is not None:
+        attrs.append(("enumerationType", str(v.enumeration_type.id)))
+    if v.description:
+        attrs.append(("description", v.description))
+    w.empty("variables", attrs)
 
 
 # ---------------------------------------------------------------------------

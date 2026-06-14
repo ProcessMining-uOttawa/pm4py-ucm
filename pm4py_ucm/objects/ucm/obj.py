@@ -781,6 +781,167 @@ class UCM:
             return (f"UCMmap(name={self._name!r}, nodes={len(self.nodes)}, "
                     f"connections={len(self.connections)})")
 
+    # ------------------------------------------------------------------
+    # Scenario metamodel (urncore::EnumerationType / Variable /
+    # ucm::ScenarioGroup / ScenarioDef / Initialization / ScenarioStartPoint
+    # / ScenarioEndPoint). Live on the URN spec root (this UCM container)
+    # except for ScenarioDef and Initialization/StartPoint/EndPoint, which
+    # live inside their owning ScenarioGroup/ScenarioDef.
+    # ------------------------------------------------------------------
+
+    class EnumerationType(URNmodelElement):
+        """A named set of string values. Mirrors ``urncore::EnumerationType``.
+
+        jUCMNav serialises ``values`` as a single comma-separated string
+        attribute. Each value is a free-form identifier; semantics are
+        carried by :class:`UCM.Variable` references."""
+
+        def __init__(
+            self,
+            id: Optional[int] = None,
+            name: str = "",
+            description: str = "",
+            values: Optional[List[str]] = None,
+        ) -> None:
+            super().__init__(id=id, name=name, description=description)
+            self.values: List[str] = list(values or [])
+
+    class Variable(URNmodelElement):
+        """A named, typed scenario variable. Mirrors ``urncore::Variable``.
+
+        :attr:`type` is one of ``"Enumeration"``, ``"Integer"``,
+        ``"Boolean"``, or any other identifier accepted by jUCMNav. When
+        ``type == "Enumeration"``, :attr:`enumeration_type` must point at
+        a :class:`UCM.EnumerationType` defined on the same URN spec."""
+
+        def __init__(
+            self,
+            id: Optional[int] = None,
+            name: str = "",
+            description: str = "",
+            type: str = "Enumeration",
+            enumeration_type: Optional["UCM.EnumerationType"] = None,
+        ) -> None:
+            super().__init__(id=id, name=name, description=description)
+            self.type: str = type
+            self.enumeration_type: Optional[UCM.EnumerationType] = enumeration_type
+
+    class ScenarioGroup(URNmodelElement):
+        """Container for a set of related scenarios. Lives on the UCM spec.
+
+        URN allows multiple groups; this implementation accommodates that
+        but the scenario synthesis driver produces a single group per
+        discovery run by default."""
+
+        def __init__(
+            self,
+            id: Optional[int] = None,
+            name: str = "ScenarioGroup",
+            description: str = "",
+        ) -> None:
+            super().__init__(id=id, name=name, description=description)
+            self.scenarios: List[UCM.ScenarioDef] = []
+
+        def add_scenario(self, scenario: "UCM.ScenarioDef") -> "UCM.ScenarioDef":
+            scenario._owner = self._owner
+            if self._owner is not None and scenario._id is not None:
+                self._owner._counter.reserve(scenario._id)
+            self.scenarios.append(scenario)
+            return scenario
+
+    class Initialization:
+        """One ``(variable, value)`` pair set at scenario entry.
+
+        Mirrors ``ucm::Initialization``. The value is a string; for
+        enumeration-typed variables it must be one of the enumeration's
+        values."""
+
+        __slots__ = ("variable", "value")
+
+        def __init__(
+            self,
+            variable: "UCM.Variable",
+            value: str,
+        ) -> None:
+            self.variable: UCM.Variable = variable
+            self.value: str = value
+
+    class ScenarioStartPoint:
+        """A scenario's entry point — references a :class:`UCM.StartPoint`
+        on a map. ``enabled=True`` (the default) means the scenario engine
+        activates this start point; ``False`` is rarely used and provided
+        for round-trip fidelity with jUCMNav."""
+
+        __slots__ = ("start_point", "enabled")
+
+        def __init__(
+            self,
+            start_point: "UCM.StartPoint",
+            enabled: bool = True,
+        ) -> None:
+            self.start_point: UCM.StartPoint = start_point
+            self.enabled: bool = enabled
+
+    class ScenarioEndPoint:
+        """A scenario's expected exit — references a :class:`UCM.EndPoint`
+        on a map. Same enabled semantics as :class:`UCM.ScenarioStartPoint`."""
+
+        __slots__ = ("end_point", "enabled")
+
+        def __init__(
+            self,
+            end_point: "UCM.EndPoint",
+            enabled: bool = True,
+        ) -> None:
+            self.end_point: UCM.EndPoint = end_point
+            self.enabled: bool = enabled
+
+    class ScenarioDef(URNmodelElement):
+        """One executable scenario specification. Mirrors ``ucm::ScenarioDef``.
+
+        A scenario is a triple:
+
+        * ``initializations`` — variable values to set at scenario entry;
+        * ``start_points`` / ``end_points`` — which path entries/exits are
+          activated (multiple supported, but the typical case is one each);
+        * ``description`` — free-form text. The scenario synthesis driver
+          uses this slot to carry the variant's partial-order expression
+          and the list of case IDs that the variant covers, so anyone
+          opening the model in jUCMNav can trace each scenario back to
+          the original log."""
+
+        def __init__(
+            self,
+            id: Optional[int] = None,
+            name: str = "",
+            description: str = "",
+        ) -> None:
+            super().__init__(id=id, name=name, description=description)
+            self.initializations: List[UCM.Initialization] = []
+            self.start_points: List[UCM.ScenarioStartPoint] = []
+            self.end_points: List[UCM.ScenarioEndPoint] = []
+
+        def add_initialization(
+            self, variable: "UCM.Variable", value: str,
+        ) -> "UCM.Initialization":
+            init = UCM.Initialization(variable=variable, value=value)
+            self.initializations.append(init)
+            return init
+
+        def add_start_point(
+            self, start_point: "UCM.StartPoint", enabled: bool = True,
+        ) -> "UCM.ScenarioStartPoint":
+            sp = UCM.ScenarioStartPoint(start_point=start_point, enabled=enabled)
+            self.start_points.append(sp)
+            return sp
+
+        def add_end_point(
+            self, end_point: "UCM.EndPoint", enabled: bool = True,
+        ) -> "UCM.ScenarioEndPoint":
+            ep = UCM.ScenarioEndPoint(end_point=end_point, enabled=enabled)
+            self.end_points.append(ep)
+            return ep
+
     # =========================================================================
     # End of inner classes. The UCM container itself follows.
     # =========================================================================
@@ -806,6 +967,14 @@ class UCM:
         self.responsibilities: List[UCM.Responsibility] = []
         self.components: List[UCM.ComponentElement] = []
 
+        # Scenario metamodel: enumerations, variables, scenario groups.
+        # Empty by default — :func:`pm4py_ucm.discover_scenarios` populates
+        # them; the exporter only emits ``<ucmspec>`` content when any of
+        # these lists is non-empty.
+        self.enumeration_types: List[UCM.EnumerationType] = []
+        self.variables: List[UCM.Variable] = []
+        self.scenario_groups: List[UCM.ScenarioGroup] = []
+
     # ------------------------------------------------------------------
     # ID introspection
     # ------------------------------------------------------------------
@@ -828,6 +997,15 @@ class UCM:
             out.append(r)
         for c in self.components:
             out.append(c)
+        # Scenario-layer definitions also carry global IDs in jUCMNav.
+        for et in self.enumeration_types:
+            out.append(et)
+        for v in self.variables:
+            out.append(v)
+        for sg in self.scenario_groups:
+            out.append(sg)
+            for sc in sg.scenarios:
+                out.append(sc)
         return out
 
     def max_id(self) -> int:
@@ -936,6 +1114,58 @@ class UCM:
         c._owner = self
         self.components.append(c)
         return c
+
+    # ------------------------------------------------------------------
+    # Scenario metamodel — registries
+    # ------------------------------------------------------------------
+
+    def get_or_add_enumeration_type(
+        self, name: str, values: Optional[List[str]] = None,
+    ) -> "UCM.EnumerationType":
+        """Return the named enumeration type, creating one if absent.
+
+        When the enumeration already exists, ``values`` is merged
+        (new values appended in order, duplicates skipped)."""
+        for et in self.enumeration_types:
+            if et.name == name:
+                if values:
+                    for v in values:
+                        if v not in et.values:
+                            et.values.append(v)
+                return et
+        et = UCM.EnumerationType(name=name, values=values or [])
+        et._owner = self
+        self.enumeration_types.append(et)
+        return et
+
+    def get_or_add_variable(
+        self,
+        name: str,
+        type: str = "Enumeration",
+        enumeration_type: Optional["UCM.EnumerationType"] = None,
+    ) -> "UCM.Variable":
+        """Return the named variable, creating one if absent. Does not
+        change the type or enumeration of an existing variable."""
+        for v in self.variables:
+            if v.name == name:
+                return v
+        v = UCM.Variable(
+            name=name, type=type, enumeration_type=enumeration_type,
+        )
+        v._owner = self
+        self.variables.append(v)
+        return v
+
+    def add_scenario_group(
+        self,
+        name: str = "ScenarioGroup",
+        description: str = "",
+    ) -> "UCM.ScenarioGroup":
+        """Create and register a new :class:`UCM.ScenarioGroup`."""
+        sg = UCM.ScenarioGroup(name=name, description=description)
+        sg._owner = self
+        self.scenario_groups.append(sg)
+        return sg
 
     # ------------------------------------------------------------------
     # Performer bindings (semantic <-> visual)

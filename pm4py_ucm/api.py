@@ -26,6 +26,9 @@ from .objects.ucm.conversion import from_process_tree as _tree_converter
 from .visualization.ucm import visualizer as _visualizer
 from .algo.discovery.ucm import algorithm as _discovery
 from .algo.discovery.resources import algorithm as _resources
+from .algo.discovery.variants import clustering as _clustering
+from .algo.discovery.scenarios import synthesis as _scenarios
+from .algo.discovery.scenarios import reports as _scenario_reports
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +233,137 @@ def view_ucm(
         params["map_name"] = map
     gviz = _visualizer.apply(ucm, parameters=params)
     return _visualizer.view(gviz)
+
+
+# ---------------------------------------------------------------------------
+# Scenario synthesis from event logs
+# ---------------------------------------------------------------------------
+
+def discover_scenarios(
+    log,
+    parameters: Optional[Dict[str, Any]] = None,
+    decomposition=None,
+    coarsen_loops: bool = True,
+    emit_conditions: bool = True,
+    group_name: str = "MinedScenarios",
+):
+    """End-to-end discovery of an executable UCM with scenarios from a log.
+
+    Pipeline:
+
+    1. Discover a process tree using the inductive miner (or reuse a
+       pre-built tree passed via ``parameters["process_tree"]``).
+    2. Convert it to a :class:`UCM` (decomposition is *not* applied for
+       scenario synthesis — the cluster engine wants a single map; if
+       the caller requests decomposition it is honoured but condition
+       emission may be skipped for plug-in maps).
+    3. Cluster the log on the tree via concurrency-aware choice
+       signatures; see
+       :func:`pm4py_ucm.algo.discovery.variants.clustering.cluster`.
+    4. Build one :class:`UCM.ScenarioDef` per variant on the UCM, set
+       ``variant_id`` initialisations, attach descriptions carrying
+       partial-order expression + case IDs, and (by default) emit
+       ``variant_id`` disjunctive conditions on the OR-fork outgoing
+       connections that correspond to XOR tree nodes outside loops.
+
+    Parameters
+    ----------
+    log
+        Any input accepted by
+        :func:`pm4py.discover_process_tree_inductive` — a path to a
+        ``.xes`` file, a ``pandas.DataFrame``, or a pm4py
+        ``EventLog``. The same log is used for tree discovery and
+        cluster replay.
+    parameters
+        Forwarded to :func:`discover_ucm_inductive` for the UCM build
+        phase (e.g. ``resource_attribute``, ``performers``,
+        ``map_name``). Also accepts ``process_tree`` to bypass mining.
+    decomposition
+        Same shape as in :func:`discover_ucm_inductive`. Pass ``None``
+        (default) for a single flat map — the recommended setting for
+        scenario synthesis.
+    coarsen_loops
+        When ``True`` (default), variant clustering collapses loop
+        iteration sequences to ``{0, 1, >=2}``. Pass ``False`` to
+        differentiate every iteration's inner choices.
+    emit_conditions
+        When ``True`` (default), set ``variant_id`` disjunctive
+        conditions on the OR-fork outgoing connections corresponding
+        to non-loop XORs. Pass ``False`` to leave conditions alone.
+    group_name
+        Name of the synthesized :class:`UCM.ScenarioGroup`.
+
+    Returns
+    -------
+    tuple
+        ``(ucm, clustering)`` — the UCM (mutated with the scenarios)
+        and the
+        :class:`pm4py_ucm.algo.discovery.variants.clustering.ClusteringResult`
+        with per-variant case IDs and the fitness percentage.
+    """
+    try:
+        import pm4py
+    except ImportError as exc:  # pragma: no cover - depends on env
+        raise ImportError(
+            "discover_scenarios requires pm4py to be installed; "
+            "install it with `pip install pm4py`."
+        ) from exc
+
+    params = dict(parameters or {})
+    if isinstance(log, str):
+        log = pm4py.read_xes(log)
+
+    # 1+2. Mine tree (or reuse), then build UCM. We force tree
+    # discovery up here so the SAME tree object reaches both the UCM
+    # builder and the clustering pass. The inductive miner is
+    # deterministic on a given log, but going via PM4Py twice and
+    # comparing identity would be brittle, so we pin the tree.
+    tree = params.pop("process_tree", None)
+    if tree is None:
+        tree = pm4py.discover_process_tree_inductive(log)
+
+    ucm = discover_ucm_inductive(
+        log,
+        parameters={**params, "process_tree": tree},
+        decomposition=decomposition,
+    )
+
+    # 3. Cluster the log on the tree.
+    clustering = _clustering.cluster(log, tree, coarsen_loops=coarsen_loops)
+
+    # 4. Synthesize scenarios on the UCM.
+    _scenarios.synthesize_scenarios(
+        ucm, tree, clustering,
+        group_name=group_name,
+        emit_conditions=emit_conditions,
+    )
+
+    return ucm, clustering
+
+
+def write_variants_report(
+    clustering,
+    file_path: str,
+    max_case_ids: int = 5,
+) -> str:
+    """Write the variant summary CSV — one row per variant plus a
+    noise row and a totals row. See
+    :func:`pm4py_ucm.algo.discovery.scenarios.reports.write_variants_report`
+    for column semantics."""
+    _scenario_reports.write_variants_report(
+        clustering, file_path, max_case_ids=max_case_ids,
+    )
+    return file_path
+
+
+def write_case_variant_map(
+    clustering,
+    file_path: str,
+) -> str:
+    """Write the per-case → variant mapping as CSV — joinable on
+    ``case_id`` against the user's own log."""
+    _scenario_reports.write_case_variant_map(clustering, file_path)
+    return file_path
 
 
 def save_vis_ucm(
