@@ -60,6 +60,12 @@ class Variant:
         sequences) actually appeared in the log for this cluster.
         Always ``<= linearization_count``; the gap is "interleavings
         the model admits but the log never exhibited".
+    loop_iteration_max
+        For each LOOP tree node id encountered by traces in this
+        variant, the maximum body-iteration count observed. Used by
+        the scenario synthesizer to initialise the per-loop integer
+        counter variable so the loop runs the right number of times.
+        Empty when the variant traverses no loops.
     """
 
     variant_id: str
@@ -69,6 +75,7 @@ class Variant:
     partial_order_expression: str
     linearization_count: int
     sequence_variants: int
+    loop_iteration_max: Dict[int, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -220,19 +227,29 @@ def cluster(
     # First pass — replay every trace, bucket by signature.
     buckets: Dict[tuple, List[str]] = {}
     bucket_sequences: Dict[tuple, set] = {}
+    bucket_loop_max: Dict[tuple, Dict[int, int]] = {}
     noise: List[str] = []
     sequence_variants_seen: set = set()
     for case_id, trace in cases:
         seq_key = tuple(trace)
         sequence_variants_seen.add(seq_key)
+        trace_loop_iters: Dict[int, int] = {}
         signature = _cs.replay(
             tree, trace, node_ids=node_ids, coarsen_loops=coarsen_loops,
+            loop_iter_counts=trace_loop_iters,
         )
         if signature == _cs.NOFIT:
             noise.append(case_id)
             continue
         buckets.setdefault(signature, []).append(case_id)
         bucket_sequences.setdefault(signature, set()).add(seq_key)
+        # Track per-cluster max loop iteration count for every LOOP node
+        # this trace traversed. The scenario synthesizer initialises the
+        # integer counter to this max so the loop runs at least as many
+        # times as the heaviest trace in the cluster.
+        cluster_loops = bucket_loop_max.setdefault(signature, {})
+        for loop_nid, ic in trace_loop_iters.items():
+            cluster_loops[loop_nid] = max(cluster_loops.get(loop_nid, 0), ic)
 
     # Second pass — order buckets by frequency, assign v1, v2, ...,
     # compute derived artifacts.
@@ -256,6 +273,7 @@ def cluster(
             partial_order_expression=po_expr,
             linearization_count=lin_count,
             sequence_variants=len(bucket_sequences.get(sig, set())),
+            loop_iteration_max=dict(bucket_loop_max.get(sig, {})),
         ))
 
     return ClusteringResult(

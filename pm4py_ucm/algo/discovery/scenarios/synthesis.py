@@ -113,6 +113,17 @@ def synthesize_scenarios(
         _VARIANT_VAR_NAME, type="enumeration", enumeration_type=enum_type,
     )
 
+    # Loop counter scaffolding. For every LOOP tree node with at least
+    # one body responsibility in the UCM, this creates an integer
+    # variable, wires mutually-exclusive ``counter == 0`` / ``counter > 0``
+    # conditions onto the LoopFork's exit / redo arcs, and appends a
+    # decrement expression to a body responsibility. The returned dict
+    # is ``{tree_loop_node_id: counter_variable}`` — used below to
+    # initialise the counter per scenario.
+    loop_counters: Dict[int, UCM.Variable] = {}
+    if emit_conditions:
+        loop_counters = _wire_loop_counters(ucm, target_map, tree)
+
     # Build the ScenarioGroup with one ScenarioDef per variant.
     group = ucm.add_scenario_group(name=group_name)
     starts = target_map.start_points
@@ -124,6 +135,12 @@ def synthesize_scenarios(
         )
         sc._owner = ucm
         sc.add_initialization(variant_var, variant.variant_id)
+        # Per-loop integer counter initialisation. Use the variant's
+        # max observed iteration count so the loop runs at least as
+        # often as the heaviest trace in the cluster.
+        for tree_loop_id, counter_var in loop_counters.items():
+            max_iter = variant.loop_iteration_max.get(tree_loop_id, 0)
+            sc.add_initialization(counter_var, str(max_iter))
         for sp in starts:
             sc.add_start_point(sp, enabled=True)
         for ep in ends:
@@ -206,6 +223,206 @@ def _collect_xors_outside_loops(
     return out
 
 
+# ---------------------------------------------------------------------------
+# Loop counter scaffolding
+# ---------------------------------------------------------------------------
+
+def _arc_carrying_condition(arc: UCM.NodeConnection) -> UCM.NodeConnection:
+    """Walk past a single routing-bend ``EmptyPoint`` to find the arc
+    that actually carries the branch label/condition.
+
+    The converter's ``insert_routing_empty_points`` pass splits every
+    arc adjacent to a fork/join into ``src -> bend -> tgt`` and keeps
+    the original condition on the *second* half (the arc leaving the
+    bend, not the one leaving the fork). To detect "exit" vs "redo"
+    branches on a LoopFork we therefore need to follow that hop. If
+    the immediate arc already carries the condition (no routing pass
+    ran, or the condition survived on the original side) we return
+    it unchanged."""
+    if arc.condition is not None and arc.condition.label:
+        return arc
+    target = arc.target
+    if isinstance(target, UCM.EmptyPoint) and len(target.succ_connections) == 1:
+        return target.succ_connections[0]
+    return arc
+
+
+def _collect_loop_tree_ids(tree, node_ids: Dict[int, int]) -> List[int]:
+    """Pre-order list of stable signature IDs for every LOOP tree node.
+
+    The converter creates a ``LoopJoin`` + ``LoopFork`` pair per LOOP
+    node in the same pre-order, so list indices line up after
+    filtering the UCM map's nodes by name."""
+    out: List[int] = []
+
+    def _walk(node):
+        op = _op_value(node)
+        children = list(getattr(node, "children", None) or [])
+        if op == _LOOP and len(children) >= 2:
+            out.append(node_ids[id(node)])
+        for c in children:
+            _walk(c)
+
+    _walk(tree)
+    return out
+
+
+def _find_loop_body_resp_ref(
+    loop_join: UCM.PathNode, loop_fork: UCM.PathNode,
+) -> Optional[UCM.RespRef]:
+    """BFS forward from ``loop_join`` and return the first
+    :class:`UCM.RespRef` found on the path to ``loop_fork``.
+
+    The body is the sub-graph between LoopJoin and LoopFork. Walking
+    forward from LoopJoin without traversing past LoopFork enumerates
+    exactly the body nodes — the redo back-edge runs the other way
+    (LoopFork -> redo subtree -> LoopJoin) and is never reached. The
+    first RespRef encountered is the natural site for the loop-counter
+    decrement expression: it runs once per body iteration, so the
+    counter steps down predictably."""
+    visited = {id(loop_join)}
+    queue: List[UCM.PathNode] = [
+        arc.target for arc in loop_join.succ_connections
+    ]
+    while queue:
+        node = queue.pop(0)
+        if id(node) in visited:
+            continue
+        visited.add(id(node))
+        if node is loop_fork:
+            continue
+        if isinstance(node, UCM.RespRef) and node.resp_def is not None:
+            return node
+        for arc in node.succ_connections:
+            queue.append(arc.target)
+    return None
+
+
+def _synthesize_decrement_resp_ref(
+    ucm: UCM,
+    target_map: UCM.UCMmap,
+    loop_join: UCM.PathNode,
+    counter_name: str,
+) -> UCM.RespRef:
+    """Insert a synthetic ``decrement_<counter>`` :class:`UCM.RespRef`
+    immediately after ``loop_join`` and return it.
+
+    Called for loops whose body contains no real responsibility (e.g.
+    a tau body). The synthesizer needs *some* node inside the body to
+    carry the ``counter = counter - 1`` expression, so we create one
+    and splice it onto the first outgoing connection of LoopJoin. The
+    visual layout coordinates default to (0, 0); the auto-layouter
+    would normally re-flow on the next save, but this kind of edit
+    happens after the converter's layout pass — see the comment in
+    :func:`_wire_loop_counters` for the resulting trade-off."""
+    name = f"decrement_{counter_name}"
+    resp_def = ucm.get_or_add_responsibility(name)
+    ref = UCM.RespRef(name=name, resp_def=resp_def)
+    target_map.add_node(ref)
+    # Splice into LoopJoin's outgoing arc: src -> ref -> original_target.
+    out_arc = loop_join.succ_connections[0]
+    next_node = out_arc.target
+    target_map.remove_connection(out_arc)
+    target_map.add_connection(loop_join, ref)
+    target_map.add_connection(ref, next_node)
+    return ref
+
+
+def _wire_loop_counters(
+    ucm: UCM, target_map: UCM.UCMmap, tree,
+) -> Dict[int, UCM.Variable]:
+    """Create per-LOOP integer counter variables, set mutually-exclusive
+    LoopFork conditions, and attach decrement expressions inside the
+    loop body.
+
+    For each LOOP tree node:
+
+    1. Pair it with the matching ``LoopJoin`` / ``LoopFork`` UCM nodes
+       (same pre-order as the converter creates them).
+    2. Create an integer :class:`UCM.Variable` named
+       ``loop_counter_<tree_id>``.
+    3. Set the LoopFork's outgoing conditions:
+
+       * exit arc (label ``"exit"``)  -> ``counter == 0``
+       * redo arc (label ``"redo"``)  -> ``counter > 0``
+
+       These are mutually exclusive and jointly exhaustive at runtime,
+       resolving the non-determinism Daniel flagged on the LoopFork.
+    4. Append the decrement expression
+       ``counter = counter - 1;`` to a body responsibility's
+       :attr:`Responsibility.expression`. If no
+       :class:`UCM.RespRef` exists in the body, one is synthesised
+       (via :func:`_synthesize_decrement_resp_ref`) and spliced in
+       right after LoopJoin.
+
+    Returns a mapping ``{tree_loop_node_id: counter_variable}`` so the
+    caller can add per-scenario initialisations.
+    """
+    node_ids = _cs.assign_node_ids(tree)
+    tree_loop_ids = _collect_loop_tree_ids(tree, node_ids)
+
+    loop_forks = [
+        n for n in target_map.nodes
+        if isinstance(n, UCM.OrFork) and n.name == "LoopFork"
+    ]
+    loop_joins = [
+        n for n in target_map.nodes
+        if isinstance(n, UCM.OrJoin) and n.name == "LoopJoin"
+    ]
+
+    if not (len(loop_forks) == len(loop_joins) == len(tree_loop_ids)):
+        # Disagreement between the tree walk and the converter's output.
+        # Skip silently rather than mis-attribute conditions.
+        return {}
+
+    counters: Dict[int, UCM.Variable] = {}
+    for i, tree_loop_id in enumerate(tree_loop_ids):
+        lf, lj = loop_forks[i], loop_joins[i]
+        name = f"loop_counter_{tree_loop_id}"
+        counter = ucm.get_or_add_variable(name, type="integer")
+        counters[tree_loop_id] = counter
+
+        # Mutually exclusive LoopFork conditions. The converter's
+        # routing_empty_points pass splits the LoopFork's outgoing
+        # arcs into LoopFork -> bend -> real_target and moves the
+        # branch label/condition onto the *second* half (so the
+        # label visually attaches to the arc leaving the fork). We
+        # walk past routing bends to find the arc actually carrying
+        # the condition.
+        for arc in lf.succ_connections:
+            branch_arc = _arc_carrying_condition(arc)
+            cond = branch_arc.condition
+            label = cond.label if cond else ""
+            if label == "exit":
+                expr = f"{name} == 0"
+            elif label == "redo":
+                expr = f"{name} > 0"
+            else:
+                continue
+            if cond is None:
+                branch_arc.set_condition(
+                    UCM.Condition(label=label, expression=expr),
+                )
+            else:
+                cond.expression = expr
+
+        # Attach decrement to a body responsibility (synthesise if absent).
+        body_resp = _find_loop_body_resp_ref(lj, lf)
+        if body_resp is None or body_resp.resp_def is None:
+            body_resp = _synthesize_decrement_resp_ref(
+                ucm, target_map, lj, name,
+            )
+        decrement = f"{name} = {name} - 1;"
+        resp_def = body_resp.resp_def
+        existing = resp_def.expression or ""
+        if decrement not in existing:
+            resp_def.expression = (
+                existing + " " + decrement if existing else decrement
+            )
+
+    return counters
+
+
 def _emit_orfork_conditions(
     target_map: UCM.UCMmap,
     tree,
@@ -250,16 +467,27 @@ def _emit_orfork_conditions(
             continue
         for k, arc in enumerate(succs):
             vids = branch_to_variants.get(k, [])
-            if not vids:
-                continue
+            # Every branch gets an explicit expression: a variant_id
+            # disjunction for branches at least one variant takes,
+            # ``false`` for branches no observed variant ever takes.
+            # Together the per-OR-fork conditions are mutually
+            # exclusive (one variant matches exactly one disjunct)
+            # and jointly exhaustive (every variant matches some
+            # branch). Without the explicit ``false`` on idle
+            # branches, the default ``true`` would let the jUCMNav
+            # engine non-deterministically pick a branch no scenario
+            # was designed for.
+            #
             # jUCMNav's expression syntax treats enum values as bare
-            # identifiers, not string literals. Wrapping them in quotes
-            # ("variant_id == \"v1\"") makes the parser treat the
-            # right-hand side as a string and the comparison fails the
-            # type check against the enum variable.
-            expr = " || ".join(
-                f"{_VARIANT_VAR_NAME} == {vid}" for vid in vids
-            )
+            # identifiers, not string literals — quoted form makes
+            # the parser treat the right side as a string and the
+            # comparison fails the enum type check.
+            if vids:
+                expr = " || ".join(
+                    f"{_VARIANT_VAR_NAME} == {vid}" for vid in vids
+                )
+            else:
+                expr = "false"
             if arc.condition is None:
                 arc.set_condition(UCM.Condition(
                     label=f"branch{k}", expression=expr,

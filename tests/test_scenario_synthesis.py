@@ -26,6 +26,7 @@ def _seq(*c): return T(operator="->", children=list(c))
 def _xor(*c): return T(operator="X", children=list(c))
 def _par(*c): return T(operator="+", children=list(c))
 def _leaf(l): return T(label=l)
+def _tau(): return T()
 
 
 def _build_tree_and_log():
@@ -204,6 +205,167 @@ def test_synthesis_scenario_end_points_are_mandatory_by_default():
     for sc in group.scenarios:
         for ep in sc.end_points:
             assert ep.mandatory is True
+
+
+def test_synthesis_creates_integer_counter_variable_for_loops():
+    """Every LOOP tree node gets an integer counter variable so the
+    LoopFork's exit/redo arcs can be guarded by mutually-exclusive
+    conditions."""
+    loop_tree = T(operator="->", children=[
+        _leaf("Open"),
+        T(operator="*", children=[_leaf("Review"), _leaf("Revise")]),
+        _leaf("Close"),
+    ])
+    log = [
+        ("c1", ["Open", "Review", "Close"]),
+        ("c2", ["Open", "Review", "Revise", "Review", "Close"]),
+    ]
+    ucm = pm4py_ucm.convert_to_ucm(loop_tree)
+    result = _clustering.cluster(log, loop_tree)
+    _scenarios.synthesize_scenarios(
+        ucm, loop_tree, result, emit_conditions=True,
+    )
+    # One integer variable named loop_counter_<tree_id> on the UCM.
+    counters = [v for v in ucm.variables if v.name.startswith("loop_counter_")]
+    assert len(counters) == 1
+    assert counters[0].type == "integer"
+
+
+def test_synthesis_loopfork_conditions_are_mutually_exclusive():
+    """The LoopFork's exit arc should be ``counter == 0`` and the
+    redo arc ``counter > 0`` — at any point exactly one of these
+    holds, eliminating the non-determinism the default ``true``
+    conditions caused."""
+    loop_tree = T(operator="->", children=[
+        _leaf("Open"),
+        T(operator="*", children=[_leaf("Review"), _leaf("Revise")]),
+        _leaf("Close"),
+    ])
+    log = [
+        ("c1", ["Open", "Review", "Close"]),
+        ("c2", ["Open", "Review", "Revise", "Review", "Close"]),
+    ]
+    ucm = pm4py_ucm.convert_to_ucm(loop_tree)
+    result = _clustering.cluster(log, loop_tree)
+    _scenarios.synthesize_scenarios(
+        ucm, loop_tree, result, emit_conditions=True,
+    )
+    text = _jucm_exporter.serialize_to_string(ucm)
+    # Both halves of the loop's branch must be expressed in terms of
+    # the counter, not the default ``true``.
+    assert 'expression="loop_counter_' in text
+    assert '== 0' in text
+    assert '> 0' in text
+
+
+def test_synthesis_loop_body_responsibility_carries_decrement():
+    """A body responsibility (Review in this fixture) is decorated
+    with the counter-decrement expression so the counter steps down
+    once per loop iteration."""
+    loop_tree = T(operator="->", children=[
+        _leaf("Open"),
+        T(operator="*", children=[_leaf("Review"), _leaf("Revise")]),
+        _leaf("Close"),
+    ])
+    log = [
+        ("c1", ["Open", "Review", "Close"]),
+        ("c2", ["Open", "Review", "Revise", "Review", "Close"]),
+    ]
+    ucm = pm4py_ucm.convert_to_ucm(loop_tree)
+    result = _clustering.cluster(log, loop_tree)
+    _scenarios.synthesize_scenarios(
+        ucm, loop_tree, result, emit_conditions=True,
+    )
+    body_resp = next(r for r in ucm.responsibilities if r.name == "Review")
+    assert "loop_counter_" in (body_resp.expression or "")
+    assert "= " in body_resp.expression
+    assert "- 1" in body_resp.expression
+
+
+def test_synthesis_per_variant_loop_counter_initialised_to_max_iterations():
+    """Each variant's scenario initialises the loop counter to the
+    maximum body-iteration count actually observed in that variant's
+    traces — so the loop runs at least as many times as the heaviest
+    trace in the cluster."""
+    loop_tree = T(operator="->", children=[
+        _leaf("Open"),
+        T(operator="*", children=[_leaf("Review"), _leaf("Revise")]),
+        _leaf("Close"),
+    ])
+    log = (
+        [(f"c1_{i}", ["Open", "Review", "Close"]) for i in range(10)]
+        + [(f"c2_{i}", ["Open", "Review", "Revise", "Review", "Revise",
+                        "Review", "Close"]) for i in range(5)]
+    )
+    ucm = pm4py_ucm.convert_to_ucm(loop_tree)
+    result = _clustering.cluster(log, loop_tree)
+    group = _scenarios.synthesize_scenarios(
+        ucm, loop_tree, result, emit_conditions=True,
+    )
+    # v1 -> 1 iteration, v2 -> 3 iterations (the >=2 cluster's max).
+    scenarios_by_name = {sc.name: sc for sc in group.scenarios}
+    for vname, expected in (("v1", "1"), ("v2", "3")):
+        sc = scenarios_by_name[vname]
+        counter_inits = [
+            i for i in sc.initializations
+            if i.variable.name.startswith("loop_counter_")
+        ]
+        assert len(counter_inits) == 1
+        assert counter_inits[0].value == expected
+
+
+def test_synthesis_synthesises_decrement_resp_when_body_is_tau():
+    """A loop whose body is a single ``tau`` leaf has no real
+    responsibility to decorate. The synthesizer must create a
+    ``decrement_<counter>`` :class:`UCM.RespRef` so the counter still
+    steps down once per iteration."""
+    # *(tau, X) — body is tau, redo is X. Body alphabet empty, but
+    # the converter still produces a LoopJoin + LoopFork pair.
+    tree = T(operator="*", children=[_tau(), _leaf("X")])
+    log = [("c1", []), ("c2", ["X"]), ("c3", ["X", "X"])]
+    ucm = pm4py_ucm.convert_to_ucm(tree)
+    result = _clustering.cluster(log, tree)
+    _scenarios.synthesize_scenarios(
+        ucm, tree, result, emit_conditions=True,
+    )
+    decrement_resps = [
+        r for r in ucm.responsibilities if r.name.startswith("decrement_")
+    ]
+    assert decrement_resps, (
+        "expected a synthetic decrement_<counter> Responsibility "
+        "when the loop body has no real RespRef"
+    )
+    assert any("loop_counter_" in (r.expression or "") for r in decrement_resps)
+
+
+def test_synthesis_orfork_branches_with_no_variant_get_false():
+    """When no variant takes a particular OR-fork branch, the
+    synthesizer must emit ``expression="false"`` rather than leaving
+    the default ``true``. Together with the variant_id disjunctions
+    on the taken branches this makes the OR-fork's outgoing
+    conditions mutually exclusive **and** jointly exhaustive."""
+    # Three-branch XOR where only branches 0 and 2 are exercised.
+    tree = T(operator="->", children=[
+        _leaf("X"),
+        _xor(_leaf("A"), _leaf("B"), _leaf("C")),
+    ])
+    log = [
+        ("c1", ["X", "A"]),
+        ("c2", ["X", "C"]),
+    ]
+    ucm = pm4py_ucm.convert_to_ucm(tree)
+    result = _clustering.cluster(log, tree)
+    _scenarios.synthesize_scenarios(
+        ucm, tree, result, emit_conditions=True,
+    )
+    or_fork = next(
+        n for m in ucm.maps for n in m.nodes
+        if type(n).__name__ == "OrFork" and n.name != "LoopFork"
+    )
+    exprs = [a.condition.expression for a in or_fork.succ_connections
+             if a.condition is not None]
+    # At least one branch is false (the B branch nobody took).
+    assert "false" in exprs
 
 
 def test_synthesis_skips_loop_xor_condition_emission():

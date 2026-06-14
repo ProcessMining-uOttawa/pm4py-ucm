@@ -139,6 +139,7 @@ def replay(
     trace: Sequence[str],
     node_ids: Optional[Dict[int, int]] = None,
     coarsen_loops: bool = True,
+    loop_iter_counts: Optional[Dict[int, int]] = None,
 ) -> Union[tuple, str]:
     """Replay ``trace`` on ``tree`` and return its canonical signature.
 
@@ -159,6 +160,12 @@ def replay(
         iteration count (``0`` / ``1`` / ``2`` for "2 or more"). When
         ``False``, every iteration contributes its full body signature
         to the result.
+    loop_iter_counts
+        Optional dict populated during replay. For every LOOP node
+        encountered, ``loop_iter_counts[node_id] = actual_iter_count``
+        is written **before** coarsening, so callers can recover the
+        underlying iteration count even when the signature was
+        coarsened for clustering purposes. Pass ``None`` to discard.
 
     Returns
     -------
@@ -169,7 +176,12 @@ def replay(
     if node_ids is None:
         node_ids = assign_node_ids(tree)
     alpha_cache: Dict[int, frozenset] = {}
-    result = _replay(list(trace), tree, node_ids, alpha_cache, coarsen_loops)
+    if loop_iter_counts is None:
+        loop_iter_counts = {}
+    result = _replay(
+        list(trace), tree, node_ids, alpha_cache,
+        coarsen_loops, loop_iter_counts,
+    )
     if result is None:
         return NOFIT
     return result
@@ -181,6 +193,7 @@ def _replay(
     node_ids: Dict[int, int],
     alpha_cache: Dict[int, frozenset],
     coarsen_loops: bool,
+    loop_iter_counts: Dict[int, int],
 ) -> Optional[tuple]:
     """Recursive replay worker. Returns ``None`` on NOFIT, a tuple otherwise."""
     op = _op_value(tree)
@@ -192,22 +205,26 @@ def _replay(
 
     if op == _SEQUENCE:
         return _replay_sequence(
-            window, children, nid, node_ids, alpha_cache, coarsen_loops,
+            window, children, nid, node_ids, alpha_cache,
+            coarsen_loops, loop_iter_counts,
         )
 
     if op in _CHOICE_OPS:
         return _replay_xor(
-            window, children, nid, node_ids, alpha_cache, coarsen_loops,
+            window, children, nid, node_ids, alpha_cache,
+            coarsen_loops, loop_iter_counts,
         )
 
     if op in _PARALLEL_OPS:
         return _replay_parallel(
-            window, children, nid, node_ids, alpha_cache, coarsen_loops,
+            window, children, nid, node_ids, alpha_cache,
+            coarsen_loops, loop_iter_counts,
         )
 
     if op == _LOOP:
         return _replay_loop(
-            window, children, nid, node_ids, alpha_cache, coarsen_loops,
+            window, children, nid, node_ids, alpha_cache,
+            coarsen_loops, loop_iter_counts,
         )
 
     # Unknown operator — NOFIT.
@@ -236,6 +253,7 @@ def _replay_sequence(
     node_ids: Dict[int, int],
     alpha_cache: Dict[int, frozenset],
     coarsen_loops: bool,
+    loop_iter_counts: Dict[int, int],
 ) -> Optional[tuple]:
     if not children:
         return ("SEQ", nid, ()) if not window else None
@@ -247,7 +265,9 @@ def _replay_sequence(
         while idx < len(window) and window[idx] in alpha:
             peel.append(window[idx])
             idx += 1
-        frag = _replay(peel, c, node_ids, alpha_cache, coarsen_loops)
+        frag = _replay(
+            peel, c, node_ids, alpha_cache, coarsen_loops, loop_iter_counts,
+        )
         if frag is None:
             return None
         fragments.append(frag)
@@ -263,17 +283,24 @@ def _replay_xor(
     node_ids: Dict[int, int],
     alpha_cache: Dict[int, frozenset],
     coarsen_loops: bool,
+    loop_iter_counts: Dict[int, int],
 ) -> Optional[tuple]:
     if not children:
         return ("XOR", nid, -1, ()) if not window else None
     if len(children) == 1:
-        return _replay(window, children[0], node_ids, alpha_cache, coarsen_loops)
+        return _replay(
+            window, children[0], node_ids, alpha_cache,
+            coarsen_loops, loop_iter_counts,
+        )
 
     window_set = frozenset(window)
     # Empty window must go to the unique tau branch if one exists.
     if not window:
         for i, c in enumerate(children):
-            inner = _replay(window, c, node_ids, alpha_cache, coarsen_loops)
+            inner = _replay(
+                window, c, node_ids, alpha_cache,
+                coarsen_loops, loop_iter_counts,
+            )
             if inner is not None:
                 return ("XOR", nid, i, inner)
         return None
@@ -283,7 +310,10 @@ def _replay_xor(
         calpha = _alphabet(c, alpha_cache)
         if not window_set.issubset(calpha):
             continue
-        inner = _replay(window, c, node_ids, alpha_cache, coarsen_loops)
+        inner = _replay(
+            window, c, node_ids, alpha_cache,
+            coarsen_loops, loop_iter_counts,
+        )
         if inner is not None:
             return ("XOR", nid, i, inner)
     return None
@@ -296,11 +326,15 @@ def _replay_parallel(
     node_ids: Dict[int, int],
     alpha_cache: Dict[int, frozenset],
     coarsen_loops: bool,
+    loop_iter_counts: Dict[int, int],
 ) -> Optional[tuple]:
     if not children:
         return ("PAR", nid, ()) if not window else None
     if len(children) == 1:
-        return _replay(window, children[0], node_ids, alpha_cache, coarsen_loops)
+        return _replay(
+            window, children[0], node_ids, alpha_cache,
+            coarsen_loops, loop_iter_counts,
+        )
 
     # Project the window onto each child's alphabet. The IM-disjointness
     # assumption guarantees each event belongs to at most one child.
@@ -318,7 +352,9 @@ def _replay_parallel(
 
     sub_fragments = []
     for c, proj in zip(children, projections):
-        frag = _replay(proj, c, node_ids, alpha_cache, coarsen_loops)
+        frag = _replay(
+            proj, c, node_ids, alpha_cache, coarsen_loops, loop_iter_counts,
+        )
         if frag is None:
             return None
         sub_fragments.append(frag)
@@ -336,6 +372,7 @@ def _replay_loop(
     node_ids: Dict[int, int],
     alpha_cache: Dict[int, frozenset],
     coarsen_loops: bool,
+    loop_iter_counts: Dict[int, int],
 ) -> Optional[tuple]:
     # PM4Py loops have two children: do (body) and redo. Semantics:
     #     do (redo do)*
@@ -343,7 +380,8 @@ def _replay_loop(
     if len(children) < 2:
         if children:
             return _replay(
-                window, children[0], node_ids, alpha_cache, coarsen_loops,
+                window, children[0], node_ids, alpha_cache,
+                coarsen_loops, loop_iter_counts,
             )
         return ("LOOP", nid, 0) if not window else None
 
@@ -370,7 +408,8 @@ def _replay_loop(
     # First body iteration (mandatory).
     do_peel = _peel(do_alpha)
     do_frag = _replay(
-        do_peel, do_tree, node_ids, alpha_cache, coarsen_loops,
+        do_peel, do_tree, node_ids, alpha_cache,
+        coarsen_loops, loop_iter_counts,
     )
     if do_frag is None:
         return None
@@ -381,13 +420,15 @@ def _replay_loop(
         prev_idx = idx
         redo_peel = _peel(redo_alpha)
         redo_frag = _replay(
-            redo_peel, redo_tree, node_ids, alpha_cache, coarsen_loops,
+            redo_peel, redo_tree, node_ids, alpha_cache,
+            coarsen_loops, loop_iter_counts,
         )
         if redo_frag is None:
             return None
         do_peel = _peel(do_alpha)
         do_frag = _replay(
-            do_peel, do_tree, node_ids, alpha_cache, coarsen_loops,
+            do_peel, do_tree, node_ids, alpha_cache,
+            coarsen_loops, loop_iter_counts,
         )
         if do_frag is None:
             return None
@@ -400,6 +441,12 @@ def _replay_loop(
         return None
 
     iter_count = len(iter_fragments)
+    # Record the actual (pre-coarsening) iteration count so callers can
+    # initialise per-variant loop counter values without re-replaying
+    # with coarsen_loops=False.
+    loop_iter_counts[nid] = max(
+        loop_iter_counts.get(nid, 0), iter_count,
+    )
     if coarsen_loops:
         coarse = 0 if iter_count == 0 else (1 if iter_count == 1 else 2)
         return ("LOOP", nid, coarse)
