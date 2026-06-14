@@ -480,14 +480,30 @@ def _emit_orfork_conditions(
         return
 
     for of_idx, (tree_xor_id, n_branches, in_loop) in enumerate(xor_seq):
-        if in_loop:
-            # Inside-loop XOR choices vary per iteration and the
-            # variant signature coarsens them away. Leaving the
-            # branch at its default ``true`` is the honest answer
-            # for v1; a follow-up could combine variant_id with the
-            # loop counter to disambiguate.
-            continue
         of = or_forks[of_idx]
+        if in_loop:
+            # Inside-loop XOR: variant signatures coarsen loop
+            # iterations, so we cannot tell which branch each variant
+            # takes on each pass — but the converter's default
+            # leaves every outgoing arc at ``true``, which jUCMNav
+            # treats as non-deterministic. Make the choice
+            # deterministic instead by setting the first branch to
+            # ``true`` and every other branch to ``false``: the
+            # scenario engine will reliably pick branch 0 on every
+            # iteration. The choice is mutually exclusive and
+            # jointly exhaustive at the cost of always replaying
+            # the same branch (combining with the loop counter to
+            # distribute per-iteration choices is a follow-up).
+            for k, arc in enumerate(of.succ_connections):
+                arc = _pull_condition_onto_direct_arc(arc)
+                expr = "true" if k == 0 else "false"
+                if arc.condition is None:
+                    arc.set_condition(UCM.Condition(
+                        label=f"branch{k}", expression=expr,
+                    ))
+                else:
+                    arc.condition.expression = expr
+            continue
         branch_to_variants: Dict[int, List[str]] = {}
         for v in variants:
             chosen = _cs.collect_xor_choices(v.signature).get(tree_xor_id)

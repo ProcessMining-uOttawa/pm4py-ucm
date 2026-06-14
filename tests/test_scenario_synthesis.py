@@ -493,9 +493,49 @@ def test_synthesis_orfork_branches_with_no_variant_get_false():
     assert "false" in exprs
 
 
+def test_synthesis_inside_loop_xor_gets_deterministic_true_false_split():
+    """Inside-loop XOR choices vary per iteration and the variant
+    signature coarsens them away, so the synthesizer can't pick a
+    branch from variant_id alone. Leaving both branches at the
+    converter's default ``true`` would give jUCMNav a
+    non-deterministic OR-fork (Daniel's ClaimsPaymentLog complaint).
+    The fix makes the choice deterministic: branch 0 -> ``true``,
+    every other branch -> ``false``. Mutually exclusive **and**
+    exhaustive."""
+    # Loop with XOR inside body.
+    inner_xor = _xor(_leaf("A"), _leaf("B"))
+    tree = T(operator="*", children=[inner_xor, _leaf("R")])
+    log = [
+        ("c1", ["A"]),
+        ("c2", ["A", "R", "B"]),
+        ("c3", ["B"]),
+    ]
+    ucm = pm4py_ucm.convert_to_ucm(tree)
+    result = _clustering.cluster(log, tree)
+    _scenarios.synthesize_scenarios(
+        ucm, tree, result, emit_conditions=True,
+    )
+    inside_loop_or_forks = [
+        n for m in ucm.maps for n in m.nodes
+        if type(n).__name__ == "OrFork" and n.name != "LoopFork"
+    ]
+    assert inside_loop_or_forks, "fixture must have an inside-loop OR-fork"
+    for of in inside_loop_or_forks:
+        exprs = [a.condition.expression if a.condition else "true"
+                 for a in of.succ_connections]
+        # First branch is true, every other branch is false.
+        assert exprs[0] == "true"
+        for e in exprs[1:]:
+            assert e == "false"
+
+
 def test_synthesis_skips_loop_xor_condition_emission():
     # Loop with XOR inside body. Inside-loop XORs must NOT get
-    # variant_id conditions emitted (they're left at default).
+    # variant_id conditions emitted — the variant signature
+    # coarsens loop iterations so we can't tell which branch each
+    # variant takes on each pass. They instead get the
+    # deterministic true/false split (guarded separately in
+    # test_synthesis_inside_loop_xor_gets_deterministic_true_false_split).
     inner_xor = _xor(_leaf("A"), _leaf("B"))
     tree = T(operator="*", children=[inner_xor, _leaf("R")])
     log = [
@@ -506,9 +546,6 @@ def test_synthesis_skips_loop_xor_condition_emission():
     ucm = pm4py_ucm.convert_to_ucm(tree)
     result = _clustering.cluster(log, tree)
     _scenarios.synthesize_scenarios(ucm, tree, result, emit_conditions=True)
-    # The single non-LoopFork OrFork is INSIDE the loop body. Its
-    # outgoing arcs should have NO variant_id expression (left at
-    # default ``true``).
     inside_loop_orforks = [
         n for m in ucm.maps for n in m.nodes
         if type(n).__name__ == "OrFork" and n.name != "LoopFork"
