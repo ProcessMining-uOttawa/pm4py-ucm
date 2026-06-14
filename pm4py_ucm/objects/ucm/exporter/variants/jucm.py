@@ -243,19 +243,29 @@ def _emit_urnspec(w, ucm, wrap_names=True, wrap_width=_DEFAULT_WRAP_WIDTH,
 
 
 def _emit_ucmspec(w, ucm) -> None:
-    """Emit ``<ucmspec>`` with any scenario groups attached to the UCM.
+    """Emit ``<ucmspec>`` with the scenario-layer content attached to
+    the UCM.
 
-    When the UCM carries no scenario groups (the common case for plain
-    mined-only outputs), the element is empty — preserving the legacy
-    byte-for-byte output. When the scenario-synthesis pipeline has
-    populated :attr:`UCM.scenario_groups`, each group is emitted in
-    list order with its scenarios as children."""
-    if not ucm.scenario_groups:
+    When the UCM carries no scenario groups, variables, or enumeration
+    types (the common case for plain mined-only outputs), the element
+    is empty — preserving the legacy byte-for-byte output. When the
+    scenario-synthesis pipeline has populated those lists, they are
+    emitted as children in the order jUCMNav itself uses:
+    ``scenarioGroups`` first, then ``variables``, then
+    ``enumerationTypes``."""
+    has_content = (
+        ucm.scenario_groups or ucm.variables or ucm.enumeration_types
+    )
+    if not has_content:
         w.empty("ucmspec", [])
         return
     w.open("ucmspec", [])
     for sg in ucm.scenario_groups:
         _emit_scenario_group(w, sg)
+    for v in ucm.variables:
+        _emit_variable(w, v)
+    for et in ucm.enumeration_types:
+        _emit_enumeration_type(w, et)
     w.close("ucmspec")
 
 
@@ -304,22 +314,26 @@ def _emit_scenario_def(w, sc: "UCM.ScenarioDef") -> None:
         w.empty("scenarios", attrs)
         return
     w.open("scenarios", attrs)
+    # Attribute order on the children matches jUCMNav's own output
+    # (verified against ``aemsURN.jucm``): value/enabled comes first,
+    # then the typed reference. This keeps the diff against editor-
+    # produced files minimal and avoids cosmetic merge churn.
     for init in sc.initializations:
         init_attrs: List = [
-            ("variable", str(init.variable.id)),
             ("value", init.value),
+            ("variable", str(init.variable.id)),
         ]
         w.empty("initializations", init_attrs)
     for sp in sc.start_points:
         sp_attrs: List = [
-            ("startPoint", str(sp.start_point.id)),
             ("enabled", "true" if sp.enabled else "false"),
+            ("startPoint", str(sp.start_point.id)),
         ]
         w.empty("startPoints", sp_attrs)
     for ep in sc.end_points:
         ep_attrs: List = [
-            ("endPoint", str(ep.end_point.id)),
             ("enabled", "true" if ep.enabled else "false"),
+            ("endPoint", str(ep.end_point.id)),
         ]
         w.empty("endPoints", ep_attrs)
     w.close("scenarios")
@@ -364,14 +378,6 @@ def _emit_urndef(w, ucm, _wrap, emit_conditions=False) -> None:
         _emit_ucmmap(w, ucm, ucm_map, map_index=i, _wrap=_wrap, ctx=ctx)
     for c in ucm.components:
         _emit_component(w, ucm, c, ctx=ctx)
-    # Scenario-metamodel definitions live on the URN spec root and are
-    # written after components for byte-stability: a UCM with no
-    # scenario synthesis produces a file identical to the legacy
-    # output, since the for-loops below iterate over empty lists.
-    for et in ucm.enumeration_types:
-        _emit_enumeration_type(w, et)
-    for v in ucm.variables:
-        _emit_variable(w, v)
     w.close("urndef")
 
 
@@ -389,16 +395,20 @@ def _emit_enumeration_type(w, et: "UCM.EnumerationType") -> None:
 
 def _emit_variable(w, v: "UCM.Variable") -> None:
     """Emit one ``<variables>`` element with its type discriminator
-    and (for enumerations) the back-link to its EnumerationType."""
+    and (for enumerations) the back-link to its EnumerationType.
+
+    Attribute order matches jUCMNav's convention (verified against
+    ``aemsURN.jucm``): ``name`` -> ``id`` -> ``description`` ->
+    ``type`` -> ``enumerationType``."""
     attrs: List = [
         ("name", v.effective_name),
         ("id", str(v.id)),
-        ("type", v.type),
     ]
-    if v.enumeration_type is not None:
-        attrs.append(("enumerationType", str(v.enumeration_type.id)))
     if v.description:
         attrs.append(("description", v.description))
+    attrs.append(("type", v.type))
+    if v.enumeration_type is not None:
+        attrs.append(("enumerationType", str(v.enumeration_type.id)))
     w.empty("variables", attrs)
 
 
