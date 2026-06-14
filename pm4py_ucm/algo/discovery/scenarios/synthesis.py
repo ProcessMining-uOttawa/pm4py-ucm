@@ -199,22 +199,33 @@ def _op_value(node) -> Optional[str]:
     return getattr(op, "value", op)
 
 
-def _collect_xors_outside_loops(
+def _collect_multi_child_xors(
     tree, node_ids: Dict[int, int],
-) -> List[Tuple[int, int]]:
-    """Pre-order list of ``(signature_int_id, n_branches)`` for every
-    multi-child XOR/OR tree node whose ancestry contains no LOOP node.
+) -> List[Tuple[int, int, bool]]:
+    """Pre-order list of ``(signature_int_id, n_branches, in_loop)`` for
+    every multi-child XOR/OR tree node.
 
-    The converter creates :class:`UCM.OrFork` nodes for these XORs in
-    the same pre-order, so list indices line up with the map's
-    ``OrFork`` instances after we filter out LoopForks."""
-    out: List[Tuple[int, int]] = []
+    The converter creates one :class:`UCM.OrFork` node per such tree
+    node, in the same pre-order traversal — so the i-th entry of this
+    list always corresponds to the i-th non-LoopFork ``OrFork`` in the
+    map's ``nodes`` list. The ``in_loop`` flag tells the caller whether
+    the corresponding OR-fork is reachable only from inside a LOOP
+    body: variant signatures coarsen iteration counts and so cannot
+    reliably distinguish per-iteration XOR choices, which is why the
+    synthesizer leaves inside-loop OR-fork conditions at the default
+    ``true`` for v1. Crucially, both subsets are still indexed so the
+    pairing with UCM ``OrFork`` nodes stays consistent — skipping
+    inside-loop entries from the list would put outside-loop XORs out
+    of alignment with their OrForks whenever a tree contains XORs
+    both inside and outside loops, the bug Daniel hit on
+    ClaimsPaymentLog."""
+    out: List[Tuple[int, int, bool]] = []
 
     def _walk(node, in_loop: bool) -> None:
         op = _op_value(node)
         children = list(getattr(node, "children", None) or [])
-        if op in (_XOR, _OR) and len(children) >= 2 and not in_loop:
-            out.append((node_ids[id(node)], len(children)))
+        if op in (_XOR, _OR) and len(children) >= 2:
+            out.append((node_ids[id(node)], len(children), in_loop))
         next_in_loop = in_loop or (op == _LOOP)
         for c in children:
             _walk(c, next_in_loop)
@@ -457,16 +468,25 @@ def _emit_orfork_conditions(
     a no-op rather than misattributing conditions.
     """
     node_ids = _cs.assign_node_ids(tree)
-    xor_seq = _collect_xors_outside_loops(tree, node_ids)
+    xor_seq = _collect_multi_child_xors(tree, node_ids)
 
     or_forks: List[UCM.OrFork] = [
         n for n in target_map.nodes
         if isinstance(n, UCM.OrFork) and n.name != "LoopFork"
     ]
     if len(or_forks) != len(xor_seq):
+        # Tree walk and converter disagree on XOR count; skip
+        # condition emission rather than mis-attribute.
         return
 
-    for of_idx, (tree_xor_id, n_branches) in enumerate(xor_seq):
+    for of_idx, (tree_xor_id, n_branches, in_loop) in enumerate(xor_seq):
+        if in_loop:
+            # Inside-loop XOR choices vary per iteration and the
+            # variant signature coarsens them away. Leaving the
+            # branch at its default ``true`` is the honest answer
+            # for v1; a follow-up could combine variant_id with the
+            # loop counter to disambiguate.
+            continue
         of = or_forks[of_idx]
         branch_to_variants: Dict[int, List[str]] = {}
         for v in variants:

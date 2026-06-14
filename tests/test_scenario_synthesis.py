@@ -412,6 +412,57 @@ def test_synthesis_synthesises_decrement_resp_when_body_is_tau():
     assert any("loop_counter_" in (r.expression or "") for r in decrement_resps)
 
 
+def test_synthesis_outside_loop_xor_conditions_emitted_when_other_xors_are_inside_loops():
+    """Regression for the ClaimsPaymentLog bug: when a tree contains
+    XORs both inside *and* outside loops, the synthesizer previously
+    counted only the outside-loop XORs, didn't match the UCM's full
+    OrFork count, and silently bailed — leaving every OR-fork (even
+    the outside-loop ones that should get variant_id conditions) at
+    the default ``true``. The fix pairs every multi-child XOR with
+    its OrFork and skips only the inside-loop subset for emission."""
+    # Tree: X -> XOR(A, B) -> *( LoopBody, XOR(P, Q) ) -> XOR(M, N) -> end
+    # Three multi-child XORs total: two outside, one inside the loop.
+    tree = T(operator="->", children=[
+        _leaf("X"),
+        _xor(_leaf("A"), _leaf("B")),
+        T(operator="*", children=[
+            _leaf("LoopBody"),
+            _xor(_leaf("P"), _leaf("Q")),
+        ]),
+        _xor(_leaf("M"), _leaf("N")),
+        _leaf("end"),
+    ])
+    log = [
+        ("c1", ["X", "A", "LoopBody", "M", "end"]),
+        ("c2", ["X", "B", "LoopBody", "N", "end"]),
+        ("c3", ["X", "A", "LoopBody", "P", "LoopBody", "M", "end"]),
+    ]
+    ucm = pm4py_ucm.convert_to_ucm(tree)
+    result = _clustering.cluster(log, tree)
+    _scenarios.synthesize_scenarios(
+        ucm, tree, result, emit_conditions=True,
+    )
+    # Outside-loop OR-forks must have variant_id conditions; inside-
+    # loop OR-fork stays at the default ``true``.
+    outside_loop_or_forks_with_variant_id = 0
+    for m in ucm.maps:
+        for n in m.nodes:
+            if type(n).__name__ != "OrFork" or n.name == "LoopFork":
+                continue
+            has_variant_id = any(
+                arc.condition is not None
+                and "variant_id" in (arc.condition.expression or "")
+                for arc in n.succ_connections
+            )
+            if has_variant_id:
+                outside_loop_or_forks_with_variant_id += 1
+    # Two outside-loop XORs must have at least one variant_id arc each.
+    assert outside_loop_or_forks_with_variant_id == 2, (
+        f"expected 2 OR-forks with variant_id conditions; "
+        f"got {outside_loop_or_forks_with_variant_id}"
+    )
+
+
 def test_synthesis_orfork_branches_with_no_variant_get_false():
     """When no variant takes a particular OR-fork branch, the
     synthesizer must emit ``expression="false"`` rather than leaving
