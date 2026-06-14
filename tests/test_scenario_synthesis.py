@@ -124,7 +124,9 @@ def test_synthesis_populates_scenario_group_and_variables():
     assert len(ucm.variables) == 1
     var = ucm.variables[0]
     assert var.name == "variant_id"
-    assert var.type == "Enumeration"
+    # jUCMNav's type discriminator is lowercase ("enumeration", not
+    # "Enumeration") — capital-E was rejected as an unknown type.
+    assert var.type == "enumeration"
     # Every scenario initialises the variant_id.
     for sc in group.scenarios:
         assert len(sc.initializations) == 1
@@ -245,6 +247,63 @@ def test_jucm_export_with_scenarios_is_well_formed_xml():
     # ParseXML must accept it.
     import xml.etree.ElementTree as ET
     ET.fromstring(text)
+
+
+def test_jucm_export_back_references_scenario_start_and_end_points():
+    """jUCMNav refuses to run scenarios when the path-level StartPoint /
+    EndPoint nodes don't carry back-pointing ``scenarioStartPoints`` /
+    ``scenarioEndPoints`` attributes listing the XPath of every
+    ScenarioStartPoint / ScenarioEndPoint that references them. This
+    test guards the back-reference attribute presence and the XPath
+    format."""
+    tree, log = _build_tree_and_log()
+    ucm = pm4py_ucm.convert_to_ucm(tree)
+    result = _clustering.cluster(log, tree)
+    _scenarios.synthesize_scenarios(ucm, tree, result)
+    text = _jucm_exporter.serialize_to_string(ucm)
+    assert "scenarioStartPoints=\"//@ucmspec/@scenarioGroups.0" in text
+    assert "scenarioEndPoints=\"//@ucmspec/@scenarioGroups.0" in text
+    # Two scenarios in the test fixture, each referencing the single
+    # StartPoint and EndPoint, so the back-reference list has two
+    # space-separated XPaths.
+    import re
+    sp_match = re.search(r'scenarioStartPoints="([^"]+)"', text)
+    ep_match = re.search(r'scenarioEndPoints="([^"]+)"', text)
+    assert sp_match and len(sp_match.group(1).split()) == 2
+    assert ep_match and len(ep_match.group(1).split()) == 2
+
+
+def test_jucm_export_enumeration_type_lists_variable_instances():
+    """jUCMNav binds enum-typed variables to their EnumerationType via
+    a back-reference ``instances`` attribute on the type. Without it
+    the variable shows up as untyped in the scenario panel."""
+    tree, log = _build_tree_and_log()
+    ucm = pm4py_ucm.convert_to_ucm(tree)
+    result = _clustering.cluster(log, tree)
+    _scenarios.synthesize_scenarios(ucm, tree, result)
+    text = _jucm_exporter.serialize_to_string(ucm)
+    # The single variable's ID should appear inside the
+    # ``instances`` attribute of the single enumerationTypes element.
+    import re
+    et_match = re.search(r'<enumerationTypes [^>]*instances="([^"]+)"', text)
+    assert et_match, "enumerationTypes must carry an instances back-ref"
+    var_ids = et_match.group(1).split()
+    assert len(var_ids) == 1
+    # That ID must match the variant_id variable's id.
+    var = ucm.variables[0]
+    assert var_ids[0] == str(var.id)
+
+
+def test_jucm_export_variable_type_is_lowercase_enumeration():
+    """jUCMNav writes the type discriminator in lowercase
+    (``type=\"enumeration\"``); capital-E is silently rejected."""
+    tree, log = _build_tree_and_log()
+    ucm = pm4py_ucm.convert_to_ucm(tree)
+    result = _clustering.cluster(log, tree)
+    _scenarios.synthesize_scenarios(ucm, tree, result)
+    text = _jucm_exporter.serialize_to_string(ucm)
+    assert 'type="enumeration"' in text
+    assert 'type="Enumeration"' not in text
 
 
 def test_jucm_export_without_scenarios_remains_byte_stable_legacy():

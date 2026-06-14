@@ -105,8 +105,12 @@ def synthesize_scenarios(
     enum_type = ucm.get_or_add_enumeration_type(
         _VARIANT_ENUM_NAME, values=variant_ids,
     )
+    # jUCMNav writes type discriminators in lowercase ("enumeration",
+    # "integer"). Match that — capital "Enumeration" makes the editor
+    # treat the variable as untyped and the scenario tool can't
+    # initialise it.
     variant_var = ucm.get_or_add_variable(
-        _VARIANT_VAR_NAME, type="Enumeration", enumeration_type=enum_type,
+        _VARIANT_VAR_NAME, type="enumeration", enumeration_type=enum_type,
     )
 
     # Build the ScenarioGroup with one ScenarioDef per variant.

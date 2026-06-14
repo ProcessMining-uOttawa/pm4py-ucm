@@ -235,14 +235,22 @@ def _emit_urnspec(w, ucm, wrap_names=True, wrap_width=_DEFAULT_WRAP_WIDTH,
         ("urnVersion", UCM.URN_VERSION),
         ("nextGlobalID", str(ucm.next_global_id())),
     ]
+    # The stub-and-scenario context is shared across <ucmspec> (for
+    # ``instances`` back-references on enumerationTypes) and <urndef>
+    # (for ``scenarioStartPoints`` / ``scenarioEndPoints`` back-
+    # references on StartPoint / EndPoint nodes). Building it once up
+    # here means both emit sites see the same lookup tables.
+    if ucm.scenario_groups and not emit_conditions:
+        emit_conditions = True
+    ctx = _build_stub_context(ucm, emit_conditions=emit_conditions)
     w.open("urn:URNspec", root_attrs)
-    _emit_ucmspec(w, ucm)
+    _emit_ucmspec(w, ucm, ctx=ctx)
     _emit_grlspec(w, ucm)
-    _emit_urndef(w, ucm, _wrap, emit_conditions=emit_conditions)
+    _emit_urndef(w, ucm, _wrap, emit_conditions=emit_conditions, ctx=ctx)
     w.close("urn:URNspec")
 
 
-def _emit_ucmspec(w, ucm) -> None:
+def _emit_ucmspec(w, ucm, ctx: Optional["_StubContext"] = None) -> None:
     """Emit ``<ucmspec>`` with the scenario-layer content attached to
     the UCM.
 
@@ -265,7 +273,7 @@ def _emit_ucmspec(w, ucm) -> None:
     for v in ucm.variables:
         _emit_variable(w, v)
     for et in ucm.enumeration_types:
-        _emit_enumeration_type(w, et)
+        _emit_enumeration_type(w, et, ctx=ctx)
     w.close("ucmspec")
 
 
@@ -348,28 +356,23 @@ def _emit_grlspec(w, ucm) -> None:
     w.close("grlspec")
 
 
-def _emit_urndef(w, ucm, _wrap, emit_conditions=False) -> None:
+def _emit_urndef(w, ucm, _wrap, emit_conditions=False,
+                  ctx: Optional["_StubContext"] = None) -> None:
     """Emit ``<urndef>`` with the canonical child order
-    responsibilities -> specDiagrams -> components, plus the scenario-
-    metamodel siblings (``enumerationTypes``, ``variables``) when
-    populated.
+    responsibilities -> specDiagrams -> components.
 
-    Before emitting any diagram we build a *stub context*: a set of
-    lookup tables that lets every emit site cheaply find the XPath
-    fragment that addresses any plug-in binding. The context also
-    carries the per-export filters (which EmptyPoints to emit as
-    DirectionArrows, which ComponentRefs to keep, whether to emit
-    ``<condition>`` elements at all).
-
-    When the UCM carries scenario groups, ``emit_conditions`` is
-    forced to ``True`` regardless of the caller's preference — the
-    synthesized OR-fork conditions are the bridge between the
-    scenario's ``variant_id`` initialization and the model's branch
-    selection, so they must reach the ``.jucm``.
+    Receives the stub-and-scenario ``ctx`` built once in
+    :func:`_emit_urnspec` so the OR-fork-condition filter and the
+    scenario back-reference tables are visible to every nested emit
+    site.
     """
-    if ucm.scenario_groups and not emit_conditions:
-        emit_conditions = True
-    ctx = _build_stub_context(ucm, emit_conditions=emit_conditions)
+    if ctx is None:
+        # Backwards-compatible fallback for callers that bypassed
+        # ``_emit_urnspec`` (none in the package, but keep the option
+        # open for hand-written tests).
+        if ucm.scenario_groups and not emit_conditions:
+            emit_conditions = True
+        ctx = _build_stub_context(ucm, emit_conditions=emit_conditions)
 
     w.open("urndef", [])
     for r in ucm.responsibilities:
@@ -381,8 +384,17 @@ def _emit_urndef(w, ucm, _wrap, emit_conditions=False) -> None:
     w.close("urndef")
 
 
-def _emit_enumeration_type(w, et: "UCM.EnumerationType") -> None:
-    """Emit one ``<enumerationTypes>`` element."""
+def _emit_enumeration_type(
+    w, et: "UCM.EnumerationType",
+    ctx: Optional["_StubContext"] = None,
+) -> None:
+    """Emit one ``<enumerationTypes>`` element.
+
+    Carries an ``instances`` back-reference attribute when at least
+    one :class:`UCM.Variable` uses this enum as its type. jUCMNav
+    treats variables without a matching ``instances`` entry as
+    untyped and refuses to surface their enumeration values in the
+    scenario panel."""
     attrs: List = [
         ("name", et.effective_name),
         ("id", str(et.id)),
@@ -390,6 +402,11 @@ def _emit_enumeration_type(w, et: "UCM.EnumerationType") -> None:
     ]
     if et.description:
         attrs.append(("description", et.description))
+    if ctx is not None:
+        var_ids = ctx.enum_to_variable_ids.get(id(et))
+        if var_ids:
+            attrs.append(("instances",
+                          " ".join(str(vid) for vid in var_ids)))
     w.empty("enumerationTypes", attrs)
 
 
@@ -459,6 +476,24 @@ class _StubContext:
         # where the routing bend points would otherwise just look like
         # dots on the path.
         self.direction_arrow_ids: set = set()
+        # Scenario back-references. jUCMNav stores a bidirectional link
+        # between every scenario start/end point and the underlying
+        # path-level StartPoint/EndPoint node: the ``<startPoints>``
+        # carries a ``startPoint="<id>"`` forward reference, and the
+        # ``<nodes xsi:type="ucm.map:StartPoint">`` carries a
+        # ``scenarioStartPoints="<xpath> <xpath> ..."`` back-reference
+        # listing every ``<startPoints>`` element that points at it.
+        # When the back-reference is missing, jUCMNav reports the
+        # scenario's start point as "undefined" and refuses to run it.
+        # The two dicts below hold the XPath fragment list for each
+        # StartPoint / EndPoint, keyed by ``id(node)`` (path-node
+        # identity, not the integer URN id).
+        self.start_to_scenario_xpaths: Dict[int, List[str]] = {}
+        self.end_to_scenario_xpaths: Dict[int, List[str]] = {}
+        # EnumerationType back-reference: ``instances`` attribute on
+        # ``<enumerationTypes>`` lists the IDs of every Variable that
+        # uses this enum as its type. Keyed by ``id(EnumerationType)``.
+        self.enum_to_variable_ids: Dict[int, List[int]] = {}
         # For each map (key: ``id(ucm_map)``), the ``id``s of
         # :class:`UCM.ComponentRef`s to keep on export. ComponentRefs
         # with no bound nodes (and no descendants with bound nodes) are
@@ -539,6 +574,33 @@ def _build_stub_context(
                         ctx.connection_to_out[ob.stub_exit] = ob
                     if ob.end_point is not None:
                         ctx.endpoint_to_out[ob.end_point] = ob
+
+    # Scenario-layer back-references. For every ScenarioStartPoint /
+    # ScenarioEndPoint, record the XPath of the <startPoints> /
+    # <endPoints> child so that the StartPoint / EndPoint node can
+    # later emit a back-pointing ``scenarioStartPoints`` /
+    # ``scenarioEndPoints`` attribute. Without these jUCMNav rejects
+    # the scenario as having an undefined start/end.
+    for group_idx, sg in enumerate(ucm.scenario_groups):
+        for sc_idx, sc in enumerate(sg.scenarios):
+            for sp_idx, sp in enumerate(sc.start_points):
+                xpath = (f"//@ucmspec/@scenarioGroups.{group_idx}"
+                         f"/@scenarios.{sc_idx}/@startPoints.{sp_idx}")
+                ctx.start_to_scenario_xpaths.setdefault(
+                    id(sp.start_point), []).append(xpath)
+            for ep_idx, ep in enumerate(sc.end_points):
+                xpath = (f"//@ucmspec/@scenarioGroups.{group_idx}"
+                         f"/@scenarios.{sc_idx}/@endPoints.{ep_idx}")
+                ctx.end_to_scenario_xpaths.setdefault(
+                    id(ep.end_point), []).append(xpath)
+
+    # EnumerationType ``instances`` back-reference: list the IDs of
+    # every Variable whose ``enumeration_type`` points at this enum.
+    for v in ucm.variables:
+        if v.enumeration_type is not None:
+            ctx.enum_to_variable_ids.setdefault(
+                id(v.enumeration_type), []).append(v.id)
+
     return ctx
 
 
@@ -732,6 +794,18 @@ def _emit_node(
         if isinstance(n, UCM.EndPoint) and n in ctx.endpoint_to_out:
             attrs.append(("outBindings",
                           ctx.out_xpath[ctx.endpoint_to_out[n]]))
+        # Bidirectional scenario back-references — the missing half of
+        # the link that jUCMNav's scenario tool follows when resolving
+        # a ScenarioStartPoint / ScenarioEndPoint. Without this the
+        # editor reports the scenario start/end as "undefined".
+        if isinstance(n, UCM.StartPoint):
+            xpaths = ctx.start_to_scenario_xpaths.get(id(n))
+            if xpaths:
+                attrs.append(("scenarioStartPoints", " ".join(xpaths)))
+        if isinstance(n, UCM.EndPoint):
+            xpaths = ctx.end_to_scenario_xpaths.get(id(n))
+            if xpaths:
+                attrs.append(("scenarioEndPoints", " ".join(xpaths)))
 
     # Type-specific children?
     pre = isinstance(n, UCM.StartPoint) and n.pre_condition is not None

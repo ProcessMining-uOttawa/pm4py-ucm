@@ -809,17 +809,20 @@ class UCM:
     class Variable(URNmodelElement):
         """A named, typed scenario variable. Mirrors ``urncore::Variable``.
 
-        :attr:`type` is one of ``"Enumeration"``, ``"Integer"``,
-        ``"Boolean"``, or any other identifier accepted by jUCMNav. When
-        ``type == "Enumeration"``, :attr:`enumeration_type` must point at
-        a :class:`UCM.EnumerationType` defined on the same URN spec."""
+        :attr:`type` is one of ``"enumeration"``, ``"integer"``,
+        ``"boolean"``, or any other identifier accepted by jUCMNav.
+        Case matters — jUCMNav writes these in **lowercase** in
+        ``.jucm`` files and rejects capitalised aliases as untyped.
+        When ``type == "enumeration"``, :attr:`enumeration_type` must
+        point at a :class:`UCM.EnumerationType` defined on the same
+        URN spec."""
 
         def __init__(
             self,
             id: Optional[int] = None,
             name: str = "",
             description: str = "",
-            type: str = "Enumeration",
+            type: str = "enumeration",
             enumeration_type: Optional["UCM.EnumerationType"] = None,
         ) -> None:
             super().__init__(id=id, name=name, description=description)
