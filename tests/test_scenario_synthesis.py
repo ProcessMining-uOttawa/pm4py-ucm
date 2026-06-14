@@ -231,6 +231,80 @@ def test_synthesis_creates_integer_counter_variable_for_loops():
     assert counters[0].type == "integer"
 
 
+def test_synthesis_loopfork_conditions_sit_on_direct_outgoing_arc():
+    """jUCMNav only evaluates conditions on arcs **directly** leaving
+    a fork. The converter's routing pass parks the original branch
+    label one hop downstream past an EmptyPoint bend; the synthesizer
+    must pull it back so the loop_counter condition reaches the
+    arcs sourced from the LoopFork itself."""
+    loop_tree = T(operator="->", children=[
+        _leaf("Open"),
+        T(operator="*", children=[_leaf("Review"), _leaf("Revise")]),
+        _leaf("Close"),
+    ])
+    log = [
+        ("c1", ["Open", "Review", "Close"]),
+        ("c2", ["Open", "Review", "Revise", "Review", "Close"]),
+    ]
+    ucm = pm4py_ucm.convert_to_ucm(loop_tree)
+    result = _clustering.cluster(log, loop_tree)
+    _scenarios.synthesize_scenarios(
+        ucm, loop_tree, result, emit_conditions=True,
+    )
+    loop_fork = next(
+        n for m in ucm.maps for n in m.nodes
+        if type(n).__name__ == "OrFork" and n.name == "LoopFork"
+    )
+    # Every direct outgoing arc of the LoopFork carries a counter
+    # condition (no None and no stranded "true" on the bend hop).
+    for arc in loop_fork.succ_connections:
+        assert arc.condition is not None
+        assert "loop_counter_" in (arc.condition.expression or "")
+    # Crucially the *immediate* downstream bend->target arc no longer
+    # carries the counter condition (jUCMNav would ignore it there
+    # and treat the LoopFork branch as default true).
+    for arc in loop_fork.succ_connections:
+        target = arc.target
+        if not hasattr(target, "succ_connections"):
+            continue
+        for downstream in target.succ_connections:
+            expr = downstream.condition.expression if downstream.condition else ""
+            assert "loop_counter_" not in expr
+
+
+def test_synthesis_orfork_branch_conditions_sit_on_direct_outgoing_arc():
+    """Symmetric to the LoopFork case for regular variant_id
+    conditions on non-loop XORs."""
+    tree = T(operator="->", children=[
+        _leaf("X"),
+        _xor(_leaf("A"), _leaf("B")),
+    ])
+    log = [
+        ("c1", ["X", "A"]),
+        ("c2", ["X", "B"]),
+    ]
+    ucm = pm4py_ucm.convert_to_ucm(tree)
+    result = _clustering.cluster(log, tree)
+    _scenarios.synthesize_scenarios(
+        ucm, tree, result, emit_conditions=True,
+    )
+    or_fork = next(
+        n for m in ucm.maps for n in m.nodes
+        if type(n).__name__ == "OrFork" and n.name != "LoopFork"
+    )
+    for arc in or_fork.succ_connections:
+        assert arc.condition is not None
+        assert "variant_id" in (arc.condition.expression or "")
+    # No stranded variant_id condition one hop downstream.
+    for arc in or_fork.succ_connections:
+        target = arc.target
+        if not hasattr(target, "succ_connections"):
+            continue
+        for downstream in target.succ_connections:
+            expr = downstream.condition.expression if downstream.condition else ""
+            assert "variant_id" not in expr
+
+
 def test_synthesis_loopfork_conditions_are_mutually_exclusive():
     """The LoopFork's exit arc should be ``counter == 0`` and the
     redo arc ``counter > 0`` — at any point exactly one of these

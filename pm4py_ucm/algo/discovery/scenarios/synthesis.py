@@ -227,23 +227,37 @@ def _collect_xors_outside_loops(
 # Loop counter scaffolding
 # ---------------------------------------------------------------------------
 
-def _arc_carrying_condition(arc: UCM.NodeConnection) -> UCM.NodeConnection:
-    """Walk past a single routing-bend ``EmptyPoint`` to find the arc
-    that actually carries the branch label/condition.
+def _pull_condition_onto_direct_arc(
+    arc: UCM.NodeConnection,
+) -> UCM.NodeConnection:
+    """Ensure the OR-fork's *direct* outgoing arc carries the branch
+    condition, moving it up past a single routing bend if needed.
 
     The converter's ``insert_routing_empty_points`` pass splits every
-    arc adjacent to a fork/join into ``src -> bend -> tgt`` and keeps
-    the original condition on the *second* half (the arc leaving the
-    bend, not the one leaving the fork). To detect "exit" vs "redo"
-    branches on a LoopFork we therefore need to follow that hop. If
-    the immediate arc already carries the condition (no routing pass
-    ran, or the condition survived on the original side) we return
-    it unchanged."""
-    if arc.condition is not None and arc.condition.label:
+    arc adjacent to a fork/join into ``src -> bend -> tgt`` and parks
+    the original branch condition on the *second* half (so the label
+    sits visually near the fork in the diagram). jUCMNav, however,
+    only evaluates conditions on arcs **directly** leaving a fork —
+    a condition stranded one hop downstream past an EmptyPoint reads
+    as no-condition (default ``true``), which is exactly the bug
+    Daniel reported.
+
+    This helper moves the downstream condition back onto the direct
+    arc and clears the downstream slot so jUCMNav doesn't see a
+    redundant copy. The visual placement of the label-deltas is
+    unchanged — only the arc the condition belongs to. Returns the
+    (now condition-carrying) direct arc."""
+    if arc.condition is not None:
         return arc
     target = arc.target
-    if isinstance(target, UCM.EmptyPoint) and len(target.succ_connections) == 1:
-        return target.succ_connections[0]
+    if not (isinstance(target, UCM.EmptyPoint)
+            and len(target.succ_connections) == 1):
+        return arc
+    downstream = target.succ_connections[0]
+    if downstream.condition is None:
+        return arc
+    arc.set_condition(downstream.condition)
+    downstream._condition = None
     return arc
 
 
@@ -383,15 +397,14 @@ def _wire_loop_counters(
         counters[tree_loop_id] = counter
 
         # Mutually exclusive LoopFork conditions. The converter's
-        # routing_empty_points pass splits the LoopFork's outgoing
-        # arcs into LoopFork -> bend -> real_target and moves the
-        # branch label/condition onto the *second* half (so the
-        # label visually attaches to the arc leaving the fork). We
-        # walk past routing bends to find the arc actually carrying
-        # the condition.
+        # routing_empty_points pass put the branch label/condition on
+        # the bend->target arc; jUCMNav, however, only evaluates
+        # conditions on arcs **directly** leaving the fork, so we
+        # pull each condition onto the LoopFork's direct outgoing arc
+        # before rewriting its expression.
         for arc in lf.succ_connections:
-            branch_arc = _arc_carrying_condition(arc)
-            cond = branch_arc.condition
+            arc = _pull_condition_onto_direct_arc(arc)
+            cond = arc.condition
             label = cond.label if cond else ""
             if label == "exit":
                 expr = f"{name} == 0"
@@ -400,7 +413,7 @@ def _wire_loop_counters(
             else:
                 continue
             if cond is None:
-                branch_arc.set_condition(
+                arc.set_condition(
                     UCM.Condition(label=label, expression=expr),
                 )
             else:
@@ -466,6 +479,10 @@ def _emit_orfork_conditions(
         if len(succs) != n_branches:
             continue
         for k, arc in enumerate(succs):
+            # Pull any routed-down condition back up so the variant_id
+            # expression lands on the arc directly leaving the
+            # OR-fork — that's the only place jUCMNav evaluates it.
+            arc = _pull_condition_onto_direct_arc(arc)
             vids = branch_to_variants.get(k, [])
             # Every branch gets an explicit expression: a variant_id
             # disjunction for branches at least one variant takes,
