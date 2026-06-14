@@ -887,17 +887,25 @@ class UCM:
 
     class ScenarioEndPoint:
         """A scenario's expected exit — references a :class:`UCM.EndPoint`
-        on a map. Same enabled semantics as :class:`UCM.ScenarioStartPoint`."""
+        on a map.
 
-        __slots__ = ("end_point", "enabled")
+        :attr:`enabled` toggles whether the scenario engine watches for
+        this end point; :attr:`mandatory` declares that the scenario
+        is only considered successful if the path actually reaches it.
+        jUCMNav's scenario engine reports a failure when ``enabled=True``
+        and ``mandatory=True`` and the traversal stops elsewhere."""
+
+        __slots__ = ("end_point", "enabled", "mandatory")
 
         def __init__(
             self,
             end_point: "UCM.EndPoint",
             enabled: bool = True,
+            mandatory: bool = True,
         ) -> None:
             self.end_point: UCM.EndPoint = end_point
             self.enabled: bool = enabled
+            self.mandatory: bool = mandatory
 
     class ScenarioDef(URNmodelElement):
         """One executable scenario specification. Mirrors ``ucm::ScenarioDef``.
@@ -939,9 +947,13 @@ class UCM:
             return sp
 
         def add_end_point(
-            self, end_point: "UCM.EndPoint", enabled: bool = True,
+            self, end_point: "UCM.EndPoint",
+            enabled: bool = True,
+            mandatory: bool = True,
         ) -> "UCM.ScenarioEndPoint":
-            ep = UCM.ScenarioEndPoint(end_point=end_point, enabled=enabled)
+            ep = UCM.ScenarioEndPoint(
+                end_point=end_point, enabled=enabled, mandatory=mandatory,
+            )
             self.end_points.append(ep)
             return ep
 

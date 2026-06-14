@@ -341,8 +341,15 @@ def _emit_scenario_def(w, sc: "UCM.ScenarioDef") -> None:
     for ep in sc.end_points:
         ep_attrs: List = [
             ("enabled", "true" if ep.enabled else "false"),
-            ("endPoint", str(ep.end_point.id)),
         ]
+        # ``mandatory`` is emitted only when true (jUCMNav omits it
+        # when the scenario doesn't require reaching the end point).
+        # The synthesizer sets it to true by default — scenarios that
+        # don't enforce reachability would be misleading for variant-
+        # driven traceability.
+        if ep.mandatory:
+            ep_attrs.append(("mandatory", "true"))
+        ep_attrs.append(("endPoint", str(ep.end_point.id)))
         w.empty("endPoints", ep_attrs)
     w.close("scenarios")
 

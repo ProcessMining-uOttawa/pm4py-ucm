@@ -252,8 +252,13 @@ def _emit_orfork_conditions(
             vids = branch_to_variants.get(k, [])
             if not vids:
                 continue
+            # jUCMNav's expression syntax treats enum values as bare
+            # identifiers, not string literals. Wrapping them in quotes
+            # ("variant_id == \"v1\"") makes the parser treat the
+            # right-hand side as a string and the comparison fails the
+            # type check against the enum variable.
             expr = " || ".join(
-                f'{_VARIANT_VAR_NAME} == "{vid}"' for vid in vids
+                f"{_VARIANT_VAR_NAME} == {vid}" for vid in vids
             )
             if arc.condition is None:
                 arc.set_condition(UCM.Condition(

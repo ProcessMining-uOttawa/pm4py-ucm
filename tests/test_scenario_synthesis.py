@@ -166,6 +166,46 @@ def test_synthesis_emits_orfork_conditions_for_non_loop_xors():
     )
 
 
+def test_synthesis_emits_orfork_conditions_without_quotes_around_enum_values():
+    """jUCMNav treats enum values as bare identifiers in expressions
+    (``variant_id == v1``), not as string literals
+    (``variant_id == "v1"``). Wrapping in quotes makes the parser
+    treat the right side as a string and the equality fails the
+    enum type check, which silently cascades to dropped scenario
+    references."""
+    tree, log = _build_tree_and_log()
+    ucm = pm4py_ucm.convert_to_ucm(tree)
+    result = _clustering.cluster(log, tree)
+    _scenarios.synthesize_scenarios(ucm, tree, result, emit_conditions=True)
+    or_fork = next(
+        n for m in ucm.maps for n in m.nodes
+        if type(n).__name__ == "OrFork" and n.name != "LoopFork"
+    )
+    for arc in or_fork.succ_connections:
+        expr = arc.condition.expression if arc.condition else ""
+        if "variant_id" not in expr:
+            continue
+        assert '"' not in expr, (
+            f"variant_id condition must use bare enum identifier, "
+            f"not a quoted string: got {expr!r}"
+        )
+
+
+def test_synthesis_scenario_end_points_are_mandatory_by_default():
+    """Synthesized scenarios should require the path to reach the
+    end point — without ``mandatory=True``, jUCMNav reports the
+    scenario as having succeeded even when the traversal halts
+    before the end point, which defeats the variant-driven
+    traceability story."""
+    tree, log = _build_tree_and_log()
+    ucm = pm4py_ucm.convert_to_ucm(tree)
+    result = _clustering.cluster(log, tree)
+    group = _scenarios.synthesize_scenarios(ucm, tree, result)
+    for sc in group.scenarios:
+        for ep in sc.end_points:
+            assert ep.mandatory is True
+
+
 def test_synthesis_skips_loop_xor_condition_emission():
     # Loop with XOR inside body. Inside-loop XORs must NOT get
     # variant_id conditions emitted (they're left at default).
@@ -304,6 +344,32 @@ def test_jucm_export_variable_type_is_lowercase_enumeration():
     text = _jucm_exporter.serialize_to_string(ucm)
     assert 'type="enumeration"' in text
     assert 'type="Enumeration"' not in text
+
+
+def test_jucm_export_endpoints_carry_mandatory_flag():
+    """The exporter must emit ``mandatory="true"`` on synthesized
+    ScenarioEndPoint elements — jUCMNav otherwise treats the end
+    point as optional and the scenario as already-satisfied even
+    when the traversal stops short."""
+    tree, log = _build_tree_and_log()
+    ucm = pm4py_ucm.convert_to_ucm(tree)
+    result = _clustering.cluster(log, tree)
+    _scenarios.synthesize_scenarios(ucm, tree, result)
+    text = _jucm_exporter.serialize_to_string(ucm)
+    assert '<endPoints enabled="true" mandatory="true"' in text
+
+
+def test_jucm_export_orfork_conditions_use_bare_enum_identifiers():
+    """End-to-end guard for the condition syntax — the serialized
+    .jucm must contain ``variant_id == v1`` (no escaped quotes),
+    not ``variant_id == &quot;v1&quot;``."""
+    tree, log = _build_tree_and_log()
+    ucm = pm4py_ucm.convert_to_ucm(tree)
+    result = _clustering.cluster(log, tree)
+    _scenarios.synthesize_scenarios(ucm, tree, result)
+    text = _jucm_exporter.serialize_to_string(ucm)
+    assert 'variant_id == v1' in text
+    assert '&quot;v1&quot;' not in text
 
 
 def test_jucm_export_without_scenarios_remains_byte_stable_legacy():
