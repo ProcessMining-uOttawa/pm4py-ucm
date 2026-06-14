@@ -456,9 +456,12 @@ def test_synthesis_outside_loop_xor_conditions_emitted_when_other_xors_are_insid
             )
             if has_variant_id:
                 outside_loop_or_forks_with_variant_id += 1
-    # Two outside-loop XORs must have at least one variant_id arc each.
-    assert outside_loop_or_forks_with_variant_id == 2, (
-        f"expected 2 OR-forks with variant_id conditions; "
+    # Every non-LoopFork OR-fork must carry variant_id conditions:
+    # the two outside-loop ones via direct variant_id disjunctions,
+    # and the inside-loop one via combined variant_id + loop_counter
+    # range conditions.
+    assert outside_loop_or_forks_with_variant_id == 3, (
+        f"expected 3 OR-forks with variant_id conditions; "
         f"got {outside_loop_or_forks_with_variant_id}"
     )
 
@@ -493,15 +496,14 @@ def test_synthesis_orfork_branches_with_no_variant_get_false():
     assert "false" in exprs
 
 
-def test_synthesis_inside_loop_xor_gets_deterministic_true_false_split():
-    """Inside-loop XOR choices vary per iteration and the variant
-    signature coarsens them away, so the synthesizer can't pick a
-    branch from variant_id alone. Leaving both branches at the
-    converter's default ``true`` would give jUCMNav a
-    non-deterministic OR-fork (Daniel's ClaimsPaymentLog complaint).
-    The fix makes the choice deterministic: branch 0 -> ``true``,
-    every other branch -> ``false``. Mutually exclusive **and**
-    exhaustive."""
+def test_synthesis_inside_loop_xor_distributes_branches_via_loop_counter():
+    """Inside-loop XOR choices vary per iteration. The synthesizer
+    combines ``variant_id`` with the enclosing loop counter so that
+    each branch fires for the proportion of iterations the variant
+    actually took it in: a variant that took branch 0 twice and
+    branch 1 once across its traces gets branch 0 driven by
+    ``counter > threshold`` for the first 2/3 of iterations and
+    branch 1 by ``counter <= threshold`` for the last 1/3."""
     # Loop with XOR inside body.
     inner_xor = _xor(_leaf("A"), _leaf("B"))
     tree = T(operator="*", children=[inner_xor, _leaf("R")])
@@ -521,21 +523,21 @@ def test_synthesis_inside_loop_xor_gets_deterministic_true_false_split():
     ]
     assert inside_loop_or_forks, "fixture must have an inside-loop OR-fork"
     for of in inside_loop_or_forks:
-        exprs = [a.condition.expression if a.condition else "true"
+        exprs = [a.condition.expression if a.condition else ""
                  for a in of.succ_connections]
-        # First branch is true, every other branch is false.
-        assert exprs[0] == "true"
-        for e in exprs[1:]:
-            assert e == "false"
+        # Both branches must mention variant_id AND a loop_counter
+        # comparison — that's the whole point of the combined
+        # condition. The fallback true/false split would fail this.
+        has_variant_id_branch = any("variant_id" in e for e in exprs)
+        has_counter_branch = any("loop_counter_" in e for e in exprs)
+        assert has_variant_id_branch
+        assert has_counter_branch
 
 
-def test_synthesis_skips_loop_xor_condition_emission():
-    # Loop with XOR inside body. Inside-loop XORs must NOT get
-    # variant_id conditions emitted — the variant signature
-    # coarsens loop iterations so we can't tell which branch each
-    # variant takes on each pass. They instead get the
-    # deterministic true/false split (guarded separately in
-    # test_synthesis_inside_loop_xor_gets_deterministic_true_false_split).
+def test_synthesis_inside_loop_xor_uses_loop_counter_in_conditions():
+    # Loop with XOR inside body. Inside-loop XOR conditions now
+    # combine variant_id with the enclosing loop's counter so
+    # branches distribute across iterations.
     inner_xor = _xor(_leaf("A"), _leaf("B"))
     tree = T(operator="*", children=[inner_xor, _leaf("R")])
     log = [
@@ -550,12 +552,16 @@ def test_synthesis_skips_loop_xor_condition_emission():
         n for m in ucm.maps for n in m.nodes
         if type(n).__name__ == "OrFork" and n.name != "LoopFork"
     ]
+    # The fixture has exactly one inside-loop XOR.
+    assert len(inside_loop_orforks) == 1
     for of in inside_loop_orforks:
         for arc in of.succ_connections:
-            expr = arc.condition.expression if arc.condition else "true"
-            assert "variant_id" not in expr, (
-                f"inside-loop XOR conditions must not reference "
-                f"variant_id; got {expr!r}"
+            expr = arc.condition.expression if arc.condition else ""
+            # Every branch's condition references the loop counter
+            # (or is ``false`` for a branch nobody took).
+            assert "loop_counter_" in expr or expr == "false", (
+                f"inside-loop XOR condition must reference the loop "
+                f"counter or be ``false``; got {expr!r}"
             )
 
 

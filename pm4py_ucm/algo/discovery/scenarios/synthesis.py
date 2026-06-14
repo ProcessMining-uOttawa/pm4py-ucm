@@ -147,10 +147,14 @@ def synthesize_scenarios(
             sc.add_end_point(ep, enabled=True)
         group.add_scenario(sc)
 
-    # Set conditions on OR-fork outgoing arcs whose tree XOR is not
-    # inside a loop. Skipped silently for inside-loop XORs.
+    # Set conditions on OR-fork outgoing arcs. Outside-loop XORs get
+    # variant_id disjunctions; inside-loop XORs get combined
+    # variant_id + loop_counter conditions so branches distribute
+    # across loop iterations.
     if emit_conditions:
-        _emit_orfork_conditions(target_map, tree, clustering.variants)
+        _emit_orfork_conditions(
+            target_map, tree, clustering.variants, loop_counters,
+        )
 
     return group
 
@@ -201,36 +205,32 @@ def _op_value(node) -> Optional[str]:
 
 def _collect_multi_child_xors(
     tree, node_ids: Dict[int, int],
-) -> List[Tuple[int, int, bool]]:
-    """Pre-order list of ``(signature_int_id, n_branches, in_loop)`` for
-    every multi-child XOR/OR tree node.
+) -> List[Tuple[int, int, Optional[int]]]:
+    """Pre-order list of ``(signature_int_id, n_branches,
+    enclosing_loop_id)`` for every multi-child XOR/OR tree node.
 
     The converter creates one :class:`UCM.OrFork` node per such tree
     node, in the same pre-order traversal — so the i-th entry of this
     list always corresponds to the i-th non-LoopFork ``OrFork`` in the
-    map's ``nodes`` list. The ``in_loop`` flag tells the caller whether
-    the corresponding OR-fork is reachable only from inside a LOOP
-    body: variant signatures coarsen iteration counts and so cannot
-    reliably distinguish per-iteration XOR choices, which is why the
-    synthesizer leaves inside-loop OR-fork conditions at the default
-    ``true`` for v1. Crucially, both subsets are still indexed so the
-    pairing with UCM ``OrFork`` nodes stays consistent — skipping
-    inside-loop entries from the list would put outside-loop XORs out
-    of alignment with their OrForks whenever a tree contains XORs
-    both inside and outside loops, the bug Daniel hit on
-    ClaimsPaymentLog."""
-    out: List[Tuple[int, int, bool]] = []
+    map's ``nodes`` list. ``enclosing_loop_id`` is ``None`` for an
+    outside-loop XOR; for an inside-loop one it is the
+    ``signature_int_id`` of the **innermost** enclosing LOOP tree
+    node, which tells the synthesizer which loop counter to combine
+    with ``variant_id`` to distribute branches across iterations."""
+    out: List[Tuple[int, int, Optional[int]]] = []
 
-    def _walk(node, in_loop: bool) -> None:
+    def _walk(node, enclosing_loop_id: Optional[int]) -> None:
         op = _op_value(node)
         children = list(getattr(node, "children", None) or [])
         if op in (_XOR, _OR) and len(children) >= 2:
-            out.append((node_ids[id(node)], len(children), in_loop))
-        next_in_loop = in_loop or (op == _LOOP)
+            out.append((node_ids[id(node)], len(children), enclosing_loop_id))
+        next_loop_id = (
+            node_ids[id(node)] if op == _LOOP else enclosing_loop_id
+        )
         for c in children:
-            _walk(c, next_in_loop)
+            _walk(c, next_loop_id)
 
-    _walk(tree, False)
+    _walk(tree, None)
     return out
 
 
@@ -447,10 +447,139 @@ def _wire_loop_counters(
     return counters
 
 
+def _set_inside_loop_xor_conditions(
+    of: UCM.OrFork,
+    tree_xor_id: int,
+    n_branches: int,
+    enclosing_loop_id: int,
+    variants: List[Variant],
+    loop_counters: Dict[int, UCM.Variable],
+) -> None:
+    """Wire an inside-loop XOR's outgoing arcs with combined
+    ``variant_id`` + ``loop_counter`` conditions so each branch
+    fires for a specific range of loop-counter values per variant.
+
+    For each variant V that traversed this XOR, we know:
+
+    * ``M_V`` — the variant's max loop iteration count
+      (``variant.loop_iteration_max[enclosing_loop_id]``);
+    * ``n_k_V`` — the total number of times branch ``k`` was taken
+      across the variant's traces
+      (``variant.xor_branch_totals[tree_xor_id][k]``).
+
+    We treat the per-V counts as proportions of ``M_V`` evaluations
+    and assign branches to counter ranges from high to low:
+
+    * branch 0 fires while ``counter > M_V - n_0_V / sum * M_V``,
+    * branch 1 fires while ``counter > M_V - (n_0_V + n_1_V) / sum * M_V``
+      AND ``counter <= M_V - n_0_V / sum * M_V``,
+    * and so on, with the last branch picking up everything ``<= 0``.
+
+    The thresholds are integer-rounded so the partition is exact for
+    the variant's specific counter trajectory. The per-V conditions
+    are guarded by ``variant_id == V`` and joined with ``||`` across
+    variants. For variants that never traversed the XOR (because
+    they didn't enter the loop, or the loop ran only once with the
+    XOR in the redo path), no per-V clause is added — that variant
+    contributes nothing to this OR-fork's expression.
+
+    Falls back to a deterministic ``true`` / ``false`` split if the
+    enclosing loop's counter variable wasn't created (which can
+    happen for tau-body loops the wiring step skipped) or if the
+    XOR has more than two branches (range conditions on multi-way
+    XORs are a follow-up)."""
+    counter = loop_counters.get(enclosing_loop_id)
+    if counter is None or n_branches > 2:
+        # No counter to combine with, or multi-way XOR — fall back
+        # to the simpler deterministic split.
+        _set_deterministic_true_false_split(of)
+        return
+
+    counter_name = counter.name
+    # Per-branch (variant_id, threshold-on-counter) clauses.
+    per_variant_clauses: List[List[str]] = [[] for _ in range(n_branches)]
+    for v in variants:
+        branch_counts = v.xor_branch_totals.get(tree_xor_id, {})
+        total = sum(branch_counts.values())
+        if total == 0:
+            continue
+        m_v = v.loop_iteration_max.get(enclosing_loop_id, 0)
+        if m_v <= 0:
+            continue
+        # Cumulative branch sums => integer thresholds on the counter.
+        # branch i fires for counter in (lower_i, upper_i].
+        upper = m_v
+        for k in range(n_branches):
+            n_k = branch_counts.get(k, 0)
+            # Proportional split, integer-rounded so the partition
+            # of [0, M_V] across branches sums to M_V exactly.
+            piece = round(n_k / total * m_v)
+            lower = upper - piece
+            if k == n_branches - 1:
+                lower = 0  # last branch picks up the remainder
+            if upper > lower:
+                # Build the per-V clause for this branch.
+                if upper >= m_v and lower <= 0:
+                    # Trivial whole-range — this branch is the only
+                    # one this variant ever takes.
+                    clause = f"{_VARIANT_VAR_NAME} == {v.variant_id}"
+                elif upper >= m_v:
+                    clause = (
+                        f"{_VARIANT_VAR_NAME} == {v.variant_id} "
+                        f"&& {counter_name} > {lower}"
+                    )
+                elif lower <= 0:
+                    clause = (
+                        f"{_VARIANT_VAR_NAME} == {v.variant_id} "
+                        f"&& {counter_name} <= {upper}"
+                    )
+                else:
+                    clause = (
+                        f"{_VARIANT_VAR_NAME} == {v.variant_id} "
+                        f"&& {counter_name} > {lower} "
+                        f"&& {counter_name} <= {upper}"
+                    )
+                per_variant_clauses[k].append(clause)
+            upper = lower
+
+    succs = of.succ_connections
+    for k, arc in enumerate(succs):
+        arc = _pull_condition_onto_direct_arc(arc)
+        clauses = per_variant_clauses[k] if k < len(per_variant_clauses) else []
+        if not clauses:
+            expr = "false"
+        elif len(clauses) == 1:
+            expr = clauses[0]
+        else:
+            expr = " || ".join(f"({c})" for c in clauses)
+        if arc.condition is None:
+            arc.set_condition(UCM.Condition(
+                label=f"branch{k}", expression=expr,
+            ))
+        else:
+            arc.condition.expression = expr
+
+
+def _set_deterministic_true_false_split(of: UCM.OrFork) -> None:
+    """Fallback for inside-loop XORs without a usable loop counter:
+    pick branch 0 deterministically. Mutually exclusive and
+    exhaustive, just not data-driven."""
+    for k, arc in enumerate(of.succ_connections):
+        arc = _pull_condition_onto_direct_arc(arc)
+        expr = "true" if k == 0 else "false"
+        if arc.condition is None:
+            arc.set_condition(UCM.Condition(
+                label=f"branch{k}", expression=expr,
+            ))
+        else:
+            arc.condition.expression = expr
+
+
 def _emit_orfork_conditions(
     target_map: UCM.UCMmap,
     tree,
     variants: List[Variant],
+    loop_counters: Optional[Dict[int, UCM.Variable]] = None,
 ) -> None:
     """Set ``variant_id``-disjunction conditions on outgoing OR-fork
     connections that correspond to non-loop XORs in the process tree.
@@ -479,30 +608,17 @@ def _emit_orfork_conditions(
         # condition emission rather than mis-attribute.
         return
 
-    for of_idx, (tree_xor_id, n_branches, in_loop) in enumerate(xor_seq):
+    for of_idx, (tree_xor_id, n_branches, enclosing_loop_id) in enumerate(xor_seq):
         of = or_forks[of_idx]
-        if in_loop:
-            # Inside-loop XOR: variant signatures coarsen loop
-            # iterations, so we cannot tell which branch each variant
-            # takes on each pass — but the converter's default
-            # leaves every outgoing arc at ``true``, which jUCMNav
-            # treats as non-deterministic. Make the choice
-            # deterministic instead by setting the first branch to
-            # ``true`` and every other branch to ``false``: the
-            # scenario engine will reliably pick branch 0 on every
-            # iteration. The choice is mutually exclusive and
-            # jointly exhaustive at the cost of always replaying
-            # the same branch (combining with the loop counter to
-            # distribute per-iteration choices is a follow-up).
-            for k, arc in enumerate(of.succ_connections):
-                arc = _pull_condition_onto_direct_arc(arc)
-                expr = "true" if k == 0 else "false"
-                if arc.condition is None:
-                    arc.set_condition(UCM.Condition(
-                        label=f"branch{k}", expression=expr,
-                    ))
-                else:
-                    arc.condition.expression = expr
+        if enclosing_loop_id is not None:
+            # Inside-loop XOR. We combine variant_id with the
+            # enclosing loop's counter to distribute branches across
+            # iterations — see :func:`_inside_loop_branch_expressions`
+            # for the per-variant threshold logic.
+            _set_inside_loop_xor_conditions(
+                of, tree_xor_id, n_branches, enclosing_loop_id,
+                variants, loop_counters or {},
+            )
             continue
         branch_to_variants: Dict[int, List[str]] = {}
         for v in variants:

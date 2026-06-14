@@ -66,6 +66,17 @@ class Variant:
         the scenario synthesizer to initialise the per-loop integer
         counter variable so the loop runs the right number of times.
         Empty when the variant traverses no loops.
+    xor_branch_totals
+        ``{xor_tree_node_id: {branch_idx: total_count_across_traces}}``.
+        For an outside-loop XOR, ``total_count`` is just the number
+        of cases in the cluster that picked that branch (and only
+        one branch has a non-zero count). For an inside-loop XOR,
+        it is the total number of evaluations summed across every
+        trace's iterations — the scenario synthesizer uses the ratio
+        ``n_branch / sum_branches`` to distribute branches across
+        loop iterations via the loop counter, so a variant whose
+        traces took branch 0 60% of the time and branch 1 40% gets
+        roughly that split inside its scenario.
     """
 
     variant_id: str
@@ -76,6 +87,7 @@ class Variant:
     linearization_count: int
     sequence_variants: int
     loop_iteration_max: Dict[int, int] = field(default_factory=dict)
+    xor_branch_totals: Dict[int, Dict[int, int]] = field(default_factory=dict)
 
 
 @dataclass
@@ -228,15 +240,18 @@ def cluster(
     buckets: Dict[tuple, List[str]] = {}
     bucket_sequences: Dict[tuple, set] = {}
     bucket_loop_max: Dict[tuple, Dict[int, int]] = {}
+    bucket_xor_totals: Dict[tuple, Dict[int, Dict[int, int]]] = {}
     noise: List[str] = []
     sequence_variants_seen: set = set()
     for case_id, trace in cases:
         seq_key = tuple(trace)
         sequence_variants_seen.add(seq_key)
         trace_loop_iters: Dict[int, int] = {}
+        trace_xor_counts: Dict[int, Dict[int, int]] = {}
         signature = _cs.replay(
             tree, trace, node_ids=node_ids, coarsen_loops=coarsen_loops,
             loop_iter_counts=trace_loop_iters,
+            xor_branch_counts=trace_xor_counts,
         )
         if signature == _cs.NOFIT:
             noise.append(case_id)
@@ -250,6 +265,16 @@ def cluster(
         cluster_loops = bucket_loop_max.setdefault(signature, {})
         for loop_nid, ic in trace_loop_iters.items():
             cluster_loops[loop_nid] = max(cluster_loops.get(loop_nid, 0), ic)
+        # Track per-cluster per-XOR branch totals across traces. We
+        # use the SUM (not max) so the ratio of per-branch counts
+        # reflects the variant's empirical mix of branch choices —
+        # which the synthesizer turns into iteration ranges via the
+        # loop counter.
+        cluster_xor = bucket_xor_totals.setdefault(signature, {})
+        for xor_nid, branch_counts in trace_xor_counts.items():
+            existing = cluster_xor.setdefault(xor_nid, {})
+            for branch, cnt in branch_counts.items():
+                existing[branch] = existing.get(branch, 0) + cnt
 
     # Second pass — order buckets by frequency, assign v1, v2, ...,
     # compute derived artifacts.
@@ -274,6 +299,10 @@ def cluster(
             linearization_count=lin_count,
             sequence_variants=len(bucket_sequences.get(sig, set())),
             loop_iteration_max=dict(bucket_loop_max.get(sig, {})),
+            xor_branch_totals={
+                xor_nid: dict(branches)
+                for xor_nid, branches in bucket_xor_totals.get(sig, {}).items()
+            },
         ))
 
     return ClusteringResult(
