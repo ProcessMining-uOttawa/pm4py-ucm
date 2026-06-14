@@ -359,6 +359,20 @@ def test_jucm_export_endpoints_carry_mandatory_flag():
     assert '<endPoints enabled="true" mandatory="true"' in text
 
 
+def test_jucm_export_does_not_escape_greater_than_in_attributes():
+    """XML 1.0 doesn't require escaping ``>`` in attribute values and
+    jUCMNav itself never emits ``&gt;`` — so the partial-order
+    expression ``X -> (Y || Z)`` should appear raw in the scenario
+    description, not as ``X -&gt; (Y || Z)``."""
+    tree, log = _build_tree_and_log()
+    ucm = pm4py_ucm.convert_to_ucm(tree)
+    result = _clustering.cluster(log, tree)
+    _scenarios.synthesize_scenarios(ucm, tree, result)
+    text = _jucm_exporter.serialize_to_string(ucm)
+    assert "&gt;" not in text
+    assert "X -> (Y || Z) -> [A] -> W" in text
+
+
 def test_jucm_export_orfork_conditions_use_bare_enum_identifiers():
     """End-to-end guard for the condition syntax — the serialized
     .jucm must contain ``variant_id == v1`` (no escaped quotes),

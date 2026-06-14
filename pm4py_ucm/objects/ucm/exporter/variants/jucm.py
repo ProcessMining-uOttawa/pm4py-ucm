@@ -1183,11 +1183,17 @@ class _XmlWriter:
 
 
 def _xml_escape_attr(s: str) -> str:
-    """Escape characters not permitted in an XML attribute value."""
+    """Escape characters not permitted in an XML attribute value.
+
+    XML 1.0 only requires escaping ``&``, ``<``, and the matching
+    quote character within attribute values; ``>`` is legal raw.
+    jUCMNav itself emits ``>`` unescaped, so we do the same — it
+    keeps scenario-description text like ``"X -> (Y || Z)"``
+    readable in the editor's panels instead of showing
+    ``"X -&gt; (Y || Z)"`` verbatim."""
     return (s.replace("&", "&amp;")
              .replace('"', "&quot;")
              .replace("<", "&lt;")
-             .replace(">", "&gt;")
              .replace("\n", "&#xA;")
              .replace("\r", "&#xD;")
              .replace("\t", "&#x9;"))
