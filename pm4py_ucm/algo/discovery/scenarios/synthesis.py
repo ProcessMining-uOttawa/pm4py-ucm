@@ -551,7 +551,20 @@ def _wire_loop_counters(
             cond = arc.condition
             label = cond.label if cond else ""
             if label == "exit":
-                expr = f"{name} == 0"
+                # ``<= 0`` rather than ``== 0`` so the condition
+                # stays exhaustive when the counter ends up
+                # negative. That happens for variants that never
+                # traversed this loop in the observed data
+                # (loop_iteration_max = 0): the counter
+                # initialises to 0, but the converter's loop
+                # structure runs the body unconditionally, the
+                # body's decrement responsibility then steps the
+                # counter to -1, and jUCMNav would otherwise see
+                # both ``== 0`` and ``> 0`` evaluate false at the
+                # LoopFork and block. ``<= 0`` keeps the
+                # condition pair mutually exclusive **and**
+                # jointly exhaustive over every integer value.
+                expr = f"{name} <= 0"
             elif label == "redo":
                 expr = f"{name} > 0"
             else:

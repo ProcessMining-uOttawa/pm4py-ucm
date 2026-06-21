@@ -305,11 +305,16 @@ def test_synthesis_orfork_branch_conditions_sit_on_direct_outgoing_arc():
             assert "variant_id" not in expr
 
 
-def test_synthesis_loopfork_conditions_are_mutually_exclusive():
-    """The LoopFork's exit arc should be ``counter == 0`` and the
-    redo arc ``counter > 0`` — at any point exactly one of these
-    holds, eliminating the non-determinism the default ``true``
-    conditions caused."""
+def test_synthesis_loopfork_conditions_are_mutually_exclusive_and_exhaustive():
+    """The LoopFork's exit arc should be ``counter <= 0`` and the
+    redo arc ``counter > 0``. The pair is mutually exclusive **and**
+    jointly exhaustive over every integer value — including
+    negative ones, which crop up when a variant's counter
+    initialises to 0 (loop not traversed in observed data) and the
+    body's decrement responsibility still runs once due to the
+    converter's loop structure. The earlier ``== 0`` version of
+    the exit condition left jUCMNav stuck at the LoopFork with
+    counter = -1 (both branches false)."""
     loop_tree = T(operator="->", children=[
         _leaf("Open"),
         T(operator="*", children=[_leaf("Review"), _leaf("Revise")]),
@@ -325,11 +330,13 @@ def test_synthesis_loopfork_conditions_are_mutually_exclusive():
         ucm, loop_tree, result, emit_conditions=True,
     )
     text = _jucm_exporter.serialize_to_string(ucm)
-    # Both halves of the loop's branch must be expressed in terms of
-    # the counter, not the default ``true``.
+    # Both halves expressed in terms of the counter; not the default
+    # ``true`` and not the brittle ``== 0`` that fails on negatives.
+    # ``<`` is XML-escaped to ``&lt;`` in attribute values.
     assert 'expression="loop_counter_' in text
-    assert '== 0' in text
+    assert '&lt;= 0' in text
     assert '> 0' in text
+    assert '== 0' not in text  # explicit guard against regression
 
 
 def test_synthesis_loop_body_responsibility_carries_decrement():
