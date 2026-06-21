@@ -401,6 +401,82 @@ def test_synthesis_loopfork_conditions_are_mutually_exclusive_and_exhaustive():
     assert '== 0' not in text  # explicit guard against regression
 
 
+def test_synthesis_inserts_loop_entry_guard_so_counter_zero_means_zero_iterations():
+    """A ``LoopEntryGuard`` OR-fork sits between upstream and the
+    LoopJoin so that ``counter == 0`` at scenario start bypasses
+    the loop body entirely (0 iterations) instead of running it
+    once and exiting at ``counter = -1``.
+
+    The guard's two outgoing arcs must carry mutually-exclusive
+    counter conditions, one entering the LoopJoin (``> 0``) and
+    one bypassing to the loop's post-exit node (``<= 0``)."""
+    loop_tree = T(operator="->", children=[
+        _leaf("Open"),
+        T(operator="*", children=[_leaf("Review"), _leaf("Revise")]),
+        _leaf("Close"),
+    ])
+    log = [
+        ("c1", ["Open", "Review", "Close"]),
+        ("c2", ["Open", "Review", "Revise", "Review", "Close"]),
+    ]
+    ucm = pm4py_ucm.convert_to_ucm(loop_tree)
+    result = _clustering.cluster(log, loop_tree)
+    _scenarios.synthesize_scenarios(
+        ucm, loop_tree, result, emit_conditions=True,
+    )
+    # The synthesizer added at least one LoopEntryGuard.
+    guards = [
+        n for m in ucm.maps for n in m.nodes
+        if type(n).__name__ == "OrFork" and n.name == "LoopEntryGuard"
+    ]
+    assert len(guards) == 1
+    guard = guards[0]
+    # Two outgoing arcs, both with counter-based conditions.
+    exprs = [a.condition.expression for a in guard.succ_connections
+             if a.condition is not None]
+    assert any("> 0" in e for e in exprs)
+    assert any("<= 0" in e for e in exprs)
+    # The bypass arc lands on the post-loop node (not the LoopJoin).
+    bypass_arc = next(
+        a for a in guard.succ_connections
+        if a.condition and "<= 0" in a.condition.expression
+    )
+    assert type(bypass_arc.target).__name__ != "OrJoin"
+
+
+def test_synthesis_loop_entry_guard_excluded_from_orfork_condition_emission():
+    """The synthetic ``LoopEntryGuard`` OR-forks must NOT be paired
+    with tree XOR nodes for variant_id condition emission. The
+    counter-based conditions they carry are the correct ones; a
+    variant_id overwrite would break the bypass semantics."""
+    # Tree with both a loop AND an outside-loop XOR: LoopEntryGuard
+    # and the XOR's OrFork are both present, but only the latter
+    # should get variant_id conditions.
+    loop_tree = T(operator="->", children=[
+        _leaf("X"),
+        _xor(_leaf("A"), _leaf("B")),
+        T(operator="*", children=[_leaf("L"), _leaf("R")]),
+    ])
+    log = [
+        ("c1", ["X", "A", "L"]),
+        ("c2", ["X", "B", "L", "R", "L"]),
+    ]
+    ucm = pm4py_ucm.convert_to_ucm(loop_tree)
+    result = _clustering.cluster(log, loop_tree)
+    _scenarios.synthesize_scenarios(
+        ucm, loop_tree, result, emit_conditions=True,
+    )
+    guard = next(
+        n for m in ucm.maps for n in m.nodes
+        if type(n).__name__ == "OrFork" and n.name == "LoopEntryGuard"
+    )
+    # Guard's conditions stay loop-counter-based, not variant_id-based.
+    for arc in guard.succ_connections:
+        expr = arc.condition.expression if arc.condition else ""
+        assert "variant_id" not in expr
+        assert "loop_counter_" in expr
+
+
 def test_synthesis_loop_body_responsibility_carries_decrement():
     """A body responsibility (Review in this fixture) is decorated
     with the counter-decrement expression so the counter steps down
