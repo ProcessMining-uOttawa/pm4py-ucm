@@ -155,7 +155,8 @@ def test_synthesis_emits_orfork_conditions_for_non_loop_xors():
     # arcs should both have variant_id conditions.
     or_fork = next(
         n for m in ucm.maps for n in m.nodes
-        if type(n).__name__ == "OrFork" and n.name != "LoopFork"
+        if type(n).__name__ == "OrFork"
+        and n.name not in ("LoopFork", "LoopEntryGuard")
     )
     succs = or_fork.succ_connections
     expressions = [a.condition.expression if a.condition else "true"
@@ -180,7 +181,8 @@ def test_synthesis_emits_orfork_conditions_without_quotes_around_enum_values():
     _scenarios.synthesize_scenarios(ucm, tree, result, emit_conditions=True)
     or_fork = next(
         n for m in ucm.maps for n in m.nodes
-        if type(n).__name__ == "OrFork" and n.name != "LoopFork"
+        if type(n).__name__ == "OrFork"
+        and n.name not in ("LoopFork", "LoopEntryGuard")
     )
     for arc in or_fork.succ_connections:
         expr = arc.condition.expression if arc.condition else ""
@@ -290,7 +292,8 @@ def test_synthesis_orfork_branch_conditions_sit_on_direct_outgoing_arc():
     )
     or_fork = next(
         n for m in ucm.maps for n in m.nodes
-        if type(n).__name__ == "OrFork" and n.name != "LoopFork"
+        if type(n).__name__ == "OrFork"
+        and n.name not in ("LoopFork", "LoopEntryGuard")
     )
     for arc in or_fork.succ_connections:
         assert arc.condition is not None
@@ -303,6 +306,65 @@ def test_synthesis_orfork_branch_conditions_sit_on_direct_outgoing_arc():
         for downstream in target.succ_connections:
             expr = downstream.condition.expression if downstream.condition else ""
             assert "variant_id" not in expr
+
+
+def test_synthesis_inserts_loop_entry_guard_before_loop_join():
+    """The synthesizer must splice a ``LoopEntryGuard`` OR-fork
+    between the upstream entry and the LoopJoin so a counter that
+    starts at 0 bypasses the body entirely instead of running it
+    once and exiting at counter = -1 — which would otherwise make
+    M_V=0 and M_V=1 variants indistinguishable in execution. The
+    guard's outgoing arcs use ``counter > 0`` (enter loop) and
+    ``counter <= 0`` (bypass to post-loop target)."""
+    loop_tree = T(operator="->", children=[
+        _leaf("Open"),
+        T(operator="*", children=[_leaf("Review"), _leaf("Revise")]),
+        _leaf("Close"),
+    ])
+    log = [
+        ("c1", ["Open", "Review", "Close"]),
+        ("c2", ["Open", "Review", "Revise", "Review", "Close"]),
+    ]
+    ucm = pm4py_ucm.convert_to_ucm(loop_tree)
+    result = _clustering.cluster(log, loop_tree)
+    _scenarios.synthesize_scenarios(
+        ucm, loop_tree, result, emit_conditions=True,
+    )
+    guards = [
+        n for m in ucm.maps for n in m.nodes
+        if type(n).__name__ == "OrFork" and n.name == "LoopEntryGuard"
+    ]
+    assert len(guards) == 1
+    guard = guards[0]
+    # Exactly two outgoing arcs, one enter (counter > 0) and one
+    # bypass (counter <= 0). Both conditions reference the counter.
+    arcs = guard.succ_connections
+    assert len(arcs) == 2
+    exprs = sorted(a.condition.expression for a in arcs)
+    assert any("> 0" in e for e in exprs)
+    assert any("<= 0" in e for e in exprs)
+    for e in exprs:
+        assert "loop_counter_" in e
+    # The bypass arc must land on the same post-loop node the
+    # LoopFork's exit arc reaches — otherwise scenarios that
+    # bypass the loop drop into the wrong continuation.
+    bypass_arc = next(
+        a for a in arcs if "<= 0" in (a.condition.expression or "")
+    )
+    bypass_target = bypass_arc.target
+    loop_fork = next(
+        n for m in ucm.maps for n in m.nodes
+        if type(n).__name__ == "OrFork" and n.name == "LoopFork"
+    )
+    exit_arc = next(
+        a for a in loop_fork.succ_connections
+        if a.condition and a.condition.label == "exit"
+    )
+    # The LoopFork's exit arc target is a routing bend; one more
+    # hop should hit the same post-loop node the guard bypassed to.
+    bend = exit_arc.target
+    post_loop = bend.succ_connections[0].target if bend.succ_connections else bend
+    assert bypass_target is post_loop
 
 
 def test_synthesis_loopfork_conditions_are_mutually_exclusive_and_exhaustive():
@@ -507,7 +569,8 @@ def test_synthesis_orfork_branches_with_no_variant_get_false():
     )
     or_fork = next(
         n for m in ucm.maps for n in m.nodes
-        if type(n).__name__ == "OrFork" and n.name != "LoopFork"
+        if type(n).__name__ == "OrFork"
+        and n.name not in ("LoopFork", "LoopEntryGuard")
     )
     exprs = [a.condition.expression for a in or_fork.succ_connections
              if a.condition is not None]
@@ -538,7 +601,8 @@ def test_synthesis_inside_loop_xor_distributes_branches_via_loop_counter():
     )
     inside_loop_or_forks = [
         n for m in ucm.maps for n in m.nodes
-        if type(n).__name__ == "OrFork" and n.name != "LoopFork"
+        if type(n).__name__ == "OrFork"
+        and n.name not in ("LoopFork", "LoopEntryGuard")
     ]
     assert inside_loop_or_forks, "fixture must have an inside-loop OR-fork"
     for of in inside_loop_or_forks:
@@ -569,7 +633,8 @@ def test_synthesis_inside_loop_xor_uses_loop_counter_in_conditions():
     _scenarios.synthesize_scenarios(ucm, tree, result, emit_conditions=True)
     inside_loop_orforks = [
         n for m in ucm.maps for n in m.nodes
-        if type(n).__name__ == "OrFork" and n.name != "LoopFork"
+        if type(n).__name__ == "OrFork"
+        and n.name not in ("LoopFork", "LoopEntryGuard")
     ]
     # The fixture has exactly one inside-loop XOR.
     assert len(inside_loop_orforks) == 1
@@ -782,7 +847,8 @@ def test_synthesis_data_driven_strategy_creates_attribute_variables_not_variant_
     # The XOR's branches reference Category in their conditions.
     or_fork = next(
         n for m in ucm.maps for n in m.nodes
-        if type(n).__name__ == "OrFork" and n.name != "LoopFork"
+        if type(n).__name__ == "OrFork"
+        and n.name not in ("LoopFork", "LoopEntryGuard")
     )
     exprs = [a.condition.expression for a in or_fork.succ_connections]
     assert any("Category" in e for e in exprs), (

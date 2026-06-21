@@ -545,7 +545,10 @@ def _wire_loop_counters(
         # the bend->target arc; jUCMNav, however, only evaluates
         # conditions on arcs **directly** leaving the fork, so we
         # pull each condition onto the LoopFork's direct outgoing arc
-        # before rewriting its expression.
+        # before rewriting its expression. We also capture the
+        # post-loop ``exit_target`` so the upstream LoopEntryGuard
+        # can bypass the loop body when the counter starts at 0.
+        exit_target: Optional[UCM.PathNode] = None
         for arc in lf.succ_connections:
             arc = _pull_condition_onto_direct_arc(arc)
             cond = arc.condition
@@ -553,18 +556,13 @@ def _wire_loop_counters(
             if label == "exit":
                 # ``<= 0`` rather than ``== 0`` so the condition
                 # stays exhaustive when the counter ends up
-                # negative. That happens for variants that never
-                # traversed this loop in the observed data
-                # (loop_iteration_max = 0): the counter
-                # initialises to 0, but the converter's loop
-                # structure runs the body unconditionally, the
-                # body's decrement responsibility then steps the
-                # counter to -1, and jUCMNav would otherwise see
-                # both ``== 0`` and ``> 0`` evaluate false at the
-                # LoopFork and block. ``<= 0`` keeps the
-                # condition pair mutually exclusive **and**
-                # jointly exhaustive over every integer value.
+                # negative. The same ``<= 0`` predicate gates the
+                # LoopEntryGuard below.
                 expr = f"{name} <= 0"
+                # The arc's target is a routing bend; following one
+                # more hop gives the actual post-loop continuation
+                # node the LoopEntryGuard should bypass to.
+                exit_target = _resolve_post_loop_target(arc)
             elif label == "redo":
                 expr = f"{name} > 0"
             else:
@@ -590,7 +588,91 @@ def _wire_loop_counters(
                 existing + " " + decrement if existing else decrement
             )
 
+        # Splice a LoopEntryGuard OR-fork between upstream and
+        # LoopJoin so a counter that starts at 0 bypasses the loop
+        # body entirely (0 iterations) rather than running it once
+        # and exiting at counter = -1 (1 iteration). The guard is
+        # only checked on initial entry — the redo arc loops back
+        # to LoopJoin directly, so subsequent iterations skip the
+        # guard.
+        if exit_target is not None:
+            _insert_loop_entry_guard(target_map, lj, exit_target, name)
+
     return counters
+
+
+def _resolve_post_loop_target(
+    exit_arc: "UCM.NodeConnection",
+) -> Optional["UCM.PathNode"]:
+    """Follow ``exit_arc`` from LoopFork past a single routing bend
+    to find the actual post-loop continuation node.
+
+    The converter wires ``LoopFork -> exit_target``; the routing
+    pass then splits that into ``LoopFork -> bend -> exit_target``.
+    The LoopEntryGuard's bypass arc should land on
+    ``exit_target`` (skipping the bend) so the loop body and the
+    routing apparatus around the LoopFork are all bypassed in one
+    hop."""
+    target = exit_arc.target
+    if isinstance(target, UCM.EmptyPoint) and len(target.succ_connections) == 1:
+        return target.succ_connections[0].target
+    return target
+
+
+def _insert_loop_entry_guard(
+    target_map: UCM.UCMmap,
+    loop_join: "UCM.OrJoin",
+    exit_target: "UCM.PathNode",
+    counter_name: str,
+) -> Optional["UCM.OrFork"]:
+    """Splice a LoopEntryGuard OR-fork into the path between
+    upstream and LoopJoin.
+
+    Old: ``upstream -> LoopJoin`` (one incoming arc that came from
+    outside the loop).
+    New: ``upstream -> LoopEntryGuard``; LoopEntryGuard has two
+    outgoing arcs, ``counter > 0`` to LoopJoin and ``counter <= 0``
+    to ``exit_target``. The guard runs **only** on initial entry
+    because the LoopFork's redo arc still feeds straight back into
+    LoopJoin (not into the guard), so subsequent iterations bypass
+    the guard. This restores the "counter = number of body
+    executions" semantics: ``M_V = 0`` runs the body 0 times,
+    ``M_V = 1`` runs it once, and so on.
+
+    The guard is named ``LoopEntryGuard`` so the OR-fork-condition
+    filter in :func:`_emit_orfork_conditions` can skip it (it's a
+    synthetic node, not one of the XOR forks in the source tree)."""
+    # The upstream incoming arc is the first added — the entry-side
+    # arc that was wired before the redo. Routing typically left a
+    # routing-bend EmptyPoint as its source.
+    if not loop_join.pred_connections:
+        return None
+    upstream_arc = loop_join.pred_connections[0]
+    upstream_src = upstream_arc.source
+
+    guard = UCM.OrFork(name="LoopEntryGuard")
+    target_map.add_node(guard)
+
+    # Remove the existing upstream -> LoopJoin arc.
+    target_map.remove_connection(upstream_arc)
+
+    # upstream_src -> guard (no condition — passthrough).
+    target_map.add_connection(upstream_src, guard)
+    # guard -> LoopJoin when the counter still has iterations left.
+    target_map.add_connection(
+        guard, loop_join,
+        condition=UCM.Condition(
+            label="enter", expression=f"{counter_name} > 0",
+        ),
+    )
+    # guard -> exit_target when the counter is at 0 (or below).
+    target_map.add_connection(
+        guard, exit_target,
+        condition=UCM.Condition(
+            label="bypass", expression=f"{counter_name} <= 0",
+        ),
+    )
+    return guard
 
 
 def _representative_value_for_variant(
@@ -663,7 +745,8 @@ def _emit_orfork_conditions_data_driven(
 
     or_forks: List[UCM.OrFork] = [
         n for n in target_map.nodes
-        if isinstance(n, UCM.OrFork) and n.name != "LoopFork"
+        if isinstance(n, UCM.OrFork)
+        and n.name not in ("LoopFork", "LoopEntryGuard")
     ]
     if len(or_forks) != len(xor_seq):
         return []
@@ -893,7 +976,8 @@ def _emit_orfork_conditions(
 
     or_forks: List[UCM.OrFork] = [
         n for n in target_map.nodes
-        if isinstance(n, UCM.OrFork) and n.name != "LoopFork"
+        if isinstance(n, UCM.OrFork)
+        and n.name not in ("LoopFork", "LoopEntryGuard")
     ]
     if len(or_forks) != len(xor_seq):
         # Tree walk and converter disagree on XOR count; skip
