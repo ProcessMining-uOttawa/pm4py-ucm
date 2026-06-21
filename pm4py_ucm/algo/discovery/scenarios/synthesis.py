@@ -34,6 +34,7 @@ from ....objects.ucm.obj import UCM
 from ..variants import choice_signature as _cs
 from ..variants.clustering import ClusteringResult, Variant
 from . import decision_mining as _dm
+from . import expression_minimizer as _emin
 
 
 _VARIANT_VAR_NAME = "variant_id"
@@ -805,7 +806,16 @@ def _emit_orfork_conditions_data_driven(
             continue
         for k, arc in enumerate(succs):
             arc = _pull_condition_onto_direct_arc(arc)
-            expr = result.per_branch_expression.get(k, "false")
+            raw_expr = result.per_branch_expression.get(k, "false")
+            # The decision-tree expressions can be highly verbose
+            # because every leaf contributes its own AND-clause.
+            # Run the simplifier to absorb complementary-literal
+            # pairs and drop subsumed clauses. Pure tautologies on
+            # the algorithmic side; the resulting expression
+            # accepts exactly the same variable assignments as the
+            # original.
+            expr = _emin.minimize(raw_expr)
+            result.per_branch_expression[k] = expr  # report sees the simplified text
             if arc.condition is None:
                 arc.set_condition(UCM.Condition(
                     label=f"branch{k}", expression=expr,
