@@ -33,6 +33,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from ....objects.ucm.obj import UCM
 from ..variants import choice_signature as _cs
 from ..variants.clustering import ClusteringResult, Variant
+from . import decision_mining as _dm
 
 
 _VARIANT_VAR_NAME = "variant_id"
@@ -59,6 +60,9 @@ def synthesize_scenarios(
     map_name: Optional[str] = None,
     emit_conditions: bool = True,
     max_loop_iterations: Optional[int] = 2,
+    condition_strategy: str = "variant",
+    log=None,
+    decision_tree_max_depth: int = 3,
 ) -> UCM.ScenarioGroup:
     """Populate ``ucm`` with one scenario per variant in ``clustering``.
 
@@ -99,6 +103,41 @@ def synthesize_scenarios(
         ``M_V`` as their counter range. Pass ``None`` to disable
         capping (counter initialises to the actual max observed in
         each variant's traces).
+    condition_strategy
+        How outside-loop OR-fork conditions are derived:
+
+        * ``"variant"`` (default) — the original encoding: a
+          ``variant_id`` enumeration variable plus a per-scenario
+          ``variant_id == v_i`` initialisation; outside-loop
+          conditions are ``variant_id`` disjunctions over the
+          variants that took each branch.
+        * ``"data-driven"`` — mine a decision tree per outside-
+          loop OR-fork against the log's case-level attributes
+          (lifted automatically from event-level columns that are
+          constant per case). The tree predicts which branch each
+          case took; its expression replaces the variant_id
+          disjunction. No ``variant_id`` variable is created; each
+          scenario instead initialises every mined attribute to a
+          representative value for its variant (median for
+          numerics, mode for enums / booleans). If the log has no
+          usable case-constant attributes, conditions are left at
+          the converter's default ``true`` and a warning is
+          emitted — there is no fallback to variant-driven
+          conditions in this mode.
+
+        Inside-loop OR-forks and LoopFork counter conditions are
+        the same in both modes.
+    log
+        Required when ``condition_strategy="data-driven"``: a
+        pandas DataFrame in pm4py's event-log format (case +
+        activity + attribute columns). Ignored for
+        ``condition_strategy="variant"``.
+    decision_tree_max_depth
+        Maximum depth of the per-OR-fork decision tree (default
+        ``3``). Deeper trees produce more accurate conditions
+        but verbose expressions; ``3`` is a sweet spot that keeps
+        the jUCMNav expression readable while still capturing
+        the most informative splits.
 
     Returns
     -------
@@ -109,20 +148,61 @@ def synthesize_scenarios(
     if not clustering.variants:
         return ucm.add_scenario_group(name=group_name)
 
+    if condition_strategy not in ("variant", "data-driven"):
+        raise ValueError(
+            f"condition_strategy must be 'variant' or 'data-driven'; "
+            f"got {condition_strategy!r}"
+        )
+
     target_map = _pick_map(ucm, map_name)
 
-    # Define the variant_id enum + variable on the URN spec.
-    variant_ids = [v.variant_id for v in clustering.variants]
-    enum_type = ucm.get_or_add_enumeration_type(
-        _VARIANT_ENUM_NAME, values=variant_ids,
-    )
-    # jUCMNav writes type discriminators in lowercase ("enumeration",
-    # "integer"). Match that — capital "Enumeration" makes the editor
-    # treat the variable as untyped and the scenario tool can't
-    # initialise it.
-    variant_var = ucm.get_or_add_variable(
-        _VARIANT_VAR_NAME, type="enumeration", enumeration_type=enum_type,
-    )
+    variant_var: Optional[UCM.Variable] = None
+    attribute_vars: Dict[str, UCM.Variable] = {}
+    data_driven_features = None
+    if condition_strategy == "variant":
+        # Define the variant_id enum + variable on the URN spec.
+        variant_ids = [v.variant_id for v in clustering.variants]
+        enum_type = ucm.get_or_add_enumeration_type(
+            _VARIANT_ENUM_NAME, values=variant_ids,
+        )
+        # jUCMNav writes type discriminators in lowercase ("enumeration",
+        # "integer"). Match that — capital "Enumeration" makes the editor
+        # treat the variable as untyped and the scenario tool can't
+        # initialise it.
+        variant_var = ucm.get_or_add_variable(
+            _VARIANT_VAR_NAME, type="enumeration",
+            enumeration_type=enum_type,
+        )
+    else:
+        # Data-driven: extract case-level features once, create one
+        # Variable (and EnumerationType for enums) per usable
+        # attribute. ``extract_case_features`` lifts event-level
+        # columns that happen to be case-constant; if none survive
+        # the type / cardinality filters we leave attribute_vars
+        # empty and the OR-fork conditions stay at their default
+        # ``true`` (with a warning).
+        if log is None:
+            raise ValueError(
+                "condition_strategy='data-driven' requires "
+                "the log= argument."
+            )
+        data_driven_features = _dm.extract_case_features(log)
+        features_df, attribute_specs, feature_columns, per_case_raw = (
+            data_driven_features
+        )
+        if features_df is not None:
+            for jname, spec in attribute_specs.items():
+                if spec.type == "enumeration":
+                    et = ucm.get_or_add_enumeration_type(
+                        f"{jname}_Type", values=list(spec.enum_values),
+                    )
+                    attribute_vars[jname] = ucm.get_or_add_variable(
+                        jname, type="enumeration", enumeration_type=et,
+                    )
+                else:
+                    attribute_vars[jname] = ucm.get_or_add_variable(
+                        jname, type=spec.type,
+                    )
 
     # Loop counter scaffolding. For every LOOP tree node with at least
     # one body responsibility in the UCM, this creates an integer
@@ -145,7 +225,26 @@ def synthesize_scenarios(
             description=_format_description(variant),
         )
         sc._owner = ucm
-        sc.add_initialization(variant_var, variant.variant_id)
+        if condition_strategy == "variant" and variant_var is not None:
+            sc.add_initialization(variant_var, variant.variant_id)
+        elif condition_strategy == "data-driven" and attribute_vars:
+            # Initialise every mined attribute to the variant's
+            # representative value: median for numerics, mode for
+            # enums / booleans. The cases in ``variant.case_ids``
+            # form the cluster; we read their raw values from the
+            # per-case original DataFrame returned by
+            # extract_case_features and pick the representative
+            # accordingly. Floats get the scale_factor applied so
+            # the initialised integer matches what jUCMNav will
+            # compare against in the mined conditions.
+            for jname, var in attribute_vars.items():
+                spec = attribute_specs[jname]
+                value = _representative_value_for_variant(
+                    variant, spec, per_case_raw,
+                )
+                if value is None:
+                    continue
+                sc.add_initialization(var, value)
         # Per-loop integer counter initialisation. Use the variant's
         # max observed iteration count, optionally capped at
         # ``max_loop_iterations`` so scenarios remain tractable to
@@ -163,14 +262,32 @@ def synthesize_scenarios(
         group.add_scenario(sc)
 
     # Set conditions on OR-fork outgoing arcs. Outside-loop XORs get
-    # variant_id disjunctions; inside-loop XORs get combined
+    # variant_id disjunctions (or, in data-driven mode, decision-mined
+    # expressions on case attributes); inside-loop XORs get combined
     # variant_id + loop_counter conditions so branches distribute
     # across loop iterations.
+    or_fork_mining_results: List[_dm.OrForkMiningResult] = []
     if emit_conditions:
-        _emit_orfork_conditions(
-            target_map, tree, clustering.variants, loop_counters,
-            max_loop_iterations=max_loop_iterations,
-        )
+        if condition_strategy == "variant":
+            _emit_orfork_conditions(
+                target_map, tree, clustering.variants, loop_counters,
+                max_loop_iterations=max_loop_iterations,
+            )
+        elif condition_strategy == "data-driven" and attribute_vars:
+            or_fork_mining_results = _emit_orfork_conditions_data_driven(
+                target_map, tree, clustering, log,
+                attribute_specs, features_df, feature_columns,
+                loop_counters,
+                max_loop_iterations=max_loop_iterations,
+                max_depth=decision_tree_max_depth,
+            )
+        # else: data-driven but no attributes — leave at default true
+        # and rely on the warning already emitted by extract_case_features.
+
+    # Stash mining results on the group so the report writer can find
+    # them (the group is the only object the caller keeps a reference to
+    # in the variant-driven path).
+    group._mining_results = or_fork_mining_results  # type: ignore[attr-defined]
 
     return group
 
@@ -461,6 +578,145 @@ def _wire_loop_counters(
             )
 
     return counters
+
+
+def _representative_value_for_variant(
+    variant: Variant,
+    spec: "_dm.AttributeSpec",
+    per_case_raw,
+) -> Optional[str]:
+    """Pick the value to initialise this attribute to inside the
+    variant's scenario.
+
+    * Enumeration / boolean: modal value across the variant's cases
+      (sanitised for enumerations so the literal matches what the
+      mined expression compares against).
+    * Integer: median across the variant's cases, multiplied by
+      :attr:`AttributeSpec.scale_factor` and rounded so the
+      initialiser value matches the encoded feature space.
+
+    Returns ``None`` when no cases in the variant carry a non-null
+    value for this attribute (no init emitted)."""
+    case_ids = [str(cid) for cid in variant.case_ids]
+    case_ids = [cid for cid in case_ids if cid in per_case_raw.index]
+    if not case_ids:
+        return None
+    series = per_case_raw.loc[case_ids, spec.source_name].dropna()
+    if series.empty:
+        return None
+    if spec.type == "enumeration":
+        mode = series.mode()
+        if mode.empty:
+            return None
+        return spec.sanitise_value(str(mode.iloc[0]))
+    if spec.type == "boolean":
+        mode = series.mode()
+        if mode.empty:
+            return None
+        v = mode.iloc[0]
+        return "true" if v in (True, 1, "true", "True") else "false"
+    if spec.type == "integer":
+        # Numeric — use median, apply scale factor, round to int.
+        try:
+            median = float(series.astype(float).median())
+        except (TypeError, ValueError):
+            return None
+        scaled = int(round(median * spec.scale_factor))
+        return str(scaled)
+    return None
+
+
+def _emit_orfork_conditions_data_driven(
+    target_map: UCM.UCMmap,
+    tree,
+    clustering: ClusteringResult,
+    log,
+    attribute_specs: Dict[str, "_dm.AttributeSpec"],
+    features_df,
+    feature_columns: List[str],
+    loop_counters: Dict[int, UCM.Variable],
+    max_loop_iterations: Optional[int],
+    max_depth: int = 3,
+) -> List["_dm.OrForkMiningResult"]:
+    """Replace outside-loop OR-fork conditions with decision-mined
+    expressions trained on per-case attributes; keep inside-loop and
+    LoopFork conditions on the existing counter machinery.
+
+    Returns the per-OR-fork :class:`_dm.OrForkMiningResult` list so
+    the report writer can describe the trained tree, accuracy, and
+    feature set for each fork."""
+    node_ids = _cs.assign_node_ids(tree)
+    xor_seq = _collect_multi_child_xors(tree, node_ids)
+
+    or_forks: List[UCM.OrFork] = [
+        n for n in target_map.nodes
+        if isinstance(n, UCM.OrFork) and n.name != "LoopFork"
+    ]
+    if len(or_forks) != len(xor_seq):
+        return []
+
+    # Replay every case to collect per-XOR branch labels (outside-
+    # loop only — inside-loop XORs are skipped for decision mining
+    # since per-iteration choices aren't captured by case attributes).
+    case_to_branch_per_xor: Dict[int, Dict[str, int]] = {
+        x: {} for x, _, _ in xor_seq
+    }
+    case_id_col = "case:concept:name"
+    for case_id, trace_df in log.groupby(case_id_col):
+        trace = trace_df["concept:name"].tolist()
+        xor_counts: Dict[int, Dict[int, int]] = {}
+        sig = _cs.replay(
+            tree, trace, node_ids=node_ids, coarsen_loops=True,
+            xor_branch_counts=xor_counts,
+        )
+        if sig == _cs.NOFIT:
+            continue
+        for xor_id, branch_counts in xor_counts.items():
+            # Outside-loop XOR: exactly one branch was taken (count 1).
+            if sum(branch_counts.values()) == 1:
+                chosen = next(iter(branch_counts))
+                case_to_branch_per_xor[xor_id][str(case_id)] = chosen
+
+    mining_results: List["_dm.OrForkMiningResult"] = []
+    for of_idx, (tree_xor_id, n_branches, enclosing_loop_id) in enumerate(xor_seq):
+        of = or_forks[of_idx]
+        if enclosing_loop_id is not None:
+            # Inside-loop XOR: data-driven can't disambiguate
+            # per-iteration choices. Fall back to a deterministic
+            # true/false split so the choice stays mutually
+            # exclusive and exhaustive without involving variant_id.
+            _set_deterministic_true_false_split(of)
+            mining_results.append(_dm.OrForkMiningResult(
+                tree_xor_id=tree_xor_id,
+                n_branches=n_branches,
+                skipped_reason="inside_loop",
+                per_branch_expression={
+                    k: ("true" if k == 0 else "false")
+                    for k in range(n_branches)
+                },
+            ))
+            continue
+        # Train + translate.
+        result = _dm.mine_orfork_condition(
+            features_df, attribute_specs, feature_columns,
+            case_to_branch_per_xor[tree_xor_id],
+            tree_xor_id, n_branches,
+            max_depth=max_depth,
+        )
+        mining_results.append(result)
+        succs = of.succ_connections
+        if len(succs) != n_branches:
+            continue
+        for k, arc in enumerate(succs):
+            arc = _pull_condition_onto_direct_arc(arc)
+            expr = result.per_branch_expression.get(k, "false")
+            if arc.condition is None:
+                arc.set_condition(UCM.Condition(
+                    label=f"branch{k}", expression=expr,
+                ))
+            else:
+                arc.condition.expression = expr
+    return mining_results
 
 
 def _set_inside_loop_xor_conditions(

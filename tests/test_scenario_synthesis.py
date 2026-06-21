@@ -728,6 +728,96 @@ def test_jucm_export_orfork_conditions_use_bare_enum_identifiers():
     assert '&quot;v1&quot;' not in text
 
 
+def test_synthesis_data_driven_strategy_creates_attribute_variables_not_variant_id():
+    """When ``condition_strategy='data-driven'`` the synthesizer
+    should NOT create a ``variant_id`` variable; instead it creates
+    one URN Variable per case-constant attribute the log carries.
+    Scenarios initialise those attributes to per-variant
+    representative values (mode for enums, median for numerics)."""
+    import pandas as pd
+
+    # Tiny tree X -> XOR(A, B) -> C. Per-case attribute "category"
+    # perfectly predicts the XOR branch.
+    tree = T(operator="->", children=[
+        _leaf("X"),
+        _xor(_leaf("A"), _leaf("B")),
+        _leaf("C"),
+    ])
+    rows = []
+    cases = (
+        [(f"c1_{i}", "low",  ["X", "A", "C"]) for i in range(20)]
+        + [(f"c2_{i}", "high", ["X", "B", "C"]) for i in range(20)]
+    )
+    for case_id, category, trace in cases:
+        for j, act in enumerate(trace):
+            rows.append({
+                "case:concept:name": case_id,
+                "concept:name": act,
+                "time:timestamp": pd.Timestamp("2026-01-01") + pd.Timedelta(j, "s"),
+                "Category": category,
+            })
+    log_df = pd.DataFrame(rows)
+    result = _clustering.cluster(log_df, tree)
+    ucm = pm4py_ucm.convert_to_ucm(tree)
+    group = _scenarios.synthesize_scenarios(
+        ucm, tree, result,
+        condition_strategy="data-driven",
+        log=log_df,
+        emit_conditions=True,
+    )
+    # variant_id is not created.
+    var_names = {v.name for v in ucm.variables}
+    assert "variant_id" not in var_names
+    # The case-constant attribute is created as an enumeration.
+    assert "Category" in var_names
+    cat_var = next(v for v in ucm.variables if v.name == "Category")
+    assert cat_var.type == "enumeration"
+    # The XOR's branches reference Category in their conditions.
+    or_fork = next(
+        n for m in ucm.maps for n in m.nodes
+        if type(n).__name__ == "OrFork" and n.name != "LoopFork"
+    )
+    exprs = [a.condition.expression for a in or_fork.succ_connections]
+    assert any("Category" in e for e in exprs), (
+        f"expected at least one Category reference; got {exprs}"
+    )
+
+
+def test_synthesis_data_driven_abandons_with_warning_when_no_useful_attributes():
+    """When the log has no case-constant attributes survive the
+    type / cardinality filters, the data-driven path emits a warning
+    and falls through with conditions left at default ``true``.
+    There is no fallback to variant-driven."""
+    import pandas as pd
+    import warnings
+
+    # Log with only IDs, activities, timestamps — nothing case-constant.
+    tree = T(operator="->", children=[
+        _leaf("X"),
+        _xor(_leaf("A"), _leaf("B")),
+    ])
+    log_df = pd.DataFrame({
+        "case:concept:name": ["c0", "c0", "c1", "c1"],
+        "concept:name": ["X", "A", "X", "B"],
+        "time:timestamp": pd.to_datetime(
+            ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04"],
+        ),
+    })
+    result = _clustering.cluster(log_df, tree)
+    ucm = pm4py_ucm.convert_to_ucm(tree)
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        group = _scenarios.synthesize_scenarios(
+            ucm, tree, result,
+            condition_strategy="data-driven", log=log_df,
+        )
+    # Warning fired.
+    assert any("abandoned" in str(wi.message).lower() for wi in w)
+    # No attribute variables created.
+    var_names = {v.name for v in ucm.variables}
+    assert "variant_id" not in var_names
+
+
 def test_jucm_export_without_scenarios_remains_byte_stable_legacy():
     """A UCM with no scenario groups must produce identical output to
     the pre-scenarios legacy exporter (no spurious <scenarioGroups/>,

@@ -247,6 +247,8 @@ def discover_scenarios(
     emit_conditions: bool = True,
     group_name: str = "MinedScenarios",
     max_loop_iterations: Optional[int] = 2,
+    condition_strategy: str = "variant",
+    decision_tree_max_depth: int = 3,
 ):
     """End-to-end discovery of an executable UCM with scenarios from a log.
 
@@ -349,6 +351,9 @@ synthesize_scenarios` for details.
         group_name=group_name,
         emit_conditions=emit_conditions,
         max_loop_iterations=max_loop_iterations,
+        condition_strategy=condition_strategy,
+        log=log if condition_strategy == "data-driven" else None,
+        decision_tree_max_depth=decision_tree_max_depth,
     )
 
     return ucm, clustering
@@ -376,6 +381,26 @@ def write_case_variant_map(
     """Write the per-case → variant mapping as CSV — joinable on
     ``case_id`` against the user's own log."""
     _scenario_reports.write_case_variant_map(clustering, file_path)
+    return file_path
+
+
+def write_condition_mining_report(
+    scenario_group,
+    file_path: str,
+) -> str:
+    """Write the per-OR-fork decision-mining report as CSV.
+
+    Only meaningful when the UCM was produced via
+    ``discover_scenarios(..., condition_strategy="data-driven")``:
+    the synthesizer stashes per-fork
+    :class:`pm4py_ucm.algo.discovery.scenarios.decision_mining.\
+OrForkMiningResult` records on the
+    :class:`UCM.ScenarioGroup` that this report writer reads back.
+    See :func:`pm4py_ucm.algo.discovery.scenarios.reports.\
+write_condition_mining_report` for the column semantics."""
+    _scenario_reports.write_condition_mining_report(
+        scenario_group, file_path,
+    )
     return file_path
 
 

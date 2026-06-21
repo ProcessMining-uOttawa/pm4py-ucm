@@ -103,6 +103,60 @@ def write_variants_report(
     _with_writer(file_path, _emit)
 
 
+def write_condition_mining_report(
+    ucm_scenario_group,
+    file_path: Union[str, IO],
+) -> None:
+    """Write the per-OR-fork decision-mining report as CSV.
+
+    Pulls :class:`pm4py_ucm.algo.discovery.scenarios.decision_mining.\
+OrForkMiningResult` records off the ``_mining_results`` slot the
+    synthesizer stashes on the
+    :class:`UCM.ScenarioGroup`. Useful only when ``synthesize_scenarios``
+    ran with ``condition_strategy="data-driven"``; empty for variant-
+    driven runs.
+
+    Columns:
+        1. ``or_fork_xor_tree_id`` — stable signature id of the XOR
+           tree node (matches the IDs used inside the synthesizer);
+        2. ``n_branches`` — outgoing branches on the OR-fork;
+        3. ``accuracy`` — training accuracy of the per-fork decision
+           tree on case→branch labels; ``""`` for skipped forks;
+        4. ``n_samples`` — cases that reached this fork (training
+           sample size);
+        5. ``features_used`` — comma-separated list of case attribute
+           names the tree split on;
+        6. ``skipped_reason`` — set when the fork was excluded
+           (``inside_loop``, ``no_labelled_cases``, …);
+        7. ``per_branch_expression`` — the actual jUCMNav condition
+           expression emitted on each outgoing branch (one row per
+           branch via the ``branch_index`` column).
+    """
+    fields = [
+        "or_fork_xor_tree_id", "n_branches", "branch_index",
+        "accuracy", "n_samples", "features_used",
+        "skipped_reason", "expression",
+    ]
+    results = getattr(ucm_scenario_group, "_mining_results", None) or []
+
+    def _emit(writer):
+        writer.writerow(fields)
+        for r in results:
+            for k in range(r.n_branches):
+                writer.writerow([
+                    r.tree_xor_id,
+                    r.n_branches,
+                    k,
+                    f"{r.accuracy:.4f}" if r.skipped_reason is None else "",
+                    r.n_samples if r.skipped_reason is None else "",
+                    ", ".join(r.features_used),
+                    r.skipped_reason or "",
+                    r.per_branch_expression.get(k, ""),
+                ])
+
+    _with_writer(file_path, _emit)
+
+
 def write_case_variant_map(
     clustering: ClusteringResult,
     file_path: Union[str, IO],
