@@ -21,13 +21,31 @@ python -m venv .venv
 # source .venv/bin/activate       # macOS/Linux
 
 pip install -r web/requirements.txt
-streamlit run web/streamlit_app.py
+streamlit run web/streamlit_app.py        # V1 (model only)
+streamlit run web/streamlit_app_v2.py     # V2 (model + scenarios)
 ```
 
 Streamlit opens `http://localhost:8501`.
 
-The web-specific deps (`streamlit`, `pm4py`) live in `web/requirements.txt`
-so they stay out of the package's own dev workflow (`pip install -e ".[dev]"`).
+The web-specific deps (`streamlit`, `pm4py`, `scikit-learn`) live in
+`web/requirements.txt` so they stay out of the package's own dev workflow
+(`pip install -e ".[dev]"`). `scikit-learn` is only needed by V2's
+data-driven scenario condition mining; V1 ignores it.
+
+## V1 vs V2
+
+- **V1** (`streamlit_app.py`) — mine a UCM from a log, preview in UCM or
+  BPMN notation, download PNG + `.jucm`. Stable, deployed.
+- **V2** (`streamlit_app_v2.py`) — superset of V1. Adds a **Scenarios**
+  tab that runs concurrency-aware variant clustering and synthesizes one
+  executable jUCMNav `ScenarioDef` per variant, with downloads for the
+  `.jucm` (now carrying the `<scenarioGroups>`), `variants.csv`,
+  `case_variant_map.csv`, and (data-driven mode only)
+  `condition_mining.csv`. Both variant-driven and data-driven OR-fork
+  encodings are exposed; the data-driven option greys out when
+  `scikit-learn` is missing. The Scenarios tab always runs with
+  `decomposition=None` so OR-forks in every XOR receive a `variant_id`
+  condition — XORs pushed into plug-in maps would otherwise lose them.
 
 ## Using the app
 
