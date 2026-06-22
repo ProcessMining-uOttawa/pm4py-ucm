@@ -908,6 +908,8 @@ def test_synthesis_data_driven_strategy_creates_attribute_variables_not_variant_
     one URN Variable per case-constant attribute the log carries.
     Scenarios initialise those attributes to per-variant
     representative values (mode for enums, median for numerics)."""
+    import pytest
+    pytest.importorskip("sklearn")
     import pandas as pd
 
     # Tiny tree X -> XOR(A, B) -> C. Per-case attribute "category"
