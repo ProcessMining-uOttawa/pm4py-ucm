@@ -28,6 +28,7 @@ Public entry point: :func:`synthesize_scenarios`.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from ....objects.ucm.obj import UCM
@@ -217,13 +218,22 @@ def synthesize_scenarios(
         loop_counters = _wire_loop_counters(ucm, target_map, tree)
 
     # Build the ScenarioGroup with one ScenarioDef per variant.
+    # Each scenario is named ``<variant_id>_<short_suffix>`` so the
+    # jUCMNav scenarios panel shows a discriminator alongside the
+    # generic v1/v2 IDs, and the description carries a plain-English
+    # intent sentence in front of the technical breakdown.
     group = ucm.add_scenario_group(name=group_name)
     starts = target_map.start_points
     ends = target_map.end_points
+    # Pre-compute the tree's signature-id map once; reuse for every
+    # variant's suffix + intent.
+    _scenario_node_ids = _cs.assign_node_ids(tree)
     for variant in clustering.variants:
+        suffix = _variant_name_suffix(variant, tree, _scenario_node_ids)
+        intent = _variant_intent(variant, tree, _scenario_node_ids)
         sc = UCM.ScenarioDef(
-            name=variant.variant_id,
-            description=_format_description(variant),
+            name=f"{variant.variant_id}_{suffix}" if suffix else variant.variant_id,
+            description=_format_description(variant, intent=intent),
         )
         sc._owner = ucm
         if condition_strategy == "variant" and variant_var is not None:
@@ -297,22 +307,204 @@ def synthesize_scenarios(
 # Description formatting
 # ---------------------------------------------------------------------------
 
-def _format_description(variant: Variant) -> str:
+def _format_description(
+    variant: Variant,
+    intent: Optional[str] = None,
+) -> str:
     """Compact human-readable description of a variant — partial order
     expression, frequency, linearization-count, and a truncated case-ID
-    list. Surfaced inside jUCMNav's scenario panel."""
+    list. When an ``intent`` sentence is provided it is prepended as
+    the first line so the jUCMNav scenario panel leads with plain
+    English before showing the technical breakdown."""
     shown = variant.case_ids[:_MAX_CASE_IDS_IN_DESCRIPTION]
     extra = len(variant.case_ids) - len(shown)
     case_ids_part = ", ".join(shown)
     if extra > 0:
         case_ids_part += f", ... (+{extra} more)"
+    header = f"Intent: {intent}\n" if intent else ""
     return (
+        f"{header}"
         f"Partial-order: {variant.partial_order_expression}\n"
         f"Frequency: {variant.frequency} case(s); "
         f"linearizations: {variant.linearization_count}; "
         f"distinct sequences in log: {variant.sequence_variants}.\n"
         f"Case IDs: {case_ids_part}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Variant naming and intent
+# ---------------------------------------------------------------------------
+
+#: Multi-iteration coarsened loops surface in the variant suffix as
+#: ``"Two<Activity>"`` (e.g. ``TwoCloseAssessment``); single-iteration
+#: loops are not mentioned (they're the common case).
+_LOOP_COARSE_LABELS = {0: "Skip", 1: None, 2: "Two"}
+
+
+def _variant_name_suffix(
+    variant: Variant, tree, node_ids: Dict[int, int],
+) -> str:
+    """Derive a short descriptor for the variant's scenario name,
+    e.g. ``"TwoCloseAssessment"`` for a variant whose distinctive
+    feature is repeating the Close-Assessment loop.
+
+    Order of preference for the discriminator:
+      1. Any LOOP whose coarse iteration count is 2 (``>= 2``) — the
+         most striking feature: this variant *repeats* something.
+      2. The first non-loop XOR choice's branch activity — captures
+         the "took A instead of B" decision.
+      3. The variant's first activity in the partial-order
+         expression — last resort, just gives the name *some*
+         content.
+
+    Falls back to ``"flow"`` for fully-trivial signatures."""
+    # Map node IDs back to tree nodes for activity-name lookup.
+    id_to_node = _build_id_to_node_map(tree, node_ids)
+
+    def _collect(signature: tuple, loop_match: List[str],
+                 xor_match: List[str], in_loop: bool) -> None:
+        if not signature:
+            return
+        tag = signature[0]
+        if tag == "ACT":
+            return
+        if tag == "SEQ":
+            for f in signature[2]:
+                _collect(f, loop_match, xor_match, in_loop)
+        elif tag == "XOR":
+            _, nid, idx, inner = signature
+            if not in_loop:
+                chosen_label = _first_activity_label(_xor_child(
+                    id_to_node.get(nid), idx,
+                ))
+                if chosen_label:
+                    xor_match.append(_short_activity_token(chosen_label))
+            _collect(inner, loop_match, xor_match, in_loop)
+        elif tag == "PAR":
+            for f in signature[2]:
+                _collect(f, loop_match, xor_match, in_loop)
+        elif tag == "LOOP":
+            _, nid, coarse = signature
+            label = _LOOP_COARSE_LABELS.get(coarse)
+            if label and label != "skip":
+                body_label = _first_activity_label(_loop_body(
+                    id_to_node.get(nid)
+                ))
+                if body_label:
+                    loop_match.append(
+                        f"{label}{_short_activity_token(body_label, max_len=14)}"
+                    )
+        elif tag == "LOOP_FINE":
+            for f in signature[3]:
+                _collect(f, loop_match, xor_match, True)
+
+    loop_match: List[str] = []
+    xor_match: List[str] = []
+    _collect(variant.signature, loop_match, xor_match, False)
+    pick = (loop_match[:1] or xor_match[:1] or ["flow"])
+    return pick[0]
+
+
+def _variant_intent(
+    variant: Variant, tree, node_ids: Dict[int, int],
+) -> str:
+    """One-sentence plain-English description of a variant's intent
+    — the recognisable shape of the cases it covers, in business
+    terms rather than node IDs.
+
+    The sentence template is:
+
+      "{N} case(s) that {feature_1}, then {feature_2}, ..."
+
+    where each feature mentions a distinct XOR branch taken, or a
+    loop that the variant runs more than once. Single-iteration
+    loops and structural sequence operators are not mentioned (they
+    are the common case and would just inflate the sentence).
+    Returns a generic ``"Covers {N} case(s)."`` when no
+    distinguishing feature surfaces — true only for trivially-
+    flat variants on trees without any choice or loop."""
+    id_to_node = _build_id_to_node_map(tree, node_ids)
+    features: List[str] = []
+
+    def _walk(signature: tuple, in_loop: bool) -> None:
+        if not signature:
+            return
+        tag = signature[0]
+        if tag == "ACT":
+            return
+        if tag == "SEQ":
+            for f in signature[2]:
+                _walk(f, in_loop)
+        elif tag == "XOR":
+            _, nid, idx, inner = signature
+            if not in_loop:
+                label = _first_activity_label(_xor_child(
+                    id_to_node.get(nid), idx,
+                ))
+                if label:
+                    features.append(f"takes the {label} branch")
+            _walk(inner, in_loop)
+        elif tag == "PAR":
+            for f in signature[2]:
+                _walk(f, in_loop)
+        elif tag == "LOOP":
+            _, nid, coarse = signature
+            body_label = _first_activity_label(_loop_body(
+                id_to_node.get(nid)
+            ))
+            if body_label:
+                if coarse == 2:
+                    features.append(f"repeats {body_label}")
+                elif coarse == 0:
+                    features.append(f"skips {body_label}")
+                # coarse == 1 is the common "loop runs once" case;
+                # not worth mentioning in the intent sentence.
+        elif tag == "LOOP_FINE":
+            for f in signature[3]:
+                _walk(f, True)
+
+    _walk(variant.signature, False)
+    if not features:
+        return f"Covers {variant.frequency} case(s)."
+    # Keep the sentence reasonable: at most three features, then ``...``.
+    if len(features) > 3:
+        features = features[:3] + ["..."]
+    joined = ", then ".join(features)
+    return f"Covers {variant.frequency} case(s) that {joined}."
+
+
+def _build_id_to_node_map(tree, node_ids: Dict[int, int]) -> Dict[int, object]:
+    """Invert ``node_ids`` so we can look up the original tree node
+    object from its stable signature ID — needed to fetch activity
+    labels for XOR branches and loop bodies."""
+    out: Dict[int, object] = {}
+
+    def _walk(node):
+        out[node_ids[id(node)]] = node
+        for c in (getattr(node, "children", None) or []):
+            _walk(c)
+
+    _walk(tree)
+    return out
+
+
+def _xor_child(xor_node, branch_idx: int):
+    """Safely fetch ``xor_node.children[branch_idx]`` or ``None``."""
+    if xor_node is None:
+        return None
+    children = getattr(xor_node, "children", None) or []
+    if 0 <= branch_idx < len(children):
+        return children[branch_idx]
+    return None
+
+
+def _loop_body(loop_node):
+    """Return the body subtree (children[0]) of a LOOP, or ``None``."""
+    if loop_node is None:
+        return None
+    children = getattr(loop_node, "children", None) or []
+    return children[0] if children else None
 
 
 # ---------------------------------------------------------------------------
@@ -412,18 +604,109 @@ def _collect_loop_tree_ids(tree, node_ids: Dict[int, int]) -> List[int]:
     The converter creates a ``LoopJoin`` + ``LoopFork`` pair per LOOP
     node in the same pre-order, so list indices line up after
     filtering the UCM map's nodes by name."""
-    out: List[int] = []
+    return [nid for nid, _ in _collect_loop_tree_nodes(tree, node_ids)]
+
+
+def _collect_loop_tree_nodes(
+    tree, node_ids: Dict[int, int],
+) -> List[Tuple[int, object]]:
+    """Pre-order list of ``(tree_id, loop_tree_node)`` for every LOOP
+    operator. Same iteration order as :func:`_collect_loop_tree_ids`
+    so callers can pair UCM ``LoopJoin``/``LoopFork`` nodes with the
+    originating tree subtree (needed to derive a human-readable
+    counter name from the loop body's activities)."""
+    out: List[Tuple[int, object]] = []
 
     def _walk(node):
         op = _op_value(node)
         children = list(getattr(node, "children", None) or [])
         if op == _LOOP and len(children) >= 2:
-            out.append(node_ids[id(node)])
+            out.append((node_ids[id(node)], node))
         for c in children:
             _walk(c)
 
     _walk(tree)
     return out
+
+
+def _short_activity_token(text: str, max_len: int = 18) -> str:
+    """Turn an activity label like ``"Amend Documentation"`` into a
+    compact camel-case token like ``"AmendDoc"``.
+
+    Drops non-word characters, title-cases each word, then truncates
+    to ``max_len``. Falls back to ``"Step"`` for empty input."""
+    if not text:
+        return "Step"
+    # Split on any non-word character *and* on underscores — activity
+    # labels often contain ``_`` as a soft separator (e.g.
+    # ``"Close Assessment_Human"``), and treating them as word
+    # boundaries gives a cleaner camel-case token after truncation.
+    parts = re.split(r"[\W_]+", str(text))
+    parts = [p for p in parts if p]
+    if not parts:
+        return "Step"
+    # Title-case each part; keep all-caps acronyms intact.
+    pieces = [p if p.isupper() else p[:1].upper() + p[1:].lower()
+              for p in parts]
+    joined = "".join(pieces)
+    if len(joined) <= max_len:
+        return joined
+    # Truncate evenly across pieces — keep at least the first piece
+    # whole, then take prefixes of remaining pieces.
+    out = pieces[0][:max_len]
+    for p in pieces[1:]:
+        if len(out) >= max_len:
+            break
+        room = max_len - len(out)
+        out += p[:max(3, room)]
+    return out[:max_len]
+
+
+def _loop_context_name(
+    loop_tree_node, fallback_id: int,
+) -> str:
+    """Derive a short, contextual counter-variable name for a LOOP
+    tree node from its body and (if needed) its redo activities.
+
+    Result format: ``Loop_<ShortToken>``, e.g. ``Loop_AmendDoc`` for
+    a loop whose body or redo references ``"Amend Documentation"``.
+    Falls back to ``loop_counter_<tree_id>`` (the historical naming)
+    when no activity label is reachable from either branch."""
+    children = list(getattr(loop_tree_node, "children", None) or [])
+    body = children[0] if children else None
+    redo = children[1] if len(children) > 1 else None
+
+    # Prefer the body's first activity. Fall back to the redo's
+    # first activity when the body is tau / unlabelled.
+    chosen: Optional[str] = None
+    for candidate in (body, redo):
+        if candidate is None:
+            continue
+        label = _first_activity_label(candidate)
+        if label:
+            chosen = label
+            break
+    if not chosen:
+        return f"loop_counter_{fallback_id}"
+    return f"Loop_{_short_activity_token(chosen)}"
+
+
+def _first_activity_label(tree_node) -> Optional[str]:
+    """Depth-first search of ``tree_node`` for the first visible
+    activity (non-``tau``) leaf, returning its label or ``None``."""
+    op = _op_value(tree_node)
+    if op is None:
+        lab = _label(tree_node)
+        return str(lab) if lab is not None else None
+    for c in (getattr(tree_node, "children", None) or []):
+        found = _first_activity_label(c)
+        if found is not None:
+            return found
+    return None
+
+
+def _label(node):
+    return getattr(node, "label", None)
 
 
 def _find_loop_body_resp_ref(
@@ -534,10 +817,25 @@ def _wire_loop_counters(
         # Skip silently rather than mis-attribute conditions.
         return {}
 
+    # Pull the LOOP tree nodes too so each counter gets a contextual
+    # name (e.g. ``Loop_AmendDoc``) derived from its body / redo
+    # activities. The order matches tree_loop_ids exactly.
+    loop_tree_nodes = _collect_loop_tree_nodes(tree, node_ids)
+    name_taken: set = {v.name for v in ucm.variables}
     counters: Dict[int, UCM.Variable] = {}
     for i, tree_loop_id in enumerate(tree_loop_ids):
         lf, lj = loop_forks[i], loop_joins[i]
-        name = f"loop_counter_{tree_loop_id}"
+        loop_node = loop_tree_nodes[i][1]
+        # Pick a unique contextual name, falling back to the historic
+        # ``loop_counter_<id>`` form on collision (rare — happens when
+        # two loops share the same body activity name).
+        base_name = _loop_context_name(loop_node, tree_loop_id)
+        name = base_name
+        suffix = 2
+        while name in name_taken:
+            name = f"{base_name}_{suffix}"
+            suffix += 1
+        name_taken.add(name)
         counter = ucm.get_or_add_variable(name, type="integer")
         counters[tree_loop_id] = counter
 

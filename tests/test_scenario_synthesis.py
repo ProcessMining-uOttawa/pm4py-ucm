@@ -7,8 +7,23 @@ ClusteringResult."""
 from __future__ import annotations
 
 import io
+import re
 
 import pm4py_ucm
+
+#: The synthesizer names each per-loop counter contextually
+#: (``Loop_AmendDoc``) and falls back to the historical
+#: ``loop_counter_<tree_id>`` form only when the loop body has no
+#: usable activity label. Tests that probe "is this a loop counter?"
+#: match either form.
+_LOOP_COUNTER_RE = re.compile(r"(?:Loop_|loop_counter_)\w+")
+
+
+def _is_loop_counter_name(name: str) -> bool:
+    """True iff ``name`` is one of the synthesizer's per-loop counter
+    variable names. Anchored to the start so substrings inside other
+    names don't match."""
+    return bool(_LOOP_COUNTER_RE.match(name))
 from pm4py_ucm.algo.discovery.variants import clustering as _clustering
 from pm4py_ucm.algo.discovery.scenarios import synthesis as _scenarios
 from pm4py_ucm.algo.discovery.scenarios import reports as _reports
@@ -133,7 +148,10 @@ def test_synthesis_populates_scenario_group_and_variables():
         assert len(sc.initializations) == 1
         init = sc.initializations[0]
         assert init.variable is var
-        assert init.value == sc.name  # variant_id matches scenario name
+        # Scenario name is ``<variant_id>_<short_suffix>`` (e.g.
+        # ``v1_Quick``); the initialisation value is just the
+        # ``variant_id`` prefix.
+        assert sc.name.startswith(init.value + "_") or sc.name == init.value
 
 
 def test_synthesis_attaches_start_and_end_points():
@@ -228,7 +246,7 @@ def test_synthesis_creates_integer_counter_variable_for_loops():
         ucm, loop_tree, result, emit_conditions=True,
     )
     # One integer variable named loop_counter_<tree_id> on the UCM.
-    counters = [v for v in ucm.variables if v.name.startswith("loop_counter_")]
+    counters = [v for v in ucm.variables if _is_loop_counter_name(v.name)]
     assert len(counters) == 1
     assert counters[0].type == "integer"
 
@@ -261,7 +279,7 @@ def test_synthesis_loopfork_conditions_sit_on_direct_outgoing_arc():
     # condition (no None and no stranded "true" on the bend hop).
     for arc in loop_fork.succ_connections:
         assert arc.condition is not None
-        assert "loop_counter_" in (arc.condition.expression or "")
+        assert _LOOP_COUNTER_RE.search(arc.condition.expression or "")
     # Crucially the *immediate* downstream bend->target arc no longer
     # carries the counter condition (jUCMNav would ignore it there
     # and treat the LoopFork branch as default true).
@@ -271,7 +289,7 @@ def test_synthesis_loopfork_conditions_sit_on_direct_outgoing_arc():
             continue
         for downstream in target.succ_connections:
             expr = downstream.condition.expression if downstream.condition else ""
-            assert "loop_counter_" not in expr
+            assert not _LOOP_COUNTER_RE.search(expr)
 
 
 def test_synthesis_orfork_branch_conditions_sit_on_direct_outgoing_arc():
@@ -344,7 +362,7 @@ def test_synthesis_inserts_loop_entry_guard_before_loop_join():
     assert any("> 0" in e for e in exprs)
     assert any("<= 0" in e for e in exprs)
     for e in exprs:
-        assert "loop_counter_" in e
+        assert _LOOP_COUNTER_RE.search(e)
     # The bypass arc must land on the same post-loop node the
     # LoopFork's exit arc reaches — otherwise scenarios that
     # bypass the loop drop into the wrong continuation.
@@ -395,7 +413,11 @@ def test_synthesis_loopfork_conditions_are_mutually_exclusive_and_exhaustive():
     # Both halves expressed in terms of the counter; not the default
     # ``true`` and not the brittle ``== 0`` that fails on negatives.
     # ``<`` is XML-escaped to ``&lt;`` in attribute values.
-    assert 'expression="loop_counter_' in text
+    # Counter expressions use contextual names like ``Loop_Review`` —
+    # accept either the new form or the historical
+    # ``loop_counter_<id>`` fallback inside the XMI attribute.
+    assert ('expression="Loop_' in text
+            or 'expression="loop_counter_' in text)
     assert '&lt;= 0' in text
     assert '> 0' in text
     assert '== 0' not in text  # explicit guard against regression
@@ -474,7 +496,7 @@ def test_synthesis_loop_entry_guard_excluded_from_orfork_condition_emission():
     for arc in guard.succ_connections:
         expr = arc.condition.expression if arc.condition else ""
         assert "variant_id" not in expr
-        assert "loop_counter_" in expr
+        assert _LOOP_COUNTER_RE.search(expr)
 
 
 def test_synthesis_loop_body_responsibility_carries_decrement():
@@ -496,7 +518,7 @@ def test_synthesis_loop_body_responsibility_carries_decrement():
         ucm, loop_tree, result, emit_conditions=True,
     )
     body_resp = next(r for r in ucm.responsibilities if r.name == "Review")
-    assert "loop_counter_" in (body_resp.expression or "")
+    assert _LOOP_COUNTER_RE.search(body_resp.expression or "")
     assert "= " in body_resp.expression
     assert "- 1" in body_resp.expression
 
@@ -523,12 +545,16 @@ def test_synthesis_per_variant_loop_counter_initialised_to_max_iterations():
         ucm, loop_tree, result, emit_conditions=True,
         max_loop_iterations=None,
     )
-    by_name = {sc.name: sc for sc in group_uncapped.scenarios}
+    # Scenario names now carry a contextual suffix (``v1_Review``,
+    # ``v2_TwoReview`` etc.). Look them up by the ``v<N>`` prefix.
+    def _find(scenarios, vid):
+        return next(sc for sc in scenarios if sc.name.startswith(vid + "_")
+                    or sc.name == vid)
     for vname, expected in (("v1", "1"), ("v2", "3")):
-        sc = by_name[vname]
+        sc = _find(group_uncapped.scenarios, vname)
         counter_inits = [
             i for i in sc.initializations
-            if i.variable.name.startswith("loop_counter_")
+            if _is_loop_counter_name(i.variable.name)
         ]
         assert len(counter_inits) == 1
         assert counter_inits[0].value == expected
@@ -538,10 +564,10 @@ def test_synthesis_per_variant_loop_counter_initialised_to_max_iterations():
         ucm2, loop_tree, result, emit_conditions=True,
         max_loop_iterations=2,
     )
-    by_name = {sc.name: sc for sc in group_capped.scenarios}
+    sc_v2 = _find(group_capped.scenarios, "v2")
     assert next(
-        i for i in by_name["v2"].initializations
-        if i.variable.name.startswith("loop_counter_")
+        i for i in sc_v2.initializations
+        if _is_loop_counter_name(i.variable.name)
     ).value == "2"
 
 
@@ -566,7 +592,7 @@ def test_synthesis_synthesises_decrement_resp_when_body_is_tau():
         "expected a synthetic decrement_<counter> Responsibility "
         "when the loop body has no real RespRef"
     )
-    assert any("loop_counter_" in (r.expression or "") for r in decrement_resps)
+    assert any(_LOOP_COUNTER_RE.search(r.expression or "") for r in decrement_resps)
 
 
 def test_synthesis_outside_loop_xor_conditions_emitted_when_other_xors_are_inside_loops():
@@ -688,7 +714,7 @@ def test_synthesis_inside_loop_xor_distributes_branches_via_loop_counter():
         # comparison — that's the whole point of the combined
         # condition. The fallback true/false split would fail this.
         has_variant_id_branch = any("variant_id" in e for e in exprs)
-        has_counter_branch = any("loop_counter_" in e for e in exprs)
+        has_counter_branch = any(_LOOP_COUNTER_RE.search(e) for e in exprs)
         assert has_variant_id_branch
         assert has_counter_branch
 
@@ -719,7 +745,7 @@ def test_synthesis_inside_loop_xor_uses_loop_counter_in_conditions():
             expr = arc.condition.expression if arc.condition else ""
             # Every branch's condition references the loop counter
             # (or is ``false`` for a branch nobody took).
-            assert "loop_counter_" in expr or expr == "false", (
+            assert _LOOP_COUNTER_RE.search(expr) or expr == "false", (
                 f"inside-loop XOR condition must reference the loop "
                 f"counter or be ``false``; got {expr!r}"
             )
