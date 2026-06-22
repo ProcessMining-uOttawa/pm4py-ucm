@@ -330,7 +330,7 @@ def _synthesize(
     log_kind: str,
     csv_columns,
     noise_threshold: float,
-    condition_strategy: str,         # "variant" | "data-driven" | "both"
+    condition_strategy: str,         # "variant" | "data-driven"
     max_loop_iterations: int,
     decision_tree_max_depth: int,
     group_name: str,
@@ -342,18 +342,12 @@ def _synthesize(
 ) -> Dict[str, Any]:
     """Run the full concurrency-aware variant + scenario pipeline.
 
-    Three strategies:
+    Two strategies, picked one at a time:
 
     * ``"variant"`` — single ``MinedScenarios`` group, lossless arc
       conditions (``variant_id == v_i``).
     * ``"data-driven"`` — single group, arc conditions mined from
       case-level attributes via a per-OR-fork DecisionTreeClassifier.
-    * ``"both"`` — two groups in one model. The variant-driven group
-      drives the arc conditions (lossless replay); the data-driven
-      group is added with ``emit_conditions=False`` for inspection /
-      comparison alongside its own attribute variables and
-      representative-value initialisations. Branch resolution at
-      runtime follows the variant-driven conditions.
 
     ``decomposition_spec`` follows the sidebar's cache-friendly form
     (``"off"`` or a sorted tuple of ``(key, value)`` pairs) and is
@@ -402,45 +396,18 @@ def _synthesize(
     _phase("Clustering variants...")
     clustering = _clustering_mod.cluster(log, tree)
 
-    # Synthesize scenarios on the shared UCM. For "both" we run twice:
-    # variant-driven first with emit_conditions=True (so arcs end up
-    # with the lossless variant_id encoding), then data-driven with
-    # emit_conditions=False (so the data-driven attribute variables
-    # and second scenario group are added without overwriting arc
-    # conditions).
-    variant_group = data_group = None
-    if condition_strategy in ("variant", "both"):
-        _phase("Synthesizing variant-driven scenarios...")
-        v_group_name = (
-            group_name if condition_strategy == "variant"
-            else f"{group_name}_variant"
-        )
-        variant_group = _scenarios.synthesize_scenarios(
-            ucm, tree, clustering,
-            group_name=v_group_name,
-            emit_conditions=True,
-            max_loop_iterations=int(max_loop_iterations),
-            condition_strategy="variant",
-        )
-    if condition_strategy in ("data-driven", "both"):
-        _phase("Synthesizing data-driven scenarios...")
-        d_group_name = (
-            group_name if condition_strategy == "data-driven"
-            else f"{group_name}_data_driven"
-        )
-        data_group = _scenarios.synthesize_scenarios(
-            ucm, tree, clustering,
-            group_name=d_group_name,
-            # In "both" mode, suppress arc condition emission so the
-            # variant-driven conditions remain authoritative for
-            # branch resolution. In stand-alone data-driven mode we
-            # want the mined expressions to drive the arcs, so emit.
-            emit_conditions=(condition_strategy == "data-driven"),
-            max_loop_iterations=int(max_loop_iterations),
-            condition_strategy="data-driven",
-            log=log,
-            decision_tree_max_depth=int(decision_tree_max_depth),
-        )
+    _phase(f"Synthesizing {condition_strategy} scenarios...")
+    synth_kwargs: Dict[str, Any] = dict(
+        group_name=group_name,
+        emit_conditions=True,
+        max_loop_iterations=int(max_loop_iterations),
+        condition_strategy=condition_strategy,
+    )
+    if condition_strategy == "data-driven":
+        synth_kwargs["log"] = log
+        synth_kwargs["decision_tree_max_depth"] = int(decision_tree_max_depth)
+    group = _scenarios.synthesize_scenarios(ucm, tree, clustering, **synth_kwargs)
+    data_group = group if condition_strategy == "data-driven" else None
 
     _phase("Writing artifacts...")
     with tempfile.TemporaryDirectory() as td:
@@ -819,26 +786,19 @@ with scenarios_tab:
     cfg_left, cfg_right = st.columns([2, 1])
     with cfg_left:
         if _has_sklearn:
-            strategy_opts = ["variant", "data-driven", "both"]
+            strategy_opts = ["variant", "data-driven"]
             strategy_help = (
                 "**variant**: lossless — each scenario replays its "
                 "variant exactly. "
                 "**data-driven**: mine a DecisionTreeClassifier per "
                 "outside-loop XOR over case attributes; arc "
-                "conditions become business-readable rules. "
-                "**both**: emit two scenario groups in one model. "
-                "Variant-driven conditions stay on the arcs (lossless "
-                "replay); the data-driven group is added for "
-                "inspection with its own attribute variables, but its "
-                "scenarios won't disambiguate branches at runtime "
-                "(variant_id does that)."
+                "conditions become business-readable rules."
             )
         else:
             strategy_opts = ["variant"]
             strategy_help = (
-                "**variant**: lossless. **data-driven** and **both** "
-                "require `scikit-learn` (not installed in this "
-                "environment)."
+                "**variant**: lossless. **data-driven** requires "
+                "`scikit-learn` (not installed in this environment)."
             )
         condition_strategy = st.radio(
             "Condition strategy",
@@ -866,7 +826,7 @@ with scenarios_tab:
         decision_tree_max_depth = st.slider(
             "decision_tree_max_depth", min_value=1, max_value=6,
             value=3, step=1,
-            disabled=(condition_strategy not in ("data-driven", "both")),
+            disabled=(condition_strategy != "data-driven"),
             help=(
                 "Per-OR-fork DecisionTreeClassifier max depth. Higher "
                 "captures more nuance at the cost of less readable "
@@ -918,7 +878,7 @@ with scenarios_tab:
             "Configure the run above and click **Synthesize scenarios**."
         )
     else:
-        m1, m2, m3, m4, m5, m6 = st.columns(6)
+        m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Variants", synth["n_variants"])
         m2.metric("Sequence variants", synth["n_sequence_variants"])
         m3.metric(
@@ -928,13 +888,6 @@ with scenarios_tab:
         )
         m4.metric("Fitness", f"{synth['fitness_percentage'] * 100:.1f}%")
         m5.metric("Scenarios", synth["n_scenarios"])
-        m6.metric("Groups", synth["n_groups"])
-        if synth["n_groups"] > 1:
-            st.caption(
-                "Scenario groups in the model: "
-                + ", ".join(f"`{g}`" for g in synth["group_names"])
-                + ". Arc conditions follow the variant-driven encoding."
-            )
 
         if synth["n_noise"]:
             st.warning(
@@ -992,4 +945,4 @@ with scenarios_tab:
                 mime="text/csv",
             )
         else:
-            d4.caption("_condition_mining.csv is only emitted in data-driven or both mode._")
+            d4.caption("_condition_mining.csv is only emitted in data-driven mode._")
