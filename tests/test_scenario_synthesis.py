@@ -995,6 +995,67 @@ def test_synthesis_data_driven_abandons_with_warning_when_no_useful_attributes()
     assert "variant_id" not in var_names
 
 
+# ---------------------------------------------------------------------------
+# Decomposition × scenarios
+# ---------------------------------------------------------------------------
+
+def test_synthesis_runs_with_decomposition_and_root_map_conditions_emit():
+    """Scenarios synthesize cleanly on a decomposed (multi-map) UCM
+    with static stubs + a single plug-in. The synthesizer was designed
+    against a flat single-map UCM; this regression locks in the
+    "no crash + serializable" contract for the decomposed case.
+
+    Known limitation, intentionally not fixed here: OR-fork
+    ``variant_id == V`` conditions are only emitted for forks that
+    live in the root map. An XOR pushed into a plug-in keeps its
+    converter-default arc condition. We assert *root-map* forks
+    receive conditions; plug-in forks may or may not (callers who
+    need every fork conditioned should use ``decomposition=None``
+    or stay on the flat default).
+    """
+    # Top-level sequence with one small head and one meaty tail.
+    # The meaty tail carries an XOR that becomes a plug-in OrFork;
+    # the head's XOR (added below) stays in the root map.
+    tree = _seq(
+        _leaf("Start"),
+        _xor(_leaf("RootA"), _leaf("RootB")),
+        _seq(_leaf("S1"), _leaf("S2"), _leaf("S3"), _leaf("S4"), _leaf("S5")),
+    )
+    log = []
+    for i in range(30):
+        log.append((f"a{i}", ["Start", "RootA", "S1", "S2", "S3", "S4", "S5"]))
+    for i in range(20):
+        log.append((f"b{i}", ["Start", "RootB", "S1", "S2", "S3", "S4", "S5"]))
+
+    decomp = {
+        "on_root_sequence": True, "on_parallel": False,
+        "on_alternative": False, "on_loop": False,
+        "max_leaves_per_map": 1000, "min_leaves_to_decompose": 3,
+        "balance_ratio": 0.0,
+    }
+    ucm = pm4py_ucm.convert_to_ucm(tree, decomposition=decomp)
+    # Root + 1 plug-in: the "single plug-in" configuration this test
+    # is named for.
+    assert len(ucm.maps) == 2
+
+    result = _clustering.cluster(log, tree)
+    group = _scenarios.synthesize_scenarios(ucm, tree, result)
+
+    # Two variants, two scenarios.
+    assert len(group.scenarios) == 2
+
+    # Round-trip the UCM through the exporter — guards against any
+    # crash in serializing scenarios attached to a UCM whose XORs
+    # live across multiple maps.
+    text = _jucm_exporter.serialize_to_string(ucm)
+    assert "<scenarioGroups" in text
+
+    # Root map's XOR is conditioned. We don't assert which branch
+    # carries which value — only that variant_id == ... lands in
+    # the file somewhere.
+    assert "variant_id == v1" in text or "variant_id == v2" in text
+
+
 def test_jucm_export_without_scenarios_remains_byte_stable_legacy():
     """A UCM with no scenario groups must produce identical output to
     the pre-scenarios legacy exporter (no spurious <scenarioGroups/>,
