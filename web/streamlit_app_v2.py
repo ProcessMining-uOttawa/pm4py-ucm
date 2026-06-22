@@ -35,6 +35,8 @@ import streamlit as st
 import pm4py
 import pm4py_ucm
 from pm4py_ucm.algo.discovery.scenarios import reports as _reports
+from pm4py_ucm.algo.discovery.scenarios import synthesis as _scenarios
+from pm4py_ucm.algo.discovery.variants import clustering as _clustering_mod
 from pm4py_ucm.visualization.ucm import visualizer as _visualizer
 from pm4py_ucm.visualization.ucm import stacked as _stacked
 
@@ -328,24 +330,37 @@ def _synthesize(
     log_kind: str,
     csv_columns,
     noise_threshold: float,
-    condition_strategy: str,
+    condition_strategy: str,         # "variant" | "data-driven" | "both"
     max_loop_iterations: int,
     decision_tree_max_depth: int,
     group_name: str,
+    decomposition_spec,              # "off" | tuple of (key, value) pairs
+    resource_attribute: str,
+    min_support: float,
     _file_hash: str,
     _status=None,
 ) -> Dict[str, Any]:
     """Run the full concurrency-aware variant + scenario pipeline.
 
-    Always invokes ``discover_scenarios`` with ``decomposition=None``
-    so OR-fork conditions land on every XOR — the documented
-    limitation otherwise is that XORs pushed into plug-in maps lose
-    their ``variant_id == V`` condition.
+    Three strategies:
 
-    Returns a dict with the .jucm bytes, the three CSV reports as
-    bytes, headline metrics, the variants table (already as a
-    DataFrame for inline preview), and the condition-mining table
-    (data-driven only, else None).
+    * ``"variant"`` — single ``MinedScenarios`` group, lossless arc
+      conditions (``variant_id == v_i``).
+    * ``"data-driven"`` — single group, arc conditions mined from
+      case-level attributes via a per-OR-fork DecisionTreeClassifier.
+    * ``"both"`` — two groups in one model. The variant-driven group
+      drives the arc conditions (lossless replay); the data-driven
+      group is added with ``emit_conditions=False`` for inspection /
+      comparison alongside its own attribute variables and
+      representative-value initialisations. Branch resolution at
+      runtime follows the variant-driven conditions.
+
+    ``decomposition_spec`` follows the sidebar's cache-friendly form
+    (``"off"`` or a sorted tuple of ``(key, value)`` pairs) and is
+    forwarded to the converter. When decomposition is active, XORs
+    that land in plug-in maps will not receive arc conditions — this
+    is a known limitation of the synthesizer, surfaced as a UI
+    warning before this function is called.
     """
     def _phase(label: str) -> None:
         if _status is not None:
@@ -359,19 +374,73 @@ def _synthesize(
         log, noise_threshold=float(noise_threshold),
     )
 
-    _phase(
-        f"Synthesizing scenarios "
-        f"({condition_strategy})..."
+    # Resolve resource params + decomposition argument the same way
+    # the model-mining path does, so the UCM the scenarios attach to
+    # matches the Model tab when both use the same settings.
+    params: Dict[str, Any] = {"process_tree": tree}
+    attrs = [a.strip() for a in resource_attribute.replace(",", " ").split()
+             if a.strip()]
+    if not attrs:
+        params["resource_attribute"] = False
+    elif len(attrs) == 1:
+        params["resource_attribute"] = attrs[0]
+    else:
+        params["resource_attribute"] = attrs
+    if attrs:
+        params["resource_parameters"] = {"min_support": float(min_support)}
+
+    if decomposition_spec == "off":
+        decomp_arg: Any = "off"
+    else:
+        decomp_arg = dict(decomposition_spec)
+
+    _phase("Converting process tree to UCM...")
+    ucm = pm4py_ucm.discover_ucm_inductive(
+        log, parameters=params, decomposition=decomp_arg,
     )
-    ucm, clustering = pm4py_ucm.discover_scenarios(
-        log,
-        parameters={"process_tree": tree},
-        decomposition=None,
-        group_name=group_name,
-        max_loop_iterations=int(max_loop_iterations),
-        condition_strategy=condition_strategy,
-        decision_tree_max_depth=int(decision_tree_max_depth),
-    )
+
+    _phase("Clustering variants...")
+    clustering = _clustering_mod.cluster(log, tree)
+
+    # Synthesize scenarios on the shared UCM. For "both" we run twice:
+    # variant-driven first with emit_conditions=True (so arcs end up
+    # with the lossless variant_id encoding), then data-driven with
+    # emit_conditions=False (so the data-driven attribute variables
+    # and second scenario group are added without overwriting arc
+    # conditions).
+    variant_group = data_group = None
+    if condition_strategy in ("variant", "both"):
+        _phase("Synthesizing variant-driven scenarios...")
+        v_group_name = (
+            group_name if condition_strategy == "variant"
+            else f"{group_name}_variant"
+        )
+        variant_group = _scenarios.synthesize_scenarios(
+            ucm, tree, clustering,
+            group_name=v_group_name,
+            emit_conditions=True,
+            max_loop_iterations=int(max_loop_iterations),
+            condition_strategy="variant",
+        )
+    if condition_strategy in ("data-driven", "both"):
+        _phase("Synthesizing data-driven scenarios...")
+        d_group_name = (
+            group_name if condition_strategy == "data-driven"
+            else f"{group_name}_data_driven"
+        )
+        data_group = _scenarios.synthesize_scenarios(
+            ucm, tree, clustering,
+            group_name=d_group_name,
+            # In "both" mode, suppress arc condition emission so the
+            # variant-driven conditions remain authoritative for
+            # branch resolution. In stand-alone data-driven mode we
+            # want the mined expressions to drive the arcs, so emit.
+            emit_conditions=(condition_strategy == "data-driven"),
+            max_loop_iterations=int(max_loop_iterations),
+            condition_strategy="data-driven",
+            log=log,
+            decision_tree_max_depth=int(decision_tree_max_depth),
+        )
 
     _phase("Writing artifacts...")
     with tempfile.TemporaryDirectory() as td:
@@ -389,13 +458,11 @@ def _synthesize(
         case_map_csv = case_buf.getvalue().encode("utf-8")
 
         condition_csv: Optional[bytes] = None
-        if condition_strategy == "data-driven":
-            group = ucm.scenario_groups[0]
+        if data_group is not None:
             cond_buf = io.StringIO()
-            _reports.write_condition_mining_report(group, cond_buf)
+            _reports.write_condition_mining_report(data_group, cond_buf)
             condition_csv = cond_buf.getvalue().encode("utf-8")
 
-    # Build the variants table for inline preview.
     variants_df = pd.read_csv(io.BytesIO(variants_csv))
     condition_df: Optional[pd.DataFrame] = None
     if condition_csv is not None:
@@ -414,6 +481,8 @@ def _synthesize(
         "fitness_percentage": clustering.fitness_percentage,
         "n_noise": len(clustering.noise_case_ids),
         "n_scenarios": sum(len(g.scenarios) for g in ucm.scenario_groups),
+        "n_groups": len(ucm.scenario_groups),
+        "group_names": [g.name for g in ucm.scenario_groups],
         "n_maps": len(ucm.maps),
     }
 
@@ -724,12 +793,21 @@ with scenarios_tab:
     st.subheader("Synthesize executable scenarios")
     st.caption(
         "Concurrency-aware variant clustering on the discovered "
-        "process tree → one ScenarioDef per variant on the URN model. "
-        "The Scenarios tab always uses `decomposition=None` regardless "
-        "of the sidebar setting, so OR-forks in every XOR receive a "
-        "variant_id condition (XORs pushed into plug-in maps would "
-        "otherwise lose their conditions)."
+        "process tree → one ScenarioDef per variant on the URN model, "
+        "attached to the UCM built with the sidebar's decomposition "
+        "setting."
     )
+
+    if decomposition_preset != "off":
+        st.warning(
+            "Decomposition is **on** (`{}`). The synthesizer only "
+            "emits OR-fork conditions on XORs that land in the root "
+            "map; XORs pushed into plug-in maps keep the converter's "
+            "default arc condition (`true`) and will not disambiguate "
+            "branches in jUCMNav. For scenarios that replay every "
+            "choice exactly, set decomposition to **off** in the "
+            "sidebar.".format(decomposition_preset)
+        )
 
     # Detect sklearn so we can grey out data-driven cleanly.
     try:
@@ -741,19 +819,26 @@ with scenarios_tab:
     cfg_left, cfg_right = st.columns([2, 1])
     with cfg_left:
         if _has_sklearn:
-            strategy_opts = ["variant", "data-driven"]
+            strategy_opts = ["variant", "data-driven", "both"]
             strategy_help = (
                 "**variant**: lossless — each scenario replays its "
-                "variant exactly. **data-driven**: mine a "
-                "DecisionTreeClassifier per outside-loop XOR over "
-                "case attributes; arc conditions become "
-                "business-readable rules."
+                "variant exactly. "
+                "**data-driven**: mine a DecisionTreeClassifier per "
+                "outside-loop XOR over case attributes; arc "
+                "conditions become business-readable rules. "
+                "**both**: emit two scenario groups in one model. "
+                "Variant-driven conditions stay on the arcs (lossless "
+                "replay); the data-driven group is added for "
+                "inspection with its own attribute variables, but its "
+                "scenarios won't disambiguate branches at runtime "
+                "(variant_id does that)."
             )
         else:
             strategy_opts = ["variant"]
             strategy_help = (
-                "**variant**: lossless. **data-driven** requires "
-                "`scikit-learn` (not installed in this environment)."
+                "**variant**: lossless. **data-driven** and **both** "
+                "require `scikit-learn` (not installed in this "
+                "environment)."
             )
         condition_strategy = st.radio(
             "Condition strategy",
@@ -781,7 +866,7 @@ with scenarios_tab:
         decision_tree_max_depth = st.slider(
             "decision_tree_max_depth", min_value=1, max_value=6,
             value=3, step=1,
-            disabled=(condition_strategy != "data-driven"),
+            disabled=(condition_strategy not in ("data-driven", "both")),
             help=(
                 "Per-OR-fork DecisionTreeClassifier max depth. Higher "
                 "captures more nuance at the cost of less readable "
@@ -799,6 +884,8 @@ with scenarios_tab:
         file_hash, log_kind, csv_columns, noise_threshold,
         condition_strategy, max_loop_iterations,
         decision_tree_max_depth, group_name,
+        decomposition_spec, resource_attribute,
+        effective_min_support,
     )
 
     if run or st.session_state.get("synth_fp") == _synth_fp:
@@ -809,7 +896,9 @@ with scenarios_tab:
                     log_bytes, log_kind, csv_columns,
                     noise_threshold, condition_strategy,
                     max_loop_iterations, decision_tree_max_depth,
-                    group_name, file_hash, _status=status,
+                    group_name, decomposition_spec,
+                    resource_attribute, effective_min_support,
+                    file_hash, _status=status,
                 )
                 status.update(label="Done.", state="complete")
             st.session_state["synth_fp"] = _synth_fp
@@ -829,7 +918,7 @@ with scenarios_tab:
             "Configure the run above and click **Synthesize scenarios**."
         )
     else:
-        m1, m2, m3, m4, m5 = st.columns(5)
+        m1, m2, m3, m4, m5, m6 = st.columns(6)
         m1.metric("Variants", synth["n_variants"])
         m2.metric("Sequence variants", synth["n_sequence_variants"])
         m3.metric(
@@ -839,6 +928,13 @@ with scenarios_tab:
         )
         m4.metric("Fitness", f"{synth['fitness_percentage'] * 100:.1f}%")
         m5.metric("Scenarios", synth["n_scenarios"])
+        m6.metric("Groups", synth["n_groups"])
+        if synth["n_groups"] > 1:
+            st.caption(
+                "Scenario groups in the model: "
+                + ", ".join(f"`{g}`" for g in synth["group_names"])
+                + ". Arc conditions follow the variant-driven encoding."
+            )
 
         if synth["n_noise"]:
             st.warning(
@@ -863,10 +959,16 @@ with scenarios_tab:
         st.subheader("Downloads")
         stem = Path(log_name).stem
         d1, d2, d3, d4 = st.columns(4)
+        # Filename suffix encodes strategy AND decomposition so a user
+        # comparing several runs in a single folder can tell them apart.
+        _suffix_bits = [condition_strategy]
+        if decomposition_preset != "off":
+            _suffix_bits.append(f"decomp_{decomposition_preset}")
+        _jucm_suffix = "_".join(_suffix_bits)
         d1.download_button(
             "Download .jucm (scenarios)", data=synth["jucm"],
             file_name=_safe_download_name(
-                f"{stem}_{condition_strategy}", ".jucm"
+                f"{stem}_{_jucm_suffix}", ".jucm"
             ),
             mime="application/xml",
         )
@@ -890,4 +992,4 @@ with scenarios_tab:
                 mime="text/csv",
             )
         else:
-            d4.caption("_condition_mining.csv is only emitted in data-driven mode._")
+            d4.caption("_condition_mining.csv is only emitted in data-driven or both mode._")
