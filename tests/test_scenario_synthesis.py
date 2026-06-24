@@ -1277,6 +1277,71 @@ def test_synthesis_decomposed_loop_into_stub_keeps_single_bound_entry():
             )
 
 
+def test_synthesis_data_driven_sanitises_enum_values_starting_with_digits():
+    """jUCMNav identifiers (variable names AND enum values) must
+    start with a letter or underscore. Numeric / range-like attribute
+    values (``"3"``, ``"3_5"``, ``"500"``) are common in real logs
+    (claim-amount buckets, region codes) and would otherwise produce
+    a model jUCMNav rejects at load. The sanitiser prefixes a single
+    underscore when the resulting identifier would start with a
+    digit; existing letter-leading values are untouched.
+    """
+    pytest = __import__("pytest")
+    pytest.importorskip("sklearn")
+    import pandas as pd
+
+    tree = _seq(
+        _leaf("Start"),
+        _xor(_leaf("A"), _leaf("B")),
+        _leaf("End"),
+    )
+    # ``Bucket`` takes raw values ``3`` (digit-leading) and
+    # ``3_5`` (digit-leading with separator). Both must be rewritten
+    # in the .jucm to ``_3`` / ``_3_5``.
+    rows = []
+    cases = (
+        [(f"a{i}", "3",   ["Start", "A", "End"]) for i in range(20)]
+        + [(f"b{i}", "3_5", ["Start", "B", "End"]) for i in range(15)]
+    )
+    for case_id, bucket, trace in cases:
+        for j, act in enumerate(trace):
+            rows.append({
+                "case:concept:name": case_id,
+                "concept:name": act,
+                "time:timestamp": pd.Timestamp("2026-01-01") + pd.Timedelta(j, "s"),
+                "Bucket": bucket,
+            })
+    log_df = pd.DataFrame(rows)
+
+    ucm = pm4py_ucm.convert_to_ucm(tree)
+    result = _clustering.cluster(log_df, tree)
+    _scenarios.synthesize_scenarios(
+        ucm, tree, result,
+        condition_strategy="data-driven", log=log_df,
+    )
+
+    # The enumeration type lists sanitised values, not raw ones.
+    bucket_enum = next(
+        e for e in ucm.enumeration_types if e.name.startswith("Bucket")
+    )
+    assert "3" not in bucket_enum.values, (
+        f"raw digit-leading enum value leaked into the model: "
+        f"{bucket_enum.values!r}"
+    )
+    assert "_3" in bucket_enum.values
+    assert "_3_5" in bucket_enum.values
+
+    # Round-trip through the exporter to be sure the .jucm carries
+    # the sanitised forms in scenario initialisations and arc
+    # conditions (the two places jUCMNav actually parses them).
+    text = _jucm_exporter.serialize_to_string(ucm)
+    assert 'Bucket == _3' in text or 'Bucket == _3_5' in text
+    # And the raw, illegal form must NOT appear as an identifier.
+    import re as _re
+    assert not _re.search(r'Bucket == 3(?![_\w])', text)
+    assert not _re.search(r'Bucket == 3_5(?![_\w])', text)
+
+
 def test_jucm_export_without_scenarios_remains_byte_stable_legacy():
     """A UCM with no scenario groups must produce identical output to
     the pre-scenarios legacy exporter (no spurious <scenarioGroups/>,

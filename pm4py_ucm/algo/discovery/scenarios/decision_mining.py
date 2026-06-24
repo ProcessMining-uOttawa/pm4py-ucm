@@ -174,15 +174,41 @@ _ALWAYS_SKIP = {
 
 
 def _sanitise_jucmnav_name(raw: str) -> str:
-    """Convert a column name into a valid jUCMNav variable identifier.
+    """Convert a raw column name or enumeration value into a valid
+    jUCMNav identifier.
 
-    Strips a leading ``case:`` prefix, replaces non-word characters
-    with underscores, collapses runs of underscores, and drops any
-    leading underscore. Falls back to ``"attr"`` for empty results."""
+    jUCMNav's grammar requires identifiers (variable names and
+    enumeration values alike) to start with a letter or underscore;
+    a leading digit makes the scenario tool reject the model.
+    Examples that hit this: numeric country codes like ``"3"``, or
+    bucketed labels like ``"3_5"``.
+
+    Steps:
+
+    1. Strip a leading ``case:`` prefix.
+    2. Replace non-word characters with underscores.
+    3. Collapse runs of underscores and trim trailing underscores
+       (leading ones are preserved -- they're legal *and* might be
+       added back in step 4).
+    4. If the first character is a digit, prepend a single
+       underscore so the result satisfies the grammar.
+    5. Fall back to ``"attr"`` if everything got stripped away.
+    """
     name = raw[len("case:"):] if raw.startswith("case:") else raw
     name = re.sub(r"\W+", "_", name)
-    name = re.sub(r"_+", "_", name).strip("_")
-    return name or "attr"
+    name = re.sub(r"_+", "_", name).rstrip("_")
+    # ``lstrip("_")`` would drop the safety underscore we may add
+    # below, so trim only the leading underscores that *aren't*
+    # followed by a digit -- if the result still starts ``_<digit>``
+    # after trimming, that's fine, the leading underscore is what
+    # makes the identifier legal.
+    while name.startswith("_") and len(name) > 1 and not name[1].isdigit():
+        name = name[1:]
+    if not name:
+        return "attr"
+    if name[0].isdigit():
+        name = "_" + name
+    return name
 
 
 def _infer_scale_factor(values: Sequence[float], max_power: int = 6) -> int:
