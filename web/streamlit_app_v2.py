@@ -519,10 +519,22 @@ with st.sidebar:
         from pm4py_ucm.objects.ucm.conversion.decomposition import (
             AUTO_DEFAULTS, AGGRESSIVE_DEFAULTS,
         )
-        _preset_defaults = (
-            AUTO_DEFAULTS if decomposition_preset == "auto"
-            else AGGRESSIVE_DEFAULTS
-        )
+        # V2-specific overrides on the package presets: tighter caps
+        # than the API defaults so the multi-map UCMs the web preview
+        # renders stay readable on screen. The package's own defaults
+        # remain unchanged.
+        if decomposition_preset == "auto":
+            _preset_defaults = dict(
+                AUTO_DEFAULTS,
+                max_leaves_per_map=8,
+                min_leaves_to_decompose=4,
+            )
+        else:
+            _preset_defaults = dict(
+                AGGRESSIVE_DEFAULTS,
+                max_leaves_per_map=6,
+                min_leaves_to_decompose=3,
+            )
         with st.expander("Advanced", expanded=False):
             kp = f"decomp_{decomposition_preset}_"
             for key, label, help_txt in [

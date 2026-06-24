@@ -1159,6 +1159,60 @@ def test_synthesis_data_driven_with_decomposition_emits_condition_mining_rows():
     assert "Category ==" in text
 
 
+def test_synthesis_decomposed_loop_into_stub_keeps_single_bound_entry():
+    """When the LoopEntryGuard's bypass arc would target a Stub, the
+    synthesizer must splice an OrJoin in front so the stub keeps a
+    single bound predecessor. Otherwise the stub ends up with two
+    incoming arcs but only one InBinding — scenarios that take the
+    bypass (0-iteration) path hit an unbound entry and the jUCMNav
+    traversal halts mid-scenario (user-reported v12 / v23 failures
+    on ClaimsPaymentLog decomposed export).
+    """
+    # Top-level sequence: loop body followed by a meaty tail that
+    # decomposes into its own plug-in. The loop sits in the root
+    # map; its post-loop continuation IS the stub for the tail.
+    tree = _seq(
+        T(operator="*", children=[_leaf("Body"), _tau()]),
+        _seq(_leaf("T1"), _leaf("T2"), _leaf("T3"), _leaf("T4")),
+    )
+    log = []
+    for i in range(20):
+        log.append((f"once_{i}",  ["Body", "T1", "T2", "T3", "T4"]))
+    for i in range(10):
+        log.append((f"twice_{i}", ["Body", "Body", "T1", "T2", "T3", "T4"]))
+    for i in range(5):
+        log.append((f"zero_{i}",  ["T1", "T2", "T3", "T4"]))
+
+    decomp = {
+        "on_root_sequence": True, "on_parallel": False,
+        "on_alternative": False, "on_loop": False,
+        "max_leaves_per_map": 1000, "min_leaves_to_decompose": 3,
+        "balance_ratio": 0.0,
+    }
+    from pm4py_ucm.objects.ucm.obj import UCM
+    ucm = pm4py_ucm.convert_to_ucm(tree, decomposition=decomp)
+    assert len(ucm.maps) == 2  # root + 1 plug-in (the meaty tail)
+
+    result = _clustering.cluster(log, tree)
+    _scenarios.synthesize_scenarios(ucm, tree, result)
+
+    # Every stub on the root map must have exactly as many bound
+    # InBindings as incoming arcs — no orphans.
+    for m in ucm.maps:
+        for n in m.nodes:
+            if not isinstance(n, UCM.Stub):
+                continue
+            bound = set()
+            for b in n.bindings:
+                for ib in b.in_bindings:
+                    bound.add(id(ib.stub_entry))
+            unbound = [a for a in n.pred_connections if id(a) not in bound]
+            assert not unbound, (
+                f"stub {n.name!r} has {len(unbound)} unbound incoming arc(s); "
+                "LoopEntryGuard bypass must be routed through an OrJoin"
+            )
+
+
 def test_jucm_export_without_scenarios_remains_byte_stable_legacy():
     """A UCM with no scenario groups must produce identical output to
     the pre-scenarios legacy exporter (no spurious <scenarioGroups/>,

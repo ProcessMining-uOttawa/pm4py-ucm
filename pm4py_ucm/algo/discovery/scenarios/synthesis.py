@@ -948,7 +948,7 @@ def _wire_loop_counters(
         # to LoopJoin directly, so subsequent iterations skip the
         # guard.
         if exit_target is not None:
-            _insert_loop_entry_guard(lj_map, lj, exit_target, name)
+            _insert_loop_entry_guard(lj_map, lj, exit_target, name, ucm=ucm)
 
     return counters
 
@@ -971,11 +971,72 @@ def _resolve_post_loop_target(
     return target
 
 
+def _splice_orjoin_before_stub(
+    ucm: UCM,
+    target_map: UCM.UCMmap,
+    stub: "UCM.Stub",
+) -> "UCM.OrJoin":
+    """Insert an OrJoin in front of ``stub`` and route all of the
+    stub's existing predecessor arcs through it.
+
+    Background: the converter wires a stub with a single predecessor
+    arc and registers that arc as the stub's plug-in entry binding
+    (``InBinding.stub_entry`` points at it). When the scenario
+    synthesizer splices a LoopEntryGuard whose bypass arc lands on a
+    stub, the stub ends up with two incoming arcs but still only one
+    binding — scenarios that take the bypass arc hit an unbound
+    entry and the jUCMNav traversal fails partway through (the
+    user-reported v12 / v23 / … scenarios that exercise the 0-iteration
+    path).
+
+    Fix: merge the old and new incoming arcs through an OrJoin so the
+    stub keeps its single bound entry. Every old predecessor arc's
+    target moves to the OrJoin; a fresh OrJoin → Stub arc replaces
+    the bindings' ``stub_entry``. Callers then point their new arc(s)
+    at the returned OrJoin instead of at the stub directly.
+
+    Idempotent: if the stub already has an OrJoin as its sole
+    predecessor's source, returns that OrJoin.
+    """
+    preds = list(stub.pred_connections)
+    if len(preds) == 1 and isinstance(preds[0].source, UCM.OrJoin):
+        return preds[0].source  # already routed through a join
+
+    orjoin = UCM.OrJoin(name="OrJoin")
+    target_map.add_node(orjoin)
+
+    # Re-route every existing predecessor to land on the OrJoin
+    # instead of the stub. Conditions on those arcs survive the move.
+    redirected: List[UCM.NodeConnection] = []
+    for arc in preds:
+        src = arc.source
+        cond = arc.condition
+        target_map.remove_connection(arc)
+        new_arc = target_map.add_connection(src, orjoin, condition=cond)
+        redirected.append(new_arc)
+
+    # Single new arc OrJoin -> Stub. This is the arc that any
+    # in_binding on this stub now refers to.
+    stub_entry_arc = target_map.add_connection(orjoin, stub)
+
+    # Update the stub's plug-in in_bindings: any binding whose
+    # stub_entry was one of the removed arcs is repointed at the
+    # new OrJoin -> Stub arc. Out_bindings don't change (the stub's
+    # outgoing side is untouched).
+    removed_set = {id(a) for a in preds}
+    for binding in stub.bindings:
+        for ib in binding.in_bindings:
+            if id(ib.stub_entry) in removed_set:
+                ib.stub_entry = stub_entry_arc
+    return orjoin
+
+
 def _insert_loop_entry_guard(
     target_map: UCM.UCMmap,
     loop_join: "UCM.OrJoin",
     exit_target: "UCM.PathNode",
     counter_name: str,
+    ucm: Optional[UCM] = None,
 ) -> Optional["UCM.OrFork"]:
     """Splice a LoopEntryGuard OR-fork into the path between
     upstream and LoopJoin.
@@ -1018,8 +1079,16 @@ def _insert_loop_entry_guard(
         ),
     )
     # guard -> exit_target when the counter is at 0 (or below).
+    # If the exit_target is a Stub, route through an OrJoin so the
+    # stub keeps its single bound plug-in entry instead of growing a
+    # second, unbound incoming arc (see _splice_orjoin_before_stub).
+    bypass_target = exit_target
+    if isinstance(exit_target, UCM.Stub) and ucm is not None:
+        bypass_target = _splice_orjoin_before_stub(
+            ucm, target_map, exit_target,
+        )
     target_map.add_connection(
-        guard, exit_target,
+        guard, bypass_target,
         condition=UCM.Condition(
             label="bypass", expression=f"{counter_name} <= 0",
         ),
