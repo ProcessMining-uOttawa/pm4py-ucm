@@ -529,43 +529,60 @@ def _op_value(node) -> Optional[str]:
     return getattr(op, "value", op)
 
 
-def _collect_orforks_across_maps(ucm: UCM) -> List[UCM.OrFork]:
-    """All non-loop OR-fork nodes across every map, in
-    ``(map_index, position_within_map)`` order.
+def _index_ucm_forks_by_tree_id(
+    ucm: UCM, node_ids: Dict[int, int],
+) -> Dict[int, "UCM.PathNode"]:
+    """Build ``{tree_stable_id: ucm_fork_or_join}`` over every map.
 
-    The decomposed converter splits the tree into a root map + plug-in
-    maps. Each plug-in is built by the same pre-order traversal as the
-    root, so concatenating the maps in ``ucm.maps`` order preserves
-    the tree's overall pre-order — which means the i-th OR-fork here
-    pairs with the i-th tree XOR returned by
-    :func:`_collect_multi_child_xors`, just as it does in the
-    single-map case. ``LoopFork`` and ``LoopEntryGuard`` are excluded
-    so this matches the original single-map filter."""
-    out: List[UCM.OrFork] = []
+    The converter stamps ``_tree_python_id = id(tree_node)`` on each
+    OR-fork / OR-join / LoopFork / LoopJoin it creates from a tree
+    operator (see :mod:`pm4py_ucm.objects.ucm.conversion.\
+from_process_tree`). Combined with the synthesizer's
+    ``node_ids: {id(tree_node) -> stable_int}``, that gives a direct
+    tree↔UCM correspondence — no cross-map pre-order assumption.
+
+    Why this matters: an earlier position-based correlation worked
+    accidentally on ClaimsPaymentLog because plug-in maps were created
+    in tree-traversal order with no root-map fork *after* a plug-in
+    fork. The general case interleaves them, and the resulting
+    misalignment caused (a) loop decrement responsibilities being
+    attached to the wrong activity, and (b) variant_id conditions
+    being written onto OR-forks that didn't correspond to the
+    intended tree XOR — leaving some variants without a matching
+    branch, deadlocking their scenarios at runtime.
+
+    Returns one mapping per stable id; nodes without a
+    ``_tree_python_id`` (synthetic LoopEntryGuard, routing bends, …)
+    are skipped."""
+    out: Dict[int, "UCM.PathNode"] = {}
     for m in ucm.maps:
         for n in m.nodes:
-            if isinstance(n, UCM.OrFork) and n.name not in (
-                "LoopFork", "LoopEntryGuard",
-            ):
-                out.append(n)
+            py_id = getattr(n, "_tree_python_id", None)
+            if py_id is None:
+                continue
+            stable = node_ids.get(py_id)
+            if stable is None:
+                continue
+            # OR-fork / OR-join pairs share the same stable id; the
+            # synthesizer asks for the fork OR the join via type, so
+            # storing both under separate sub-keys keeps both
+            # reachable. We tag the value's role inline.
+            key = (stable, type(n).__name__, getattr(n, "name", ""))
+            out[key] = n  # type: ignore[assignment]
     return out
 
 
-def _collect_loop_forks_joins_across_maps(
-    ucm: UCM,
-) -> Tuple[List[UCM.OrFork], List[UCM.OrJoin]]:
-    """Companion to :func:`_collect_orforks_across_maps` for LoopFork
-    and LoopJoin nodes — same cross-map pre-order concatenation so
-    indexes line up with :func:`_collect_loop_tree_ids`."""
-    forks: List[UCM.OrFork] = []
-    joins: List[UCM.OrJoin] = []
-    for m in ucm.maps:
-        for n in m.nodes:
-            if isinstance(n, UCM.OrFork) and n.name == "LoopFork":
-                forks.append(n)
-            elif isinstance(n, UCM.OrJoin) and n.name == "LoopJoin":
-                joins.append(n)
-    return forks, joins
+def _ucm_node_for(
+    index: Dict[Tuple[int, str, str], "UCM.PathNode"],
+    stable_id: int,
+    cls_name: str,
+    name_match: str,
+) -> Optional["UCM.PathNode"]:
+    """Look up a single UCM node by (tree_stable_id, class, fork name).
+    ``cls_name`` is ``"OrFork"`` / ``"OrJoin"`` (the class repr name);
+    ``name_match`` is the UCM node's ``.name`` attribute (``"OrFork"``,
+    ``"OrJoin"``, ``"LoopFork"``, ``"LoopJoin"``)."""
+    return index.get((stable_id, cls_name, name_match))
 
 
 def _owning_map(ucm: UCM, node: "UCM.PathNode") -> Optional["UCM.UCMmap"]:
@@ -854,16 +871,13 @@ def _wire_loop_counters(
     node_ids = _cs.assign_node_ids(tree)
     tree_loop_ids = _collect_loop_tree_ids(tree, node_ids)
 
-    # Walk LoopFork / LoopJoin across every map. With ``on_loop``
-    # decomposition the loop body lives in a plug-in map; restricting
-    # to the root map would miss its LoopFork/LoopJoin pair and the
-    # whole loop-counter scaffold would silently no-op.
-    loop_forks, loop_joins = _collect_loop_forks_joins_across_maps(ucm)
-
-    if not (len(loop_forks) == len(loop_joins) == len(tree_loop_ids)):
-        # Disagreement between the tree walk and the converter's output.
-        # Skip silently rather than mis-attribute conditions.
-        return {}
+    # Tree↔UCM correspondence by stable id. This replaces an earlier
+    # cross-map positional walk that — once decomposition spread
+    # loops across plug-in maps — paired the wrong LoopJoin with the
+    # wrong tree LOOP node, with the visible consequence that loop
+    # decrement responsibilities ended up on the wrong activity (and
+    # the affected loop never terminated).
+    ucm_index = _index_ucm_forks_by_tree_id(ucm, node_ids)
 
     # Pull the LOOP tree nodes too so each counter gets a contextual
     # name (e.g. ``Loop_AmendDoc``) derived from its body / redo
@@ -872,7 +886,10 @@ def _wire_loop_counters(
     name_taken: set = {v.name for v in ucm.variables}
     counters: Dict[int, UCM.Variable] = {}
     for i, tree_loop_id in enumerate(tree_loop_ids):
-        lf, lj = loop_forks[i], loop_joins[i]
+        lf = _ucm_node_for(ucm_index, tree_loop_id, "OrFork", "LoopFork")
+        lj = _ucm_node_for(ucm_index, tree_loop_id, "OrJoin", "LoopJoin")
+        if lf is None or lj is None:
+            continue  # converter elided this loop (shouldn't happen)
         loop_node = loop_tree_nodes[i][1]
         # Pick a unique contextual name, falling back to the historic
         # ``loop_counter_<id>`` form on collision (rare — happens when
@@ -1164,14 +1181,12 @@ def _emit_orfork_conditions_data_driven(
     node_ids = _cs.assign_node_ids(tree)
     xor_seq = _collect_multi_child_xors(tree, node_ids)
 
-    # Walk OR-forks across every map. With decomposition on, most
-    # forks live in plug-in maps; restricting to the root map would
-    # miss them entirely and (since len(of) != len(xor_seq)) drop us
-    # straight into the "skip silently" branch — the user-visible
-    # symptom was an empty condition_mining.csv and no arc conditions.
-    or_forks = _collect_orforks_across_maps(ucm)
-    if len(or_forks) != len(xor_seq):
-        return []
+    # Tree↔UCM correspondence by stable id. The previous cross-map
+    # positional walk worked accidentally on simple shapes but paired
+    # tree XORs with the wrong UCM OR-forks once root-map and
+    # plug-in-map forks interleaved — variants without a matching
+    # branch then deadlocked at runtime.
+    ucm_index = _index_ucm_forks_by_tree_id(ucm, node_ids)
 
     # Replay every case to collect per-XOR branch labels (outside-
     # loop only — inside-loop XORs are skipped for decision mining
@@ -1197,7 +1212,9 @@ def _emit_orfork_conditions_data_driven(
 
     mining_results: List["_dm.OrForkMiningResult"] = []
     for of_idx, (tree_xor_id, n_branches, enclosing_loop_id) in enumerate(xor_seq):
-        of = or_forks[of_idx]
+        of = _ucm_node_for(ucm_index, tree_xor_id, "OrFork", "OrFork")
+        if of is None:
+            continue  # converter elided this XOR (e.g. single-child collapse)
         if enclosing_loop_id is not None:
             # Inside-loop XOR: data-driven can't disambiguate
             # per-iteration choices. Fall back to a deterministic
@@ -1405,16 +1422,14 @@ def _emit_orfork_conditions(
     node_ids = _cs.assign_node_ids(tree)
     xor_seq = _collect_multi_child_xors(tree, node_ids)
 
-    # Walk OR-forks across every map (see commentary on the
-    # data-driven sibling function).
-    or_forks = _collect_orforks_across_maps(ucm)
-    if len(or_forks) != len(xor_seq):
-        # Tree walk and converter disagree on XOR count; skip
-        # condition emission rather than mis-attribute.
-        return
+    # Tree↔UCM correspondence by stable id (see commentary on the
+    # data-driven sibling).
+    ucm_index = _index_ucm_forks_by_tree_id(ucm, node_ids)
 
     for of_idx, (tree_xor_id, n_branches, enclosing_loop_id) in enumerate(xor_seq):
-        of = or_forks[of_idx]
+        of = _ucm_node_for(ucm_index, tree_xor_id, "OrFork", "OrFork")
+        if of is None:
+            continue  # converter elided this XOR (e.g. single-child collapse)
         if enclosing_loop_id is not None:
             # Inside-loop XOR. We combine variant_id with the
             # enclosing loop's counter to distribute branches across

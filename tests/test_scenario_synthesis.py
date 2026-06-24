@@ -1159,6 +1159,70 @@ def test_synthesis_data_driven_with_decomposition_emits_condition_mining_rows():
     assert "Category ==" in text
 
 
+def test_synthesis_decomposed_pairs_each_loop_with_its_own_responsibility():
+    """When the converter spreads multiple loops across maps, each
+    loop's decrement expression must land on a responsibility inside
+    that loop's own body — not on a responsibility from a different
+    loop. The earlier positional cross-map correlation could pair the
+    i-th loop tree node with the i-th cross-map LoopFork, which is
+    wrong once root-map and plug-in-map LoopForks interleave: the
+    decrement for loop B would attach to a body responsibility of
+    loop A and the affected loop's counter never reached 0 (or
+    decremented at the wrong time, leading to the v11 deadlock the
+    user reported on ClaimsPaymentLog).
+    """
+    # Two distinct loops, body activities deliberately different
+    # (``A`` vs ``B``) so the regression is visible by name. The
+    # second loop sits inside a sub-sequence that decomposes into a
+    # plug-in.
+    tree = _seq(
+        T(operator="*", children=[_leaf("Alpha"), _tau()]),
+        _seq(
+            _leaf("Pad1"),
+            T(operator="*", children=[_leaf("Beta"), _tau()]),
+            _leaf("Pad2"),
+            _leaf("Pad3"),
+        ),
+    )
+    log = []
+    for i in range(20):
+        log.append((f"a{i}", ["Alpha", "Pad1", "Beta", "Pad2", "Pad3"]))
+    for i in range(10):
+        log.append((f"b{i}", ["Alpha", "Alpha", "Pad1", "Beta", "Beta", "Pad2", "Pad3"]))
+
+    decomp = {
+        "on_root_sequence": True, "on_parallel": False,
+        "on_alternative": False, "on_loop": False,
+        "max_leaves_per_map": 1000, "min_leaves_to_decompose": 3,
+        "balance_ratio": 0.0,
+    }
+    ucm = pm4py_ucm.convert_to_ucm(tree, decomposition=decomp)
+    assert len(ucm.maps) == 2  # root + sub-sequence plug-in
+
+    result = _clustering.cluster(log, tree)
+    _scenarios.synthesize_scenarios(ucm, tree, result)
+
+    # Pair every responsibility carrying a Loop_<X> decrement with its
+    # owning loop name. Each decrement must reference the loop whose
+    # body the responsibility lives in.
+    body_decrements: dict = {}  # {responsibility_name: counter_name}
+    for resp in ucm.responsibilities:
+        expr = resp.expression or ""
+        m = re.search(r"(Loop_\w+) = \1 - 1", expr)
+        if m:
+            body_decrements[resp.name] = m.group(1)
+
+    # Alpha is inside Loop_Alpha; Beta inside Loop_Beta. If the cross-
+    # map correlation got mixed up, one of the bodies would carry
+    # the OTHER loop's decrement.
+    assert body_decrements.get("Alpha") == "Loop_Alpha", (
+        f"Alpha must decrement Loop_Alpha, got {body_decrements.get('Alpha')!r}"
+    )
+    assert body_decrements.get("Beta") == "Loop_Beta", (
+        f"Beta must decrement Loop_Beta, got {body_decrements.get('Beta')!r}"
+    )
+
+
 def test_synthesis_decomposed_loop_into_stub_keeps_single_bound_entry():
     """When the LoopEntryGuard's bypass arc would target a Stub, the
     synthesizer must splice an OrJoin in front so the stub keeps a
