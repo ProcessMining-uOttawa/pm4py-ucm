@@ -643,8 +643,21 @@ uploaded = src_tabs[1].file_uploader(
     type=["xes", "gz", "csv", "zip"],
     key="log_uploader",
 )
+# Streamlit's file_uploader remembers the last upload across reruns,
+# so once a file has been dropped in, ``uploaded`` keeps returning
+# that same UploadedFile on every subsequent rerun -- including ones
+# triggered by clicking "Load sample". Without the guard below, the
+# sample we just loaded gets immediately overwritten by the
+# (still-attached) previous upload: every condition_strategy click,
+# slider tweak, or sample-tab switch resurrects the old log. We
+# fingerprint the uploaded payload and only re-apply it when its
+# content actually changes (i.e. a genuinely new upload).
 if uploaded is not None:
-    _accept_log_bytes(uploaded.name, uploaded.getvalue())
+    _uploaded_bytes = uploaded.getvalue()
+    _uploaded_hash = hashlib.sha256(_uploaded_bytes).hexdigest()[:16]
+    if st.session_state.get("last_uploader_hash") != _uploaded_hash:
+        _accept_log_bytes(uploaded.name, _uploaded_bytes)
+        st.session_state["last_uploader_hash"] = _uploaded_hash
 
 if "log_bytes" not in st.session_state:
     st.info("Upload a log to begin.")
