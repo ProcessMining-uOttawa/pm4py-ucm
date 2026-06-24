@@ -840,7 +840,15 @@ with scenarios_tab:
     )
 
     # Re-show cached results across reruns by stashing the synthesis
-    # arg fingerprint and the result dict in session_state.
+    # arg fingerprint and the result dict in session_state. CRITICAL:
+    # the displayed result and the download bytes must always reflect
+    # the CURRENT widget state. If the user changes the strategy
+    # radio (or any other input) after a run, we must invalidate the
+    # stashed result rather than show last run's bytes under a
+    # download button labelled with the new strategy. (Previous bug:
+    # data-driven download was serving the cached variant-driven
+    # bytes because the result was kept and the filename was rebuilt
+    # from the new radio value.)
     _synth_fp = _arg_fingerprint(
         file_hash, log_kind, csv_columns, noise_threshold,
         condition_strategy, max_loop_iterations,
@@ -849,7 +857,15 @@ with scenarios_tab:
         effective_min_support,
     )
 
-    if run or st.session_state.get("synth_fp") == _synth_fp:
+    stashed_fp = st.session_state.get("synth_fp")
+    params_changed = stashed_fp is not None and stashed_fp != _synth_fp
+    if params_changed and not run:
+        # Drop the stale result so the rest of the tab falls back to
+        # the "configure + click" state.
+        st.session_state.pop("synth_fp", None)
+        st.session_state.pop("synth_result", None)
+
+    if run:
         try:
             with st.status("Synthesizing scenarios...",
                            expanded=False) as status:
@@ -875,9 +891,15 @@ with scenarios_tab:
 
     synth = st.session_state.get("synth_result")
     if synth is None:
-        st.info(
-            "Configure the run above and click **Synthesize scenarios**."
-        )
+        if params_changed:
+            st.info(
+                "Settings changed since the last run — click "
+                "**Synthesize scenarios** to regenerate."
+            )
+        else:
+            st.info(
+                "Configure the run above and click **Synthesize scenarios**."
+            )
     else:
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Variants", synth["n_variants"])
