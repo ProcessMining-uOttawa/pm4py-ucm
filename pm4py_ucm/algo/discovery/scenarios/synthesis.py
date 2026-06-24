@@ -215,7 +215,7 @@ def synthesize_scenarios(
     # initialise the counter per scenario.
     loop_counters: Dict[int, UCM.Variable] = {}
     if emit_conditions:
-        loop_counters = _wire_loop_counters(ucm, target_map, tree)
+        loop_counters = _wire_loop_counters(ucm, tree)
 
     # Build the ScenarioGroup with one ScenarioDef per variant.
     # Each scenario is named ``<variant_id>_<short_suffix>`` so the
@@ -281,12 +281,12 @@ def synthesize_scenarios(
     if emit_conditions:
         if condition_strategy == "variant":
             _emit_orfork_conditions(
-                target_map, tree, clustering.variants, loop_counters,
+                ucm, tree, clustering.variants, loop_counters,
                 max_loop_iterations=max_loop_iterations,
             )
         elif condition_strategy == "data-driven" and attribute_vars:
             or_fork_mining_results = _emit_orfork_conditions_data_driven(
-                target_map, tree, clustering, log,
+                ucm, tree, clustering, log,
                 attribute_specs, features_df, feature_columns,
                 loop_counters,
                 max_loop_iterations=max_loop_iterations,
@@ -527,6 +527,57 @@ def _op_value(node) -> Optional[str]:
     if op is None:
         return None
     return getattr(op, "value", op)
+
+
+def _collect_orforks_across_maps(ucm: UCM) -> List[UCM.OrFork]:
+    """All non-loop OR-fork nodes across every map, in
+    ``(map_index, position_within_map)`` order.
+
+    The decomposed converter splits the tree into a root map + plug-in
+    maps. Each plug-in is built by the same pre-order traversal as the
+    root, so concatenating the maps in ``ucm.maps`` order preserves
+    the tree's overall pre-order — which means the i-th OR-fork here
+    pairs with the i-th tree XOR returned by
+    :func:`_collect_multi_child_xors`, just as it does in the
+    single-map case. ``LoopFork`` and ``LoopEntryGuard`` are excluded
+    so this matches the original single-map filter."""
+    out: List[UCM.OrFork] = []
+    for m in ucm.maps:
+        for n in m.nodes:
+            if isinstance(n, UCM.OrFork) and n.name not in (
+                "LoopFork", "LoopEntryGuard",
+            ):
+                out.append(n)
+    return out
+
+
+def _collect_loop_forks_joins_across_maps(
+    ucm: UCM,
+) -> Tuple[List[UCM.OrFork], List[UCM.OrJoin]]:
+    """Companion to :func:`_collect_orforks_across_maps` for LoopFork
+    and LoopJoin nodes — same cross-map pre-order concatenation so
+    indexes line up with :func:`_collect_loop_tree_ids`."""
+    forks: List[UCM.OrFork] = []
+    joins: List[UCM.OrJoin] = []
+    for m in ucm.maps:
+        for n in m.nodes:
+            if isinstance(n, UCM.OrFork) and n.name == "LoopFork":
+                forks.append(n)
+            elif isinstance(n, UCM.OrJoin) and n.name == "LoopJoin":
+                joins.append(n)
+    return forks, joins
+
+
+def _owning_map(ucm: UCM, node: "UCM.PathNode") -> Optional["UCM.UCMmap"]:
+    """Return the map ``node`` is registered with (linear scan over
+    ``ucm.maps``). ``None`` if not found — caller decides what to do.
+    Used by the loop-counter scaffolding to splice the LoopEntryGuard
+    into the right map when decomposition pushed a loop into a
+    plug-in."""
+    for m in ucm.maps:
+        if node in m.nodes:
+            return m
+    return None
 
 
 def _collect_multi_child_xors(
@@ -771,7 +822,7 @@ def _synthesize_decrement_resp_ref(
 
 
 def _wire_loop_counters(
-    ucm: UCM, target_map: UCM.UCMmap, tree,
+    ucm: UCM, tree,
 ) -> Dict[int, UCM.Variable]:
     """Create per-LOOP integer counter variables, set mutually-exclusive
     LoopFork conditions, and attach decrement expressions inside the
@@ -803,14 +854,11 @@ def _wire_loop_counters(
     node_ids = _cs.assign_node_ids(tree)
     tree_loop_ids = _collect_loop_tree_ids(tree, node_ids)
 
-    loop_forks = [
-        n for n in target_map.nodes
-        if isinstance(n, UCM.OrFork) and n.name == "LoopFork"
-    ]
-    loop_joins = [
-        n for n in target_map.nodes
-        if isinstance(n, UCM.OrJoin) and n.name == "LoopJoin"
-    ]
+    # Walk LoopFork / LoopJoin across every map. With ``on_loop``
+    # decomposition the loop body lives in a plug-in map; restricting
+    # to the root map would miss its LoopFork/LoopJoin pair and the
+    # whole loop-counter scaffold would silently no-op.
+    loop_forks, loop_joins = _collect_loop_forks_joins_across_maps(ucm)
 
     if not (len(loop_forks) == len(loop_joins) == len(tree_loop_ids)):
         # Disagreement between the tree walk and the converter's output.
@@ -874,10 +922,15 @@ def _wire_loop_counters(
                 cond.expression = expr
 
         # Attach decrement to a body responsibility (synthesise if absent).
+        # Use the map the LoopJoin actually lives in — with decomposition
+        # the loop may have been pushed into a plug-in map, and
+        # synthesising the decrement responsibility into the root map
+        # would put it outside the loop body.
+        lj_map = _owning_map(ucm, lj) or ucm.maps[0]
         body_resp = _find_loop_body_resp_ref(lj, lf)
         if body_resp is None or body_resp.resp_def is None:
             body_resp = _synthesize_decrement_resp_ref(
-                ucm, target_map, lj, name,
+                ucm, lj_map, lj, name,
             )
         decrement = f"{name} = {name} - 1;"
         resp_def = body_resp.resp_def
@@ -895,7 +948,7 @@ def _wire_loop_counters(
         # to LoopJoin directly, so subsequent iterations skip the
         # guard.
         if exit_target is not None:
-            _insert_loop_entry_guard(target_map, lj, exit_target, name)
+            _insert_loop_entry_guard(lj_map, lj, exit_target, name)
 
     return counters
 
@@ -1021,7 +1074,7 @@ def _representative_value_for_variant(
 
 
 def _emit_orfork_conditions_data_driven(
-    target_map: UCM.UCMmap,
+    ucm: UCM,
     tree,
     clustering: ClusteringResult,
     log,
@@ -1042,11 +1095,12 @@ def _emit_orfork_conditions_data_driven(
     node_ids = _cs.assign_node_ids(tree)
     xor_seq = _collect_multi_child_xors(tree, node_ids)
 
-    or_forks: List[UCM.OrFork] = [
-        n for n in target_map.nodes
-        if isinstance(n, UCM.OrFork)
-        and n.name not in ("LoopFork", "LoopEntryGuard")
-    ]
+    # Walk OR-forks across every map. With decomposition on, most
+    # forks live in plug-in maps; restricting to the root map would
+    # miss them entirely and (since len(of) != len(xor_seq)) drop us
+    # straight into the "skip silently" branch — the user-visible
+    # symptom was an empty condition_mining.csv and no arc conditions.
+    or_forks = _collect_orforks_across_maps(ucm)
     if len(or_forks) != len(xor_seq):
         return []
 
@@ -1258,7 +1312,7 @@ def _set_deterministic_true_false_split(of: UCM.OrFork) -> None:
 
 
 def _emit_orfork_conditions(
-    target_map: UCM.UCMmap,
+    ucm: UCM,
     tree,
     variants: List[Variant],
     loop_counters: Optional[Dict[int, UCM.Variable]] = None,
@@ -1282,11 +1336,9 @@ def _emit_orfork_conditions(
     node_ids = _cs.assign_node_ids(tree)
     xor_seq = _collect_multi_child_xors(tree, node_ids)
 
-    or_forks: List[UCM.OrFork] = [
-        n for n in target_map.nodes
-        if isinstance(n, UCM.OrFork)
-        and n.name not in ("LoopFork", "LoopEntryGuard")
-    ]
+    # Walk OR-forks across every map (see commentary on the
+    # data-driven sibling function).
+    or_forks = _collect_orforks_across_maps(ucm)
     if len(or_forks) != len(xor_seq):
         # Tree walk and converter disagree on XOR count; skip
         # condition emission rather than mis-attribute.

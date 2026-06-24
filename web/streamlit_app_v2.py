@@ -765,17 +765,6 @@ with scenarios_tab:
         "setting."
     )
 
-    if decomposition_preset != "off":
-        st.warning(
-            "Decomposition is **on** (`{}`). The synthesizer only "
-            "emits OR-fork conditions on XORs that land in the root "
-            "map; XORs pushed into plug-in maps keep the converter's "
-            "default arc condition (`true`) and will not disambiguate "
-            "branches in jUCMNav. For scenarios that replay every "
-            "choice exactly, set decomposition to **off** in the "
-            "sidebar.".format(decomposition_preset)
-        )
-
     # Detect sklearn so we can grey out data-driven cleanly.
     try:
         import sklearn  # noqa: F401

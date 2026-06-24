@@ -282,15 +282,14 @@ def discover_scenarios(
         phase (e.g. ``resource_attribute``, ``performers``,
         ``map_name``). Also accepts ``process_tree`` to bypass mining.
     decomposition
-        Same shape as in :func:`discover_ucm_inductive`. Pass ``None``
-        (default) for a single flat map — the recommended setting for
-        scenario synthesis. Decomposed UCMs are supported and the
-        synthesizer will run without error, but ``variant_id == V``
-        OR-fork conditions are only emitted for XORs that land in the
-        root map; XORs pushed into plug-in maps keep the converter's
-        default arc condition (``true``) and will not disambiguate
-        branches in jUCMNav. Use ``decomposition=None`` whenever
-        scenarios must replay every choice exactly.
+        Same shape as in :func:`discover_ucm_inductive`. Decomposed
+        multi-map UCMs are fully supported: the synthesizer walks
+        every map for OR-fork condition emission and loop-counter
+        wiring, so XORs that land in plug-in maps receive the same
+        ``variant_id == V`` (or data-driven) conditions they would
+        in the flat case, and loops pushed into plug-ins get their
+        LoopEntryGuard and decrement responsibility inserted into
+        the plug-in map.
     coarsen_loops
         When ``True`` (default), variant clustering collapses loop
         iteration sequences to ``{0, 1, >=2}``. Pass ``False`` to

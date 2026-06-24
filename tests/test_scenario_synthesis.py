@@ -1056,6 +1056,109 @@ def test_synthesis_runs_with_decomposition_and_root_map_conditions_emit():
     assert "variant_id == v1" in text or "variant_id == v2" in text
 
 
+def test_synthesis_with_decomposition_conditions_every_plugin_orfork():
+    """When decomposition pushes an XOR into a plug-in map, the
+    synthesizer must still emit ``variant_id == V`` on that plug-in
+    OR-fork — not only the root-map ones. Locks in the cross-map
+    OR-fork walk; the original target_map-only code silently dropped
+    conditions on plug-in forks because ``len(or_forks) != len(xor_seq)``
+    bailed before any emission.
+    """
+    # Force the XOR into a plug-in by giving each XOR branch its own
+    # 4-leaf body and asking the decomposer to extract every
+    # alternative into its own plug-in.
+    tree = _seq(
+        _leaf("Start"),
+        _xor(
+            _seq(_leaf("A1"), _leaf("A2"), _leaf("A3"), _leaf("A4")),
+            _seq(_leaf("B1"), _leaf("B2"), _leaf("B3"), _leaf("B4")),
+        ),
+    )
+    log = []
+    for i in range(20):
+        log.append((f"a{i}", ["Start", "A1", "A2", "A3", "A4"]))
+    for i in range(15):
+        log.append((f"b{i}", ["Start", "B1", "B2", "B3", "B4"]))
+
+    decomp = {
+        "on_root_sequence": False, "on_parallel": False,
+        "on_alternative": True, "on_loop": False,
+        "max_leaves_per_map": 1000, "min_leaves_to_decompose": 3,
+        "balance_ratio": 0.0,
+    }
+    ucm = pm4py_ucm.convert_to_ucm(tree, decomposition=decomp)
+    # Root + 2 plug-ins.
+    assert len(ucm.maps) == 3
+
+    result = _clustering.cluster(log, tree)
+    _scenarios.synthesize_scenarios(ucm, tree, result)
+    text = _jucm_exporter.serialize_to_string(ucm)
+    # Both variant_id values land in the model — one per branch.
+    assert "variant_id == v1" in text
+    assert "variant_id == v2" in text
+
+
+def test_synthesis_data_driven_with_decomposition_emits_condition_mining_rows():
+    """Companion regression for the data-driven path: when
+    decomposition is active the mining results list must still cover
+    every outside-loop OR-fork, not just the root-map ones.
+    """
+    pytest = __import__("pytest")
+    pytest.importorskip("sklearn")
+    import pandas as pd
+
+    # Same shape as the variant-driven sibling test: XOR with two
+    # 4-leaf branches, each pushed into its own plug-in. A case-
+    # constant attribute "Category" perfectly predicts the branch
+    # so the tree mines a clean expression on the (now plug-in)
+    # OR-fork.
+    tree = _seq(
+        _leaf("Start"),
+        _xor(
+            _seq(_leaf("A1"), _leaf("A2"), _leaf("A3"), _leaf("A4")),
+            _seq(_leaf("B1"), _leaf("B2"), _leaf("B3"), _leaf("B4")),
+        ),
+    )
+    rows = []
+    cases = (
+        [(f"a{i}", "low",  ["Start", "A1", "A2", "A3", "A4"]) for i in range(20)]
+        + [(f"b{i}", "high", ["Start", "B1", "B2", "B3", "B4"]) for i in range(15)]
+    )
+    for case_id, category, trace in cases:
+        for j, act in enumerate(trace):
+            rows.append({
+                "case:concept:name": case_id,
+                "concept:name": act,
+                "time:timestamp": pd.Timestamp("2026-01-01") + pd.Timedelta(j, "s"),
+                "Category": category,
+            })
+    log_df = pd.DataFrame(rows)
+
+    decomp = {
+        "on_root_sequence": False, "on_parallel": False,
+        "on_alternative": True, "on_loop": False,
+        "max_leaves_per_map": 1000, "min_leaves_to_decompose": 3,
+        "balance_ratio": 0.0,
+    }
+    ucm = pm4py_ucm.convert_to_ucm(tree, decomposition=decomp)
+    assert len(ucm.maps) == 3
+    result = _clustering.cluster(log_df, tree)
+    group = _scenarios.synthesize_scenarios(
+        ucm, tree, result,
+        condition_strategy="data-driven", log=log_df,
+    )
+
+    # Mining results were attached — empty list was the user-reported
+    # symptom on a decomposed UCM.
+    mining = getattr(group, "_mining_results", None) or []
+    assert mining, "condition_mining results must be non-empty on a decomposed UCM"
+
+    # Mined expression lands on the (plug-in!) OR-fork arc, not stuck
+    # on the converter default.
+    text = _jucm_exporter.serialize_to_string(ucm)
+    assert "Category ==" in text
+
+
 def test_jucm_export_without_scenarios_remains_byte_stable_legacy():
     """A UCM with no scenario groups must produce identical output to
     the pre-scenarios legacy exporter (no spurious <scenarioGroups/>,
