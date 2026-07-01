@@ -1,5 +1,5 @@
 @startuml ucm_class_diagram
-title PM4Py-UCM Python domain model\n(used for UCM model generation from a process tree)
+title PM4Py-UCM Python domain model\n(UCM discovery + scenario synthesis from a process tree)
 
 skinparam classFontStyle bold
 skinparam classBackgroundColor white
@@ -25,10 +25,16 @@ class UCM <<container>> #DBEAFE {
     + maps : List<UCMmap>
     + responsibilities : List<Responsibility>
     + components : List<ComponentElement>
+    + enumeration_types : List<EnumerationType>
+    + variables : List<Variable>
+    + scenario_groups : List<ScenarioGroup>
     --
     + add_map(name) : UCMmap
     + get_or_add_responsibility(name) : Responsibility
     + get_or_add_component(name, kind) : ComponentElement
+    + get_or_add_enumeration_type(name, values) : EnumerationType
+    + get_or_add_variable(name, type, enum) : Variable
+    + add_scenario_group(name) : ScenarioGroup
     + bind_performers(mapping)
 }
 
@@ -223,7 +229,66 @@ OutBinding --> "1" NodeConnection : stub_exit
 PluginBinding --> "0..1" Condition : precondition
 
 ' ===========================================================
-' Notes that highlight the URN duality
+' Scenario layer — executable scenarios (variant / data-driven)
+' ===========================================================
+package "Scenario layer (URN-level)" as scn <<Folder>> {
+
+    class EnumerationType #FDE68A {
+        + values : List<str>
+    }
+
+    class Variable #FDE68A {
+        + type : str
+        ' "enumeration" | "integer" | "boolean"
+    }
+
+    class ScenarioGroup #FDE68A {
+        + scenarios : List<ScenarioDef>
+    }
+
+    class ScenarioDef #FDE68A {
+        + initializations : List<Initialization>
+        + start_points : List<ScenarioStartPoint>
+        + end_points : List<ScenarioEndPoint>
+    }
+
+    class Initialization <<value>> #FEF3C7 {
+        + value : str
+    }
+
+    class ScenarioStartPoint <<value>> #FEF3C7 {
+        + enabled : bool
+    }
+
+    class ScenarioEndPoint <<value>> #FEF3C7 {
+        + enabled : bool
+        + mandatory : bool
+    }
+}
+
+URNmodelElement <|-- EnumerationType
+URNmodelElement <|-- Variable
+URNmodelElement <|-- ScenarioGroup
+URNmodelElement <|-- ScenarioDef
+
+UCM "1" *-- "0..*" EnumerationType : enumeration_types
+UCM "1" *-- "0..*" Variable        : variables
+UCM "1" *-- "0..*" ScenarioGroup   : scenario_groups
+
+Variable "0..*" --> "0..1" EnumerationType : enumeration_type
+
+ScenarioGroup "1" *-- "0..*" ScenarioDef : scenarios
+
+ScenarioDef "1" *-- "0..*" Initialization      : initializations
+ScenarioDef "1" *-- "0..*" ScenarioStartPoint  : start_points
+ScenarioDef "1" *-- "0..*" ScenarioEndPoint    : end_points
+
+Initialization      --> "1" Variable   : variable
+ScenarioStartPoint  --> "1" StartPoint : start_point
+ScenarioEndPoint    --> "1" EndPoint   : end_point
+
+' ===========================================================
+' Notes
 ' ===========================================================
 note as N1
   **Definitions vs References — the URN duality**
@@ -236,5 +301,24 @@ end note
 
 defs .. N1
 N1 .. refs
+
+note as N2
+  **Scenario synthesis**
+  `pm4py_ucm.discover_scenarios` populates the scenario layer:
+    • one **EnumerationType** ``VariantId`` + one **Variable**
+      ``variant_id`` (variant-driven mode), OR one Variable per
+      case-constant attribute mined from the log (data-driven).
+    • one **integer Variable** per loop operator in the tree —
+      the per-loop counter driving the LoopFork/LoopEntryGuard.
+    • one **ScenarioGroup** ``MinedScenarios`` with one
+      **ScenarioDef** per concurrency-aware variant, each with
+      per-variable **Initialization**s and a single
+      **ScenarioStartPoint** / **ScenarioEndPoint** wired to the
+      map's entry/exit.
+  Arc **Condition**s on OR-forks are set by the synthesizer
+  in the same call and are what jUCMNav evaluates at runtime.
+end note
+
+scn .. N2
 
 @enduml
