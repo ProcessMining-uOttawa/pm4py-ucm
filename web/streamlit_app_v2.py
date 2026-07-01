@@ -243,10 +243,26 @@ def _mine(
         jucm_path = td / "model.jucm"
         pm4py_ucm.write_ucm(ucm, str(jucm_path))
 
+        # Case / activity counts for the metrics row. ``log`` here is
+        # either a DataFrame (CSV path, or modern pm4py.read_xes) or a
+        # pm4py EventLog (older pm4py releases).
+        try:
+            n_cases = int(log["case:concept:name"].nunique())
+            n_activities = int(log["concept:name"].nunique())
+        except (KeyError, TypeError, AttributeError):
+            n_cases = len(log)
+            activities: set = set()
+            for trace in log:
+                for event in trace:
+                    activities.add(event.get("concept:name"))
+            n_activities = len(activities)
+
         return {
             "jucm": jucm_path.read_bytes(),
             "n_maps": len(ucm.maps),
             "n_nodes": sum(len(m.nodes) for m in ucm.maps),
+            "n_cases": n_cases,
+            "n_activities": n_activities,
         }
 
 
@@ -767,12 +783,14 @@ except Exception as exc:
         st.code(traceback.format_exc(), language="text")
     st.stop()
 
-c1, c2, c3, c4, c5 = st.columns(5)
+c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
 c1.metric("File", log_name)
-c2.metric("Decomposition", decomposition_preset)
-c3.metric("Maps", mined["n_maps"])
-c4.metric("Nodes", mined["n_nodes"])
-c5.metric("Notation", notation)
+c2.metric("Cases", f"{mined['n_cases']:,}")
+c3.metric("Activities", f"{mined['n_activities']:,}")
+c4.metric("Notation", notation)
+c5.metric("Decomposition", decomposition_preset)
+c6.metric("Maps", mined["n_maps"])
+c7.metric("Nodes", mined["n_nodes"])
 
 # ---- Tabs -----------------------------------------------------------------
 model_tab, scenarios_tab = st.tabs(["Model", "Scenarios"])
