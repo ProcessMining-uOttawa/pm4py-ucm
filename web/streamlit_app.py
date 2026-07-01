@@ -703,6 +703,26 @@ if samples:
             _accept_log_bytes(chosen.name, chosen.read_bytes())
             st.rerun()
 
+# Upload-size policy — see .streamlit/config.toml. The server-side
+# cap is 1 GB; on Streamlit Community Cloud we additionally enforce a
+# 75 MB app-level limit to keep a single upload from DoS'ing a public
+# demo. Local (and self-hosted) runs get the full 1 GB.
+_CLOUD_MAX_UPLOAD_BYTES = 75 * 1024 * 1024
+
+
+def _running_on_streamlit_cloud() -> bool:
+    """Best-effort detection of Streamlit Community Cloud.
+
+    Community Cloud sets ``HOSTNAME`` to something like
+    ``streamlit-abc123`` and runs apps from ``/mount/src/…``. Either
+    fingerprint alone is enough to trigger the tighter cap; both being
+    absent means we're on someone's laptop / private VM and the 1 GB
+    server-side cap applies unchanged."""
+    if os.environ.get("HOSTNAME", "").startswith("streamlit"):
+        return True
+    return os.path.isdir("/mount/src")
+
+
 uploaded = src_tabs[1].file_uploader(
     "Upload an event log",
     type=["xes", "gz", "csv", "zip"],
@@ -710,7 +730,9 @@ uploaded = src_tabs[1].file_uploader(
         "XES (.xes / .xes.gz) is mined directly. "
         ".zip archives are searched for the first .xes inside. "
         "CSV requires picking the case / activity / timestamp columns "
-        "(and optionally role / resource) after upload."
+        "(and optionally role / resource) after upload. "
+        "Upload cap: 1 GB locally, 75 MB on the public Community Cloud "
+        "deployment."
     ),
     key="log_uploader",
 )
@@ -721,7 +743,17 @@ uploaded = src_tabs[1].file_uploader(
 # in some Streamlit / browser combinations, which would otherwise drop
 # the user back at the upload prompt.
 if uploaded is not None:
-    _accept_log_bytes(uploaded.name, uploaded.getvalue())
+    _payload = uploaded.getvalue()
+    if _running_on_streamlit_cloud() and len(_payload) > _CLOUD_MAX_UPLOAD_BYTES:
+        st.error(
+            f"This upload is {len(_payload) / (1024 * 1024):.1f} MB, "
+            f"which exceeds the 75 MB cap enforced on the public "
+            "Community Cloud deployment. Run pm4py-ucm locally "
+            "(`streamlit run web/streamlit_app.py`) to process files "
+            "up to 1 GB."
+        )
+        st.stop()
+    _accept_log_bytes(uploaded.name, _payload)
 
 if "log_bytes" not in st.session_state:
     st.info("Upload a log to begin.")
