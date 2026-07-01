@@ -424,12 +424,15 @@ def _mine(
         try:
             n_cases = int(log["case:concept:name"].nunique())
             n_activities = int(log["concept:name"].nunique())
+            n_events = int(len(log))
         except (KeyError, TypeError, AttributeError):
             n_cases = len(log)
             activities: set = set()
+            n_events = 0
             for trace in log:
                 for event in trace:
                     activities.add(event.get("concept:name"))
+                    n_events += 1
             n_activities = len(activities)
 
         return {
@@ -437,6 +440,7 @@ def _mine(
             "n_maps": len(ucm.maps),
             "n_nodes": sum(len(m.nodes) for m in ucm.maps),
             "n_cases": n_cases,
+            "n_events": n_events,
             "n_activities": n_activities,
         }
 
@@ -964,14 +968,15 @@ except Exception as exc:
         st.code(traceback.format_exc(), language="text")
     st.stop()
 
-c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
+c1, c2, c3, c4, c5, c6, c7, c8 = st.columns(8)
 c1.metric("File", log_name)
 c2.metric("Cases", f"{mined['n_cases']:,}")
-c3.metric("Activities", f"{mined['n_activities']:,}")
-c4.metric("Notation", notation)
-c5.metric("Decomposition", decomposition_preset)
-c6.metric("Maps", mined["n_maps"])
-c7.metric("Nodes", mined["n_nodes"])
+c3.metric("Events", f"{mined['n_events']:,}")
+c4.metric("Activities", f"{mined['n_activities']:,}")
+c5.metric("Notation", notation)
+c6.metric("Decomposition", decomposition_preset)
+c7.metric("Maps", mined["n_maps"])
+c8.metric("Nodes", mined["n_nodes"])
 
 # Embed the PNG via a raw <img> tag so the original bitmap is sent to
 # the browser unchanged. ``width=`` is a CSS pixel size, NOT a resample:
