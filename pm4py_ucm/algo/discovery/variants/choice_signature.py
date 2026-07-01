@@ -134,6 +134,18 @@ def _alphabet(tree, cache: Dict[int, frozenset]) -> frozenset:
 # Replay — the heart of the algorithm
 # ---------------------------------------------------------------------------
 
+#: Default per-trace budget for the replay's backtracking search.
+#: The greedy peel used in the flat case bites at most ``depth`` states
+#: per trace; the backtracking path is bounded by this cap so a
+#: pathologically ambiguous tree (Inductive-Miner output on a complex
+#: real-world log with heavy alphabet overlap) can't stall a batch
+#: replay. Traces that exceed the budget are reported as ``NOFIT``.
+#: Chosen conservatively — well above the greedy path (~O(depth)) but
+#: well below "run forever". Raise via ``max_replay_states`` if you see
+#: legitimately fitting traces silently dropped as noise.
+DEFAULT_MAX_REPLAY_STATES = 200_000
+
+
 def replay(
     tree,
     trace: Sequence[str],
@@ -141,6 +153,7 @@ def replay(
     coarsen_loops: bool = True,
     loop_iter_counts: Optional[Dict[int, int]] = None,
     xor_branch_counts: Optional[Dict[int, Dict[int, int]]] = None,
+    max_replay_states: int = DEFAULT_MAX_REPLAY_STATES,
 ) -> Union[tuple, str]:
     """Replay ``trace`` on ``tree`` and return its canonical signature.
 
@@ -177,12 +190,41 @@ def replay(
         across all loop iterations. Used by scenario synthesis to
         distribute branches across iterations via the loop counter
         when the XOR sits inside a loop.
+    max_replay_states
+        Cap on the number of subtree-replay attempts consumed by this
+        one call before giving up. Backtracking on ambiguous trees
+        (see below) can otherwise blow up combinatorially; the cap
+        is a safety net. Defaults to
+        :data:`DEFAULT_MAX_REPLAY_STATES` (200 000, well above the
+        greedy peel's needs but far below unbounded).
 
     Returns
     -------
     tuple | str
         A canonical signature (nested tuple) when the trace fits, or
         :data:`NOFIT` (string) when it does not.
+
+    Notes
+    -----
+    The replay used to be a pure greedy alphabet peel: at every
+    sequence / loop / XOR boundary, take the *maximum* prefix of
+    events whose labels are in the child's alphabet, then commit to
+    that child. On Inductive-Miner trees with **disjoint** sibling
+    alphabets this is correct and fast. On real-world logs — like
+    BPI Challenge 2012 where the discovered tree wraps a large
+    XOR/loop nest whose ``do`` and ``redo`` share their whole
+    alphabet — the greedy commit either happens to succeed (all
+    traces collapse to one variant) or silently drops the trace as
+    ``NOFIT``.
+
+    The current implementation is a **first-match backtracking**
+    search: at every sequence / loop / XOR site it *first* tries the
+    greedy peel (preserving the flat-case semantics that the existing
+    test suite pins), and on failure retries with shorter peels or
+    alternative children. It stops at the first fitting parse — so
+    signatures are still deterministic — and is capped by the
+    ``max_replay_states`` budget so a pathological tree can't stall
+    a batch replay.
     """
     if node_ids is None:
         node_ids = assign_node_ids(tree)
@@ -191,13 +233,66 @@ def replay(
         loop_iter_counts = {}
     if xor_branch_counts is None:
         xor_branch_counts = {}
-    result = _replay(
-        list(trace), tree, node_ids, alpha_cache,
-        coarsen_loops, loop_iter_counts, xor_branch_counts,
+    budget = [max(1, int(max_replay_states))]
+    # Per-trace memoisation: many subtrees are consulted with identical
+    # ``(window, subtree)`` pairs during backtracking (e.g. every failed
+    # loop iteration retries the same inner subtree on the same peel).
+    # Caching the first-fit parse per pair collapses the exponential
+    # blowup back into polynomial time for real-world logs like
+    # BPI 2012 without changing the search semantics (we still return
+    # the first fit under the same greedy-first ordering).
+    memo: Dict[Tuple[int, Tuple[str, ...]], Optional[_Parse]] = {}
+    parse = _replay(
+        list(trace), tree, node_ids, alpha_cache, coarsen_loops, budget,
+        memo,
     )
-    if result is None:
+    if parse is None:
         return NOFIT
-    return result
+    frag, loop_delta, xor_delta = parse
+    # Merge deltas of the WINNING parse into the caller's dicts.
+    # Backtracking discards deltas of every rejected attempt.
+    for lid, ic in loop_delta.items():
+        loop_iter_counts[lid] = max(loop_iter_counts.get(lid, 0), ic)
+    for xid, by_branch in xor_delta.items():
+        acc = xor_branch_counts.setdefault(xid, {})
+        for b, c in by_branch.items():
+            acc[b] = acc.get(b, 0) + c
+    return frag
+
+
+# Internal parse result: ``(fragment, loop_delta, xor_delta)`` where the
+# deltas are the counter updates this particular parse would contribute
+# to the caller-side ``loop_iter_counts`` / ``xor_branch_counts`` dicts.
+# The public :func:`replay` merges them only for the winning parse; any
+# rejected attempt is discarded intact.
+_Delta = Tuple[Dict[int, int], Dict[int, Dict[int, int]]]
+_Parse = Tuple[tuple, Dict[int, int], Dict[int, Dict[int, int]]]
+
+
+def _merge_loop(a: Dict[int, int], b: Dict[int, int]) -> Dict[int, int]:
+    if not a:
+        return dict(b)
+    if not b:
+        return dict(a)
+    out = dict(a)
+    for k, v in b.items():
+        out[k] = max(out.get(k, 0), v)
+    return out
+
+
+def _merge_xor(
+    a: Dict[int, Dict[int, int]], b: Dict[int, Dict[int, int]],
+) -> Dict[int, Dict[int, int]]:
+    if not a:
+        return {k: dict(v) for k, v in b.items()}
+    if not b:
+        return {k: dict(v) for k, v in a.items()}
+    out = {k: dict(v) for k, v in a.items()}
+    for k, by_branch in b.items():
+        acc = out.setdefault(k, {})
+        for br, cnt in by_branch.items():
+            acc[br] = acc.get(br, 0) + cnt
+    return out
 
 
 def _replay(
@@ -206,57 +301,68 @@ def _replay(
     node_ids: Dict[int, int],
     alpha_cache: Dict[int, frozenset],
     coarsen_loops: bool,
-    loop_iter_counts: Dict[int, int],
-    xor_branch_counts: Dict[int, Dict[int, int]],
-) -> Optional[tuple]:
-    """Recursive replay worker. Returns ``None`` on NOFIT, a tuple otherwise."""
+    budget: List[int],
+    memo: Dict[Tuple[int, Tuple[str, ...]], Optional[_Parse]],
+) -> Optional[_Parse]:
+    """Recursive replay worker.
+
+    Returns ``None`` when the ``(window, tree)`` pair is
+    unparseable — under any peel choice — or the state budget was
+    exhausted. Otherwise returns the first fitting
+    ``(fragment, loop_delta, xor_delta)`` parse."""
+    if budget[0] <= 0:
+        return None
+    key = (id(tree), tuple(window))
+    if key in memo:
+        return memo[key]
+    budget[0] -= 1
     op = _op_value(tree)
     nid = node_ids[id(tree)]
     children = _children(tree)
 
     if op is None:
-        return _replay_leaf(window, tree)
-
-    if op == _SEQUENCE:
-        return _replay_sequence(
+        result = _replay_leaf(window, tree)
+    elif op == _SEQUENCE:
+        result = _replay_sequence(
             window, children, nid, node_ids, alpha_cache,
-            coarsen_loops, loop_iter_counts, xor_branch_counts,
+            coarsen_loops, budget, memo,
         )
-
-    if op in _CHOICE_OPS:
-        return _replay_xor(
+    elif op in _CHOICE_OPS:
+        result = _replay_xor(
             window, children, nid, node_ids, alpha_cache,
-            coarsen_loops, loop_iter_counts, xor_branch_counts,
+            coarsen_loops, budget, memo,
         )
-
-    if op in _PARALLEL_OPS:
-        return _replay_parallel(
+    elif op in _PARALLEL_OPS:
+        result = _replay_parallel(
             window, children, nid, node_ids, alpha_cache,
-            coarsen_loops, loop_iter_counts, xor_branch_counts,
+            coarsen_loops, budget, memo,
         )
-
-    if op == _LOOP:
-        return _replay_loop(
+    elif op == _LOOP:
+        result = _replay_loop(
             window, children, nid, node_ids, alpha_cache,
-            coarsen_loops, loop_iter_counts, xor_branch_counts,
+            coarsen_loops, budget, memo,
         )
+    else:
+        result = None
 
-    # Unknown operator — NOFIT.
-    return None
+    # Only memoise fully-resolved results. If the budget was exhausted
+    # mid-search we return None but do NOT cache it — a later call with
+    # a fresh budget might succeed on the same pair.
+    if budget[0] > 0:
+        memo[key] = result
+    return result
 
 
-def _replay_leaf(window: List[str], tree) -> Optional[tuple]:
+def _replay_leaf(window: List[str], tree) -> Optional[_Parse]:
     lab = _label(tree)
     if lab is None:
-        # tau — must consume nothing. The empty tuple distinguishes tau
-        # from a visible activity in derived analytics (leaf counting,
-        # partial-order printing).
-        return () if not window else None
-    # Visible activity — must consume exactly that one event. Carry the
-    # label so derived analytics (linearization count, partial-order
-    # expression) can identify it.
+        # tau — must consume nothing. Empty tuple distinguishes tau
+        # from a visible activity in derived analytics.
+        if not window:
+            return ((), {}, {})
+        return None
     if len(window) == 1 and window[0] == lab:
-        return ("ACT", lab)
+        return (("ACT", lab), {}, {})
     return None
 
 
@@ -267,29 +373,83 @@ def _replay_sequence(
     node_ids: Dict[int, int],
     alpha_cache: Dict[int, frozenset],
     coarsen_loops: bool,
-    loop_iter_counts: Dict[int, int],
-    xor_branch_counts: Dict[int, Dict[int, int]],
-) -> Optional[tuple]:
+    budget: List[int],
+    memo: Dict[Tuple[int, Tuple[str, ...]], Optional[_Parse]],
+) -> Optional[_Parse]:
     if not children:
-        return ("SEQ", nid, ()) if not window else None
-    fragments = []
-    idx = 0
-    for c in children:
-        alpha = _alphabet(c, alpha_cache)
-        peel: List[str] = []
-        while idx < len(window) and window[idx] in alpha:
-            peel.append(window[idx])
-            idx += 1
-        frag = _replay(
-            peel, c, node_ids, alpha_cache,
-            coarsen_loops, loop_iter_counts, xor_branch_counts,
-        )
-        if frag is None:
-            return None
-        fragments.append(frag)
-    if idx != len(window):
+        return (("SEQ", nid, ()), {}, {}) if not window else None
+    n = len(window)
+    result = _seq_split_first(
+        window, 0, 0, children, node_ids, alpha_cache,
+        coarsen_loops, budget, memo,
+    )
+    if result is None:
         return None
-    return ("SEQ", nid, tuple(fragments))
+    frags, loop_d, xor_d = result
+    return (("SEQ", nid, frags), loop_d, xor_d)
+
+
+def _seq_split_first(
+    window: List[str],
+    start: int,
+    ch_idx: int,
+    children: List[Any],
+    node_ids: Dict[int, int],
+    alpha_cache: Dict[int, frozenset],
+    coarsen_loops: bool,
+    budget: List[int],
+    memo: Dict[Tuple[int, Tuple[str, ...]], Optional[_Parse]],
+) -> Optional[Tuple[Tuple[tuple, ...], Dict[int, int], Dict[int, Dict[int, int]]]]:
+    """Return the first valid child-fragment tuple for
+    ``children[ch_idx:]`` consuming ``window[start:]``.
+
+    Peel lengths for child ``ch_idx`` are tried greedy-first
+    (longest alphabet-compatible prefix), then progressively shorter
+    down to zero (allowing tau children to consume the empty peel).
+    """
+    n = len(window)
+    if ch_idx == len(children):
+        if start == n:
+            return ((), {}, {})
+        return None
+    child = children[ch_idx]
+    is_last = ch_idx == len(children) - 1
+    if is_last:
+        # Must consume every remaining event on the last child.
+        peel = window[start:]
+        r = _replay(peel, child, node_ids, alpha_cache, coarsen_loops, budget, memo)
+        if r is None:
+            return None
+        frag, loop_d, xor_d = r
+        return ((frag,), loop_d, xor_d)
+    # Non-last child: try each peel length from max alphabet-compatible
+    # down to zero. Zero-length is legitimate (tau child, or a child
+    # whose only role is to consume events later via redo).
+    child_alpha = _alphabet(child, alpha_cache)
+    max_end = start
+    while max_end < n and window[max_end] in child_alpha:
+        max_end += 1
+    for end in range(max_end, start - 1, -1):
+        if budget[0] <= 0:
+            return None
+        peel = window[start:end]
+        r = _replay(peel, child, node_ids, alpha_cache, coarsen_loops, budget, memo)
+        if r is None:
+            continue
+        frag, loop_d, xor_d = r
+        tail = _seq_split_first(
+            window, end, ch_idx + 1, children, node_ids, alpha_cache,
+            coarsen_loops, budget, memo,
+        )
+        if tail is None:
+            continue
+        tail_frags, tail_loop_d, tail_xor_d = tail
+        return (
+            (frag,) + tail_frags,
+            _merge_loop(loop_d, tail_loop_d),
+            _merge_xor(xor_d, tail_xor_d),
+        )
+    return None
 
 
 def _replay_xor(
@@ -299,55 +459,62 @@ def _replay_xor(
     node_ids: Dict[int, int],
     alpha_cache: Dict[int, frozenset],
     coarsen_loops: bool,
-    loop_iter_counts: Dict[int, int],
-    xor_branch_counts: Dict[int, Dict[int, int]],
-) -> Optional[tuple]:
+    budget: List[int],
+    memo: Dict[Tuple[int, Tuple[str, ...]], Optional[_Parse]],
+) -> Optional[_Parse]:
     if not children:
-        return ("XOR", nid, -1, ()) if not window else None
+        return (("XOR", nid, -1, ()), {}, {}) if not window else None
     if len(children) == 1:
-        return _replay(
+        r = _replay(
             window, children[0], node_ids, alpha_cache,
-            coarsen_loops, loop_iter_counts, xor_branch_counts,
+            coarsen_loops, budget, memo,
         )
+        if r is None:
+            return None
+        inner_frag, loop_d, xor_d = r
+        return (("XOR", nid, 0, inner_frag), loop_d, _bump_xor(xor_d, nid, 0))
 
     window_set = frozenset(window)
-    # Empty window must go to the unique tau branch if one exists.
+    # Empty window must go to a branch that can consume nothing (a tau
+    # branch typically).
     if not window:
         for i, c in enumerate(children):
-            inner = _replay(
-                window, c, node_ids, alpha_cache,
-                coarsen_loops, loop_iter_counts, xor_branch_counts,
+            r = _replay(
+                window, c, node_ids, alpha_cache, coarsen_loops, budget, memo,
             )
-            if inner is not None:
-                _record_xor_choice(xor_branch_counts, nid, i)
-                return ("XOR", nid, i, inner)
+            if r is not None:
+                inner_frag, loop_d, xor_d = r
+                return (
+                    ("XOR", nid, i, inner_frag),
+                    loop_d,
+                    _bump_xor(xor_d, nid, i),
+                )
         return None
 
-    # Visible activities — pick the branch whose alphabet covers them.
+    # Visible activities. Try each branch whose alphabet is a superset
+    # of the window; take the FIRST that produces a valid inner replay
+    # (fall through to the next candidate on failure).
     for i, c in enumerate(children):
         calpha = _alphabet(c, alpha_cache)
         if not window_set.issubset(calpha):
             continue
-        inner = _replay(
-            window, c, node_ids, alpha_cache,
-            coarsen_loops, loop_iter_counts, xor_branch_counts,
+        r = _replay(
+            window, c, node_ids, alpha_cache, coarsen_loops, budget, memo,
         )
-        if inner is not None:
-            _record_xor_choice(xor_branch_counts, nid, i)
-            return ("XOR", nid, i, inner)
+        if r is None:
+            continue
+        inner_frag, loop_d, xor_d = r
+        return (("XOR", nid, i, inner_frag), loop_d, _bump_xor(xor_d, nid, i))
     return None
 
 
-def _record_xor_choice(
-    xor_branch_counts: Dict[int, Dict[int, int]],
-    nid: int,
-    branch: int,
-) -> None:
-    """Bump ``xor_branch_counts[nid][branch]`` by 1. The same XOR may
-    be visited multiple times inside a loop body/redo; the count is
-    the total across every visit in this single trace."""
-    by_branch = xor_branch_counts.setdefault(nid, {})
-    by_branch[branch] = by_branch.get(branch, 0) + 1
+def _bump_xor(
+    xor_d: Dict[int, Dict[int, int]], nid: int, branch: int,
+) -> Dict[int, Dict[int, int]]:
+    out = {k: dict(v) for k, v in xor_d.items()}
+    acc = out.setdefault(nid, {})
+    acc[branch] = acc.get(branch, 0) + 1
+    return out
 
 
 def _replay_parallel(
@@ -357,15 +524,14 @@ def _replay_parallel(
     node_ids: Dict[int, int],
     alpha_cache: Dict[int, frozenset],
     coarsen_loops: bool,
-    loop_iter_counts: Dict[int, int],
-    xor_branch_counts: Dict[int, Dict[int, int]],
-) -> Optional[tuple]:
+    budget: List[int],
+    memo: Dict[Tuple[int, Tuple[str, ...]], Optional[_Parse]],
+) -> Optional[_Parse]:
     if not children:
-        return ("PAR", nid, ()) if not window else None
+        return (("PAR", nid, ()), {}, {}) if not window else None
     if len(children) == 1:
         return _replay(
-            window, children[0], node_ids, alpha_cache,
-            coarsen_loops, loop_iter_counts, xor_branch_counts,
+            window, children[0], node_ids, alpha_cache, coarsen_loops, budget, memo,
         )
 
     # Project the window onto each child's alphabet. The IM-disjointness
@@ -379,23 +545,25 @@ def _replay_parallel(
                 placed = True
                 break
         if not placed:
-            # Event not in any branch's alphabet — NOFIT.
             return None
 
-    sub_fragments = []
+    sub_fragments: List[tuple] = []
+    merged_loop: Dict[int, int] = {}
+    merged_xor: Dict[int, Dict[int, int]] = {}
     for c, proj in zip(children, projections):
-        frag = _replay(
-            proj, c, node_ids, alpha_cache,
-            coarsen_loops, loop_iter_counts, xor_branch_counts,
+        r = _replay(
+            proj, c, node_ids, alpha_cache, coarsen_loops, budget, memo,
         )
-        if frag is None:
+        if r is None:
             return None
+        frag, loop_d, xor_d = r
         sub_fragments.append(frag)
+        merged_loop = _merge_loop(merged_loop, loop_d)
+        merged_xor = _merge_xor(merged_xor, xor_d)
 
-    # CANONICALIZE — sort by repr so that interleaving-equivalent traces
-    # produce equal signatures regardless of original child order.
+    # Canonicalise so interleaving-equivalent traces share signatures.
     sub_fragments.sort(key=repr)
-    return ("PAR", nid, tuple(sub_fragments))
+    return (("PAR", nid, tuple(sub_fragments)), merged_loop, merged_xor)
 
 
 def _replay_loop(
@@ -405,86 +573,145 @@ def _replay_loop(
     node_ids: Dict[int, int],
     alpha_cache: Dict[int, frozenset],
     coarsen_loops: bool,
-    loop_iter_counts: Dict[int, int],
-    xor_branch_counts: Dict[int, Dict[int, int]],
-) -> Optional[tuple]:
-    # PM4Py loops have two children: do (body) and redo. Semantics:
-    #     do (redo do)*
-    # Iteration count = number of body executions.
+    budget: List[int],
+    memo: Dict[Tuple[int, Tuple[str, ...]], Optional[_Parse]],
+) -> Optional[_Parse]:
+    """Peel ``do (redo do)*`` on ``window``.
+
+    Backtracking version: at every iteration, tries the greedy peel
+    (longest alphabet-compatible prefix) first, then shorter peels
+    on failure. Recurses into ``_loop_continue`` after each successful
+    body iteration to try the ``(redo do)*`` tail. Guarantees
+    ``iter_count = number of body executions`` and preserves the
+    coarsened / fine-grained signature output of the original code.
+    """
     if len(children) < 2:
         if children:
             return _replay(
                 window, children[0], node_ids, alpha_cache,
-                coarsen_loops, loop_iter_counts, xor_branch_counts,
+                coarsen_loops, budget, memo,
             )
-        return ("LOOP", nid, 0) if not window else None
+        return (("LOOP", nid, 0), {}, {}) if not window else None
 
     do_tree, redo_tree = children[0], children[1]
     do_alpha = _alphabet(do_tree, alpha_cache)
     redo_alpha = _alphabet(redo_tree, alpha_cache)
 
-    # Pathological case: empty do alphabet means the body is tau. Treat
-    # a non-empty window as NOFIT — we can't otherwise terminate.
     if not do_alpha and not redo_alpha and window:
+        # Tau-only loop; can't terminate on a non-empty window.
         return None
 
-    iter_fragments: List[tuple] = []
-    idx = 0
+    n = len(window)
+    # First (mandatory) body iteration — try peel lengths from the
+    # greedy maximum down. The bounds MUST allow zero (tau body).
+    max_do = 0
+    while max_do < n and window[max_do] in do_alpha:
+        max_do += 1
+    for do_end in range(max_do, -1, -1):
+        if budget[0] <= 0:
+            return None
+        do_peel = window[0:do_end]
+        r_do = _replay(
+            do_peel, do_tree, node_ids, alpha_cache, coarsen_loops, budget, memo,
+        )
+        if r_do is None:
+            continue
+        do_frag, do_loop_d, do_xor_d = r_do
+        cont = _loop_continue(
+            window, do_end, redo_tree, do_tree, redo_alpha, do_alpha,
+            node_ids, alpha_cache, coarsen_loops, budget, memo,
+            iter_count=1, iter_frags=[do_frag],
+            loop_d=do_loop_d, xor_d=do_xor_d,
+        )
+        if cont is None:
+            continue
+        iter_count, iter_frags, loop_d, xor_d = cont
+        out_loop = dict(loop_d)
+        out_loop[nid] = max(out_loop.get(nid, 0), iter_count)
+        if coarsen_loops:
+            coarse = 0 if iter_count == 0 else (1 if iter_count == 1 else 2)
+            return (("LOOP", nid, coarse), out_loop, xor_d)
+        return (
+            ("LOOP_FINE", nid, iter_count, tuple(iter_frags)),
+            out_loop, xor_d,
+        )
+    return None
 
-    def _peel(target_alpha: frozenset) -> List[str]:
-        nonlocal idx
-        out: List[str] = []
-        while idx < len(window) and window[idx] in target_alpha:
-            out.append(window[idx])
-            idx += 1
-        return out
 
-    # First body iteration (mandatory).
-    do_peel = _peel(do_alpha)
-    do_frag = _replay(
-        do_peel, do_tree, node_ids, alpha_cache,
-        coarsen_loops, loop_iter_counts, xor_branch_counts,
-    )
-    if do_frag is None:
+def _loop_continue(
+    window: List[str],
+    start: int,
+    redo_tree,
+    do_tree,
+    redo_alpha: frozenset,
+    do_alpha: frozenset,
+    node_ids: Dict[int, int],
+    alpha_cache: Dict[int, frozenset],
+    coarsen_loops: bool,
+    budget: List[int],
+    memo: Dict[Tuple[int, Tuple[str, ...]], Optional[_Parse]],
+    iter_count: int,
+    iter_frags: List[tuple],
+    loop_d: Dict[int, int],
+    xor_d: Dict[int, Dict[int, int]],
+) -> Optional[Tuple[int, List[tuple], Dict[int, int], Dict[int, Dict[int, int]]]]:
+    """After ``iter_count`` body iterations, either end the loop (if
+    we've consumed all events) or try one more ``(redo, do)`` pair.
+
+    Explores peel lengths greedy-first; on failure of a pair, walks
+    the redo peel down before conceding."""
+    n = len(window)
+    if start == n:
+        return (iter_count, iter_frags, loop_d, xor_d)
+    if budget[0] <= 0:
         return None
-    iter_fragments.append(do_frag)
-
-    # Subsequent (redo, body) pairs.
-    while idx < len(window):
-        prev_idx = idx
-        redo_peel = _peel(redo_alpha)
-        redo_frag = _replay(
+    # Greedy peel for redo, then for do. Backtrack on both.
+    max_redo = start
+    while max_redo < n and window[max_redo] in redo_alpha:
+        max_redo += 1
+    for redo_end in range(max_redo, start - 1, -1):
+        if budget[0] <= 0:
+            return None
+        redo_peel = window[start:redo_end]
+        r_redo = _replay(
             redo_peel, redo_tree, node_ids, alpha_cache,
-            coarsen_loops, loop_iter_counts, xor_branch_counts,
+            coarsen_loops, budget, memo,
         )
-        if redo_frag is None:
-            return None
-        do_peel = _peel(do_alpha)
-        do_frag = _replay(
-            do_peel, do_tree, node_ids, alpha_cache,
-            coarsen_loops, loop_iter_counts, xor_branch_counts,
-        )
-        if do_frag is None:
-            return None
-        iter_fragments.append(do_frag)
-        if idx == prev_idx:
-            # No progress — bail to avoid an infinite loop on tau bodies.
-            return None
-
-    if idx != len(window):
-        return None
-
-    iter_count = len(iter_fragments)
-    # Record the actual (pre-coarsening) iteration count so callers can
-    # initialise per-variant loop counter values without re-replaying
-    # with coarsen_loops=False.
-    loop_iter_counts[nid] = max(
-        loop_iter_counts.get(nid, 0), iter_count,
-    )
-    if coarsen_loops:
-        coarse = 0 if iter_count == 0 else (1 if iter_count == 1 else 2)
-        return ("LOOP", nid, coarse)
-    return ("LOOP_FINE", nid, iter_count, tuple(iter_fragments))
+        if r_redo is None:
+            continue
+        _redo_frag, redo_loop_d, redo_xor_d = r_redo
+        max_do = redo_end
+        while max_do < n and window[max_do] in do_alpha:
+            max_do += 1
+        for do_end in range(max_do, redo_end - 1, -1):
+            if budget[0] <= 0:
+                return None
+            # Enforce forward progress: each (redo, do) pair must
+            # consume at least one event. Empty pairs would let the
+            # recursion spin at the same position until the budget
+            # ran out.
+            if do_end == start:
+                continue
+            do_peel = window[redo_end:do_end]
+            r_do = _replay(
+                do_peel, do_tree, node_ids, alpha_cache,
+                coarsen_loops, budget, memo,
+            )
+            if r_do is None:
+                continue
+            do_frag, do_loop_d, do_xor_d = r_do
+            new_loop = _merge_loop(_merge_loop(loop_d, redo_loop_d), do_loop_d)
+            new_xor = _merge_xor(_merge_xor(xor_d, redo_xor_d), do_xor_d)
+            result = _loop_continue(
+                window, do_end, redo_tree, do_tree, redo_alpha, do_alpha,
+                node_ids, alpha_cache, coarsen_loops, budget, memo,
+                iter_count=iter_count + 1,
+                iter_frags=iter_frags + [do_frag],
+                loop_d=new_loop, xor_d=new_xor,
+            )
+            if result is not None:
+                return result
+    return None
 
 
 # ---------------------------------------------------------------------------
