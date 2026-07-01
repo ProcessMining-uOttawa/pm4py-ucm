@@ -235,6 +235,167 @@ def _collapse_strict_bounds_within_clause(
     return frozenset(keep)
 
 
+def _bound_interval(
+    lits: List[Literal],
+) -> Optional[Tuple[Optional[int], bool, Optional[int], bool]]:
+    """Reduce a set of comparisons on a single variable to a single
+    interval ``(lo, lo_incl, hi, hi_incl)``.
+
+    ``lo`` / ``hi`` may be ``None`` for open-ended sides.
+    ``lo_incl`` / ``hi_incl`` are ``True`` when the bound is closed
+    (``>=`` or ``<=`` respectively).
+
+    Returns ``None`` if any comparison uses a non-integer value, or
+    if the input is empty. Equality / inequality literals
+    (``x == V``, ``x != V``) are not intervals — this helper handles
+    the four ordering ops only.
+    """
+    if not lits:
+        return None
+    lo: Optional[int] = None
+    lo_incl = False
+    hi: Optional[int] = None
+    hi_incl = False
+    for _, op, val in lits:
+        if op not in (">", ">=", "<", "<="):
+            return None
+        try:
+            n = int(val)
+        except (ValueError, TypeError):
+            return None
+        if op == ">":
+            # x > n means lo = n, exclusive.
+            if lo is None or n > lo or (n == lo and lo_incl):
+                lo, lo_incl = n, False
+        elif op == ">=":
+            if lo is None or n > lo or (n == lo and not lo_incl):
+                lo, lo_incl = n, True
+        elif op == "<":
+            if hi is None or n < hi or (n == hi and hi_incl):
+                hi, hi_incl = n, False
+        else:  # "<="
+            if hi is None or n < hi or (n == hi and not hi_incl):
+                hi, hi_incl = n, True
+    return (lo, lo_incl, hi, hi_incl)
+
+
+def _interval_to_literals(
+    var: str, interval: Tuple[Optional[int], bool, Optional[int], bool],
+) -> List[Literal]:
+    """Materialise an interval back into 0-2 comparison literals."""
+    lo, lo_incl, hi, hi_incl = interval
+    out: List[Literal] = []
+    if lo is not None:
+        out.append((var, ">=" if lo_incl else ">", str(lo)))
+    if hi is not None:
+        out.append((var, "<=" if hi_incl else "<", str(hi)))
+    return out
+
+
+def _union_intervals(
+    a: Tuple[Optional[int], bool, Optional[int], bool],
+    b: Tuple[Optional[int], bool, Optional[int], bool],
+) -> Optional[Tuple[Optional[int], bool, Optional[int], bool]]:
+    """Union two integer intervals iff the result is a single interval.
+
+    Two intervals unite to one iff they overlap or touch (share an
+    endpoint that at least one side includes, or lie exactly one
+    integer apart). Returns ``None`` if the union is a disjoint pair
+    of intervals (no simplification possible)."""
+    a_lo, a_lo_incl, a_hi, a_hi_incl = a
+    b_lo, b_lo_incl, b_hi, b_hi_incl = b
+    # Order so ``lo`` is the lower interval by lower bound.
+    def _lo_key(iv):
+        lo, lo_incl, _, _ = iv
+        # ``None`` low = -infinity, sort first.
+        return (lo is not None, lo if lo is not None else 0, not lo_incl)
+
+    left, right = sorted([a, b], key=_lo_key)
+    l_lo, l_lo_incl, l_hi, l_hi_incl = left
+    r_lo, r_lo_incl, r_hi, r_hi_incl = right
+
+    # Do the intervals overlap or touch?
+    if l_hi is None:
+        touching = True
+    elif r_lo is None:
+        touching = True  # right extends to -infinity, contradiction w/ ordering
+    elif l_hi > r_lo:
+        touching = True
+    elif l_hi == r_lo:
+        # Touching iff at least one side is inclusive OR both are exclusive
+        # but there's no integer strictly between (which is trivially true
+        # here since they share the same value).
+        touching = l_hi_incl or r_lo_incl
+    elif l_hi + 1 == r_lo and l_hi_incl and r_lo_incl:
+        # Adjacent closed intervals over integers: [_, K] ∪ [K+1, _] = [_, _].
+        touching = True
+    else:
+        touching = False
+    if not touching:
+        return None
+
+    # Union: take the lower bound of ``left`` and the higher of the
+    # two upper bounds (comparing None as +infinity).
+    out_lo, out_lo_incl = l_lo, l_lo_incl
+    if l_hi is None or r_hi is None:
+        out_hi, out_hi_incl = None, False
+    elif r_hi > l_hi or (r_hi == l_hi and r_hi_incl):
+        out_hi, out_hi_incl = r_hi, r_hi_incl
+    else:
+        out_hi, out_hi_incl = l_hi, l_hi_incl
+    return (out_lo, out_lo_incl, out_hi, out_hi_incl)
+
+
+def _merge_range_pairs(
+    clauses: List[FrozenSet[Literal]],
+) -> Optional[List[FrozenSet[Literal]]]:
+    """Look for two clauses that agree on every literal except
+    ordering comparisons on a **single** variable, and whose intervals
+    on that variable union into a single interval; replace them with
+    one clause carrying the merged interval.
+
+    Handles the pattern that ``_merge_complement_pairs`` misses:
+
+    * ``(P && X > 0 && X <= 2) || (P && X > 2)``  ->  ``P && X > 0``
+    * ``(P && X <= 5) || (P && X > 5)``  ->  ``P`` (via complement, but
+      the range logic also catches ``(P && X <= 5) || (P && X > 5 && X <= 10)``
+      which the complement rule misses).
+    * ``(P && X <= 0) || (P && X > 0)``  ->  ``P`` (integer adjacency).
+
+    Returns the new clause list if a merge fired, or ``None`` if not.
+    """
+    merged = list(clauses)
+    for i in range(len(merged)):
+        for j in range(i + 1, len(merged)):
+            a, b = merged[i], merged[j]
+            common = a & b
+            diff_a = a - common
+            diff_b = b - common
+            if not diff_a or not diff_b:
+                continue
+            # All differing literals must be ordering comparisons on
+            # the same single variable.
+            vars_a = {lit[0] for lit in diff_a}
+            vars_b = {lit[0] for lit in diff_b}
+            if len(vars_a) != 1 or vars_a != vars_b:
+                continue
+            var = next(iter(vars_a))
+            iv_a = _bound_interval(list(diff_a))
+            iv_b = _bound_interval(list(diff_b))
+            if iv_a is None or iv_b is None:
+                continue
+            union = _union_intervals(iv_a, iv_b)
+            if union is None:
+                continue
+            new_diff_lits = _interval_to_literals(var, union)
+            new_clause = frozenset(common | set(new_diff_lits))
+            new = [c for k, c in enumerate(merged)
+                   if k != i and k != j]
+            new.append(new_clause)
+            return new
+    return None
+
+
 def _merge_complement_pairs(
     clauses: List[FrozenSet[Literal]],
 ) -> Optional[List[FrozenSet[Literal]]]:
@@ -298,6 +459,16 @@ def minimize(expression: str) -> str:
             clauses = [
                 _collapse_strict_bounds_within_clause(c) for c in merged
             ]
+        else:
+            # Try the range-union rule: two clauses agreeing on
+            # everything except ordering comparisons on a single
+            # variable, whose intervals union to a single interval.
+            range_merged = _merge_range_pairs(clauses)
+            if range_merged is not None:
+                clauses = [
+                    _collapse_strict_bounds_within_clause(c)
+                    for c in range_merged
+                ]
         if clauses == prev:
             break
 

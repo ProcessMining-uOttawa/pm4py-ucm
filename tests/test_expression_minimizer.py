@@ -114,3 +114,68 @@ def test_decision_tree_complement_pair_simplifies():
     # The two complement-pair clauses must have collapsed —
     # ``Claim_Value`` shouldn't appear in the first conjunct.
     assert "Claim_Value" not in out.split("||")[0]
+
+
+# ---------------------------------------------------------------------------
+# Range-merge rule (union of integer intervals across a common part)
+# ---------------------------------------------------------------------------
+
+def test_range_merge_bounded_and_open():
+    """``(P && X > 5 && X <= 10) || (P && X > 10)`` -> ``P && X > 5``.
+
+    The bounded left clause and open right clause share the split at
+    ``X = 10``; their union is the single interval ``(5, infinity)``.
+    """
+    src = "(A == X && B > 5 && B <= 10) || (A == X && B > 10)"
+    assert m.minimize(src) == "A == X && B > 5"
+
+
+def test_range_merge_adjacent_integer_intervals():
+    """Two integer intervals ``(-inf, 0]`` and ``(0, inf)`` touch at
+    zero (``<=`` closes the left, ``>`` opens the right at the same
+    point) and merge to the full line — the common prefix ``P == Y``
+    survives alone."""
+    src = "(P == Y && X <= 0) || (P == Y && X > 0)"
+    assert m.minimize(src) == "P == Y"
+
+
+def test_range_merge_user_reported_road_traffic_expression():
+    """Regression for the RoadTraffic OR-fork condition-mining
+    output. The disjunction covers every valuation of
+    ``(article, points)`` and should minimise to ``true``. Before the
+    range-merge rule was added, the simplifier left it verbatim in
+    the generated .jucm."""
+    src = (
+        "(article <= 145 && points <= 2 && points > 0) "
+        "|| (article <= 145 && points > 2) "
+        "|| (article > 145 && points <= 7 && points > 0) "
+        "|| (article > 145 && points > 7) "
+        "|| points <= 0"
+    )
+    assert m.minimize(src) == "true"
+
+
+def test_range_merge_partial_simplification():
+    """When intervals across two clauses merge but the overall
+    disjunction does NOT become true, the minimizer should still
+    emit the tightened form rather than leave the verbose original.
+    """
+    src = (
+        "(article <= 157 && points <= 1) "
+        "|| (article <= 168 && article > 157 && points <= 1) "
+        "|| (article > 179 && points <= 6 && points > 1) "
+        "|| (article > 179 && points > 6)"
+    )
+    out = m.minimize(src)
+    assert out.count("||") == 1
+    assert "article <= 168 && points <= 1" in out
+    assert "article > 179 && points > 1" in out
+
+
+def test_range_merge_leaves_disjoint_intervals_alone():
+    """If the two intervals form a DISJOINT pair (a gap over
+    integers), the range rule must not fire and the expression stays
+    as-is."""
+    src = "(P == Q && X <= 5) || (P == Q && X > 100)"
+    out = m.minimize(src)
+    assert "X <= 5" in out and "X > 100" in out
