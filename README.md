@@ -3,7 +3,8 @@
 [![tests](https://github.com/ProcessMining-uOttawa/pm4py-ucm/actions/workflows/tests.yml/badge.svg)](https://github.com/ProcessMining-uOttawa/pm4py-ucm/actions/workflows/tests.yml)
 [![Python](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-blue)](https://www.python.org/)
 [![License: GPL v3+](https://img.shields.io/badge/license-GPLv3%2B-blue.svg)](LICENSE)
-[![Streamlit](https://img.shields.io/badge/Streamlit-deployed-FF4B4B?logo=streamlit&logoColor=white)](https://pm4py-ucm.streamlit.app/)
+[![Streamlit V1](https://img.shields.io/badge/Streamlit-V1%20model-FF4B4B?logo=streamlit&logoColor=white)](https://pm4py-ucm.streamlit.app/)
+[![Streamlit V2](https://img.shields.io/badge/Streamlit-V2%20scenarios-FF4B4B?logo=streamlit&logoColor=white)](https://pm4py-ucm-scenarios.streamlit.app/)
 
 **Use Case Map (UCM) extension for [PM4Py](https://github.com/process-intelligence-solutions/pm4py).**
 
@@ -31,7 +32,7 @@ pm4py_ucm.write_ucm(ucm, "running-example.jucm")  # opens in jUCMNav
 
 - [`demo/pm4py_ucm_tutorial.ipynb`](demo/pm4py_ucm_tutorial.ipynb) — end-to-end Jupyter walkthrough on a real claims-payment log (discovery, BPMN/UCM rendering, performer mining, hierarchical decomposition, `.jucm` round-trips).
 - [`demo/scenario_synthesis_tutorial.ipynb`](demo/scenario_synthesis_tutorial.ipynb) — pedagogical tutorial for the **scenario-synthesis** layer: concurrency-aware variants, per-loop counters + `LoopEntryGuard`, variant-driven vs data-driven OR-fork conditions, transparent support for decomposed UCMs. Empirical companion in [`demo/scenario_synthesis.ipynb`](demo/scenario_synthesis.ipynb).
-- [`web/streamlit_app.py`](web/streamlit_app.py) (V1, model-only) and [`web/streamlit_app_v2.py`](web/streamlit_app_v2.py) (V2, model + scenarios) — click, don't code: upload an XES/CSV, tune the miner, download the result. V1 hosted at https://pm4py-ucm.streamlit.app/.
+- [`web/streamlit_app.py`](web/streamlit_app.py) (V1, model-only, hosted at https://pm4py-ucm.streamlit.app/) and [`web/streamlit_app_v2.py`](web/streamlit_app_v2.py) (V2, model + scenarios, hosted at https://pm4py-ucm-scenarios.streamlit.app/) — click, don't code: upload an XES/CSV, tune the miner, download the result.
 - The rest of this README — reference docs for the public API.
 
 [ucm-wiki]: https://en.wikipedia.org/wiki/Use_Case_Maps
@@ -56,7 +57,10 @@ Two [Streamlit](https://streamlit.io) front-ends ship in the
   `variants.csv`, `case_variant_map.csv`, and (data-driven mode)
   `condition_mining.csv`. Runs on flat and decomposed UCMs alike.
 
-V1 is deployed at https://pm4py-ucm.streamlit.app/
+Both are deployed on Streamlit Community Cloud:
+
+- V1 (model only): https://pm4py-ucm.streamlit.app/
+- V2 (model + scenarios): https://pm4py-ucm-scenarios.streamlit.app/
 
 ![Overview of the PM4Py-UCM web interface](web/WebInterfaceOverview.png)
 

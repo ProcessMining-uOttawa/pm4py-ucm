@@ -35,7 +35,8 @@ data-driven scenario condition mining; V1 ignores it.
 ## V1 vs V2
 
 - **V1** (`streamlit_app.py`) — mine a UCM from a log, preview in UCM or
-  BPMN notation, download PNG + `.jucm`. Stable, deployed.
+  BPMN notation, download PNG + `.jucm`. Deployed at
+  https://pm4py-ucm.streamlit.app/.
 - **V2** (`streamlit_app_v2.py`) — superset of V1. Adds a **Scenarios**
   tab that runs concurrency-aware variant clustering and synthesizes one
   executable jUCMNav `ScenarioDef` per variant, with downloads for the
@@ -43,9 +44,10 @@ data-driven scenario condition mining; V1 ignores it.
   `case_variant_map.csv`, and (data-driven mode only)
   `condition_mining.csv`. Both variant-driven and data-driven OR-fork
   encodings are exposed; the data-driven option greys out when
-  `scikit-learn` is missing. The Scenarios tab always runs with
-  `decomposition=None` so OR-forks in every XOR receive a `variant_id`
-  condition — XORs pushed into plug-in maps would otherwise lose them.
+  `scikit-learn` is missing. Decomposition is honoured across all maps
+  (OR-forks in plug-in maps receive their conditions and loop counters
+  the same way root-map forks do). Deployed at
+  https://pm4py-ucm-scenarios.streamlit.app/.
 
 ## Using the app
 
