@@ -27,10 +27,11 @@ pm4py_ucm.view_ucm(ucm)
 pm4py_ucm.write_ucm(ucm, "running-example.jucm")  # opens in jUCMNav
 ```
 
-**Three ways to get started:**
+**Four ways to get started:**
 
 - [`demo/pm4py_ucm_tutorial.ipynb`](demo/pm4py_ucm_tutorial.ipynb) — end-to-end Jupyter walkthrough on a real claims-payment log (discovery, BPMN/UCM rendering, performer mining, hierarchical decomposition, `.jucm` round-trips).
-- [`web/streamlit_app.py`](web/streamlit_app.py) — click, don't code: upload an XES/CSV, tune the miner, download the result. Hosted at https://pm4py-ucm.streamlit.app/.
+- [`demo/scenario_synthesis_tutorial.ipynb`](demo/scenario_synthesis_tutorial.ipynb) — pedagogical tutorial for the **scenario-synthesis** layer: concurrency-aware variants, per-loop counters + `LoopEntryGuard`, variant-driven vs data-driven OR-fork conditions, transparent support for decomposed UCMs. Empirical companion in [`demo/scenario_synthesis.ipynb`](demo/scenario_synthesis.ipynb).
+- [`web/streamlit_app.py`](web/streamlit_app.py) (V1, model-only) and [`web/streamlit_app_v2.py`](web/streamlit_app_v2.py) (V2, model + scenarios) — click, don't code: upload an XES/CSV, tune the miner, download the result. V1 hosted at https://pm4py-ucm.streamlit.app/.
 - The rest of this README — reference docs for the public API.
 
 [ucm-wiki]: https://en.wikipedia.org/wiki/Use_Case_Maps
@@ -38,21 +39,33 @@ pm4py_ucm.write_ucm(ucm, "running-example.jucm")  # opens in jUCMNav
 
 ## Web front-end
 
-If you would rather click than code, a [Streamlit](https://streamlit.io)
-front-end ships in the [`web/`](web/) directory. Upload an event log
-(XES or CSV), tune the inductive miner / decomposition / performer
-settings interactively, preview the diagram in UCM or BPMN notation, and
-download the rendered PNG plus the `.jucm` file.
+Two [Streamlit](https://streamlit.io) front-ends ship in the
+[`web/`](web/) directory:
 
-A fully-deployed version is available at https://pm4py-ucm.streamlit.app/ 
+- **`streamlit_app.py` (V1)** — the original model-only flow. Upload an
+  event log (XES or CSV), tune the inductive miner / decomposition /
+  performer settings interactively, preview the diagram in UCM or BPMN
+  notation, and download the rendered PNG plus the `.jucm` file.
+- **`streamlit_app_v2.py` (V2)** — superset of V1. Adds a **Scenarios
+  tab** that runs concurrency-aware variant clustering and synthesizes
+  one executable jUCMNav `ScenarioDef` per variant. Both variant-driven
+  and data-driven OR-fork encodings are exposed; the tab surfaces
+  headline metrics (variant count, sequence variants, compression
+  ratio, fitness %, per-fork condition-mining accuracies) and offers
+  four downloads: the `.jucm` with the synthesized scenario group,
+  `variants.csv`, `case_variant_map.csv`, and (data-driven mode)
+  `condition_mining.csv`. Runs on flat and decomposed UCMs alike.
+
+V1 is deployed at https://pm4py-ucm.streamlit.app/
 
 ![Overview of the PM4Py-UCM web interface](web/WebInterfaceOverview.png)
 
-Run locally with:
+Run either locally with:
 
 ```bash
 pip install -r web/requirements.txt
-streamlit run web/streamlit_app.py
+streamlit run web/streamlit_app.py       # V1 (model only)
+streamlit run web/streamlit_app_v2.py    # V2 (model + scenarios)
 ```
 
 See [`web/README.md`](web/README.md) for the full feature walkthrough and
@@ -332,6 +345,128 @@ Each panel has a title strip and adjacent panels are separated by a thin
 horizontal rule. Bound stubs gain a `→ <plug-in name>` external label so
 the reader can follow each stub to its plug-in map.
 
+## Scenario synthesis
+
+The `discover_scenarios` pipeline turns an event log into an
+*executable* UCM: a `.jucm` carrying one URN `ScenarioDef` per
+behavioural variant discovered in the log, with typed variables,
+per-loop integer counters, and mutually-exclusive OR-fork conditions
+that let jUCMNav step through each scenario deterministically.
+
+```python
+import pm4py
+import pm4py_ucm
+
+log = pm4py.read_xes("log.xes")
+
+# Variant-driven (default) — lossless replay of every observed variant
+ucm, clustering = pm4py_ucm.discover_scenarios(log)
+pm4py_ucm.write_ucm(ucm, "log.jucm")
+pm4py_ucm.write_variants_report(clustering, "variants.csv")
+pm4py_ucm.write_case_variant_map(clustering, "case_variant_map.csv")
+
+# Data-driven — mine per-fork decision trees over case attributes,
+# emit conditions like `Broker == Spot_Health_Insurance && Claim_Value <= 1417646`
+ucm_dd, _ = pm4py_ucm.discover_scenarios(
+    log, condition_strategy="data-driven",
+    decision_tree_max_depth=3,
+)
+group = ucm_dd.scenario_groups[0]
+pm4py_ucm.write_ucm(ucm_dd, "log.data_driven.jucm")
+pm4py_ucm.write_condition_mining_report(group, "condition_mining.csv")
+```
+
+### What the synthesizer populates
+
+- **`EnumerationType` `VariantId`** with values `[v1, v2, …]`
+  (variant-driven only), plus one `EnumerationType` per case-constant
+  string attribute the log carries (data-driven only).
+- **`Variable`s** — a `variant_id` enum (variant-driven) or one variable
+  per mined case attribute (data-driven), plus one `integer` per loop
+  operator in the discovered tree (contextually named e.g.
+  `Loop_AnalyzeClaim`).
+- **One `ScenarioDef` per variant**, each with an `Init` per variable
+  (variant-driven initialises `variant_id`; data-driven initialises
+  each attribute to a representative value for its variant — mode for
+  enum/bool, scaled median for integer), plus a per-loop counter init
+  capped at `max_loop_iterations` (default 2), plus `ScenarioStartPoint`
+  / `ScenarioEndPoint` refs. Names carry a short discriminator
+  (`v3_TwoCloseAssessmen`, `v8_QuickAssessment`); descriptions start
+  with a plain-English `Intent:` line.
+- **Arc conditions on every non-loop OR-fork** — variant-driven writes
+  `variant_id == v_i` disjunctions (with an inside-loop variant that
+  combines the disjunction with counter thresholds); data-driven writes
+  mined boolean expressions over case attributes.
+- **A `LoopEntryGuard` OR-fork** per loop, spliced between the loop's
+  upstream arc and its `LoopJoin`, with mutually-exclusive `counter > 0`
+  / `counter <= 0` conditions. This restores the semantics
+  "counter = number of body executions" — including zero. When a
+  loop's post-loop continuation is a `Stub`, an `OrJoin` is spliced
+  before the stub so its plug-in binding stays complete.
+
+### Concurrency-aware variants
+
+Two traces that differ only in the interleaving order of activities
+inside a parallel block share the same **choice signature** and
+therefore the same variant. `X → (Y ∥ Z) → W` traces `X-Y-Z-W` and
+`X-Z-Y-W` cluster as one; sequence-variant analysis splits them. The
+`compression_ratio` (concurrency-aware / sequence-variant count) on
+`ClaimsPaymentLog` is 0.146, meaning naive clustering over-counts by
+~7×.
+
+Loop iteration counts are coarsened to `{0, 1, ≥2}` by default to keep
+the variant count small; pass `coarsen_loops=False` to distinguish
+every iteration count.
+
+### Two condition-encoding strategies
+
+| Strategy       | Arc conditions                                                                | Trade-off                                                                                                     |
+|----------------|-------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------|
+| `variant`      | `variant_id == v_i` disjunctions per branch                                   | **Lossless** — replaying scenario `v_i` reproduces `v_i`'s choice signature exactly. Doesn't *explain* choices. |
+| `data-driven`  | Boolean expressions over case attributes, mined per-fork by decision trees    | Business-readable rules on every fork; requires case-constant attributes; **abandons with a warning** otherwise. |
+
+Inside-loop OR-forks (XORs sitting inside a loop body): variant-driven
+combines `variant_id` with the enclosing counter to distribute branches
+across iterations. Data-driven falls back, only for inside-loop forks,
+to a deterministic `true`/`false` split — case attributes are static per
+case and can't disambiguate per-iteration choices.
+
+### Reports
+
+Three CSVs alongside the `.jucm`:
+
+- **`variants.csv`** — one row per variant with frequency, sequence-
+  variant count, linearization count, partial-order expression, and a
+  truncated case-ID list. Trailing rows for `noise` and `totals`
+  (fitness + compression).
+- **`case_variant_map.csv`** — one row per case, mapping case ID to
+  variant ID (or `noise` for non-conforming cases).
+- **`condition_mining.csv`** — data-driven mode only. One row per
+  `(OR-fork, branch)` with accuracy, sample size, feature set,
+  `skipped_reason` (`inside_loop`, `no_labelled_cases`), and the
+  post-minimisation expression emitted on the arc.
+
+### Interaction with decomposition
+
+`discover_scenarios` accepts the same `decomposition=` argument as
+`discover_ucm_inductive` and honours it fully: OR-forks that land in
+plug-in maps receive the same conditions they would in the flat case,
+and loops pushed into plug-in maps get their counter machinery
+(LoopEntryGuard, decrement responsibility) spliced into the correct
+map. Each UCM `OrFork` / `OrJoin` / `LoopFork` / `LoopJoin` carries a
+stable id linking it back to the tree node it came from, so
+correlation survives arbitrary decomposition boundaries.
+
+### Learning path
+
+- [`demo/scenario_synthesis_tutorial.ipynb`](demo/scenario_synthesis_tutorial.ipynb)
+  — pedagogical walkthrough with a small synthetic example per section.
+- [`demo/scenario_synthesis.ipynb`](demo/scenario_synthesis.ipynb)
+  — empirical demonstration on `ClaimsPaymentLog` (24 variants,
+  compression 0.146) in both encodings.
+- The Scenarios tab in
+  [`web/streamlit_app_v2.py`](web/streamlit_app_v2.py) — no code needed.
+
 ## Module layout
 
 ```
@@ -340,12 +475,22 @@ pm4py_ucm/
 ├── objects/ucm/
 │   ├── obj.py                             # UCM object model (URN metamodel)
 │   ├── conversion/from_process_tree.py    # PM4Py process tree → UCM
+│   ├── conversion/decomposition.py        # hierarchical decomposition rules + presets
 │   ├── exporter/variants/jucm.py          # UCM → jUCMNav .jucm (XMI 2.0)
 │   ├── importer/variants/jucm.py          # jUCMNav .jucm → UCM
 │   └── layout/layouter.py                 # auto-layout for jUCMNav graphical view
-├── algo/discovery/ucm/
-│   ├── algorithm.py                       # discovery dispatcher (mirrors BPMN)
-│   └── variants/inductive.py              # inductive-miner-based discovery
+├── algo/discovery/
+│   ├── ucm/
+│   │   ├── algorithm.py                   # discovery dispatcher (mirrors BPMN)
+│   │   └── variants/inductive.py          # inductive-miner-based discovery
+│   ├── variants/                          # concurrency-aware variant clustering
+│   │   ├── choice_signature.py            # replay algorithm + signature canonicalisation
+│   │   └── clustering.py                  # per-variant clustering + fitness / compression
+│   └── scenarios/                         # scenario synthesis on top of a UCM + clustering
+│       ├── synthesis.py                   # variables, ScenarioDefs, LoopEntryGuard, conditions
+│       ├── decision_mining.py             # data-driven strategy: sklearn tree → jUCMNav expr
+│       ├── expression_minimizer.py        # boolean simplifier for mined expressions
+│       └── reports.py                     # variants.csv / case_variant_map.csv / condition_mining.csv
 └── visualization/ucm/
     ├── visualizer.py                      # apply / view / save (mirrors BPMN)
     └── variants/classic.py                # graphviz-based renderer

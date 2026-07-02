@@ -260,6 +260,15 @@ def _attach(tree, entry: UCM.PathNode, exit: UCM.PathNode,
             return
         of = UCM.OrFork(name="OrFork")
         oj = UCM.OrJoin(name="OrJoin")
+        # Stash the originating XOR tree node's Python id() so the
+        # scenario synthesizer can correlate each UCM OR-fork with the
+        # tree XOR it came from (lookup by id, not by cross-map walk
+        # position — the latter happens to work for the flat case but
+        # is brittle once decomposition interleaves root-map and
+        # plug-in-map forks). The synthesizer pairs this with
+        # ``_cs.assign_node_ids(tree)`` to get a stable integer id.
+        of._tree_python_id = id(tree)
+        oj._tree_python_id = id(tree)
         ucm_map.add_node(of)
         ucm_map.add_node(oj)
         ucm_map.add_connection(entry, of)
@@ -303,6 +312,10 @@ def _attach(tree, entry: UCM.PathNode, exit: UCM.PathNode,
         do_tree, redo_tree = children[0], children[1]
         oj_in = UCM.OrJoin(name="LoopJoin")
         of_out = UCM.OrFork(name="LoopFork")
+        # Same id stash as the XOR branch above — synthesizer pairs
+        # each LoopJoin/LoopFork with the LOOP tree node it came from.
+        oj_in._tree_python_id = id(tree)
+        of_out._tree_python_id = id(tree)
         ucm_map.add_node(oj_in)
         ucm_map.add_node(of_out)
         ucm_map.add_connection(entry, oj_in)

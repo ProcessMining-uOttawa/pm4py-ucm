@@ -1,15 +1,17 @@
 # pm4py-ucm demos
 
-Three things in this directory:
+Contents:
 
-| File                          | What it is                                                       |
-|-------------------------------|------------------------------------------------------------------|
-| `pm4py_ucm_tutorial.ipynb`    | **Jupyter notebook tutorial** — guided tour of the full feature surface against a realistic claims-payment log. Recommended starting point. |
-| `IssueTracker.zip`            | Small, readable event log (~100 K events / 11 K cases, 9 distinct activities, 5 roles). Drives sections 0-5 of the notebook. |
-| `ClaimsPaymentLog.zip`        | Heavier, denser event log (~90 K events, more activities and actor types). Drives section 6 onward — decomposition gets to work on a non-trivial tree. |
-| `mine_and_export.py`          | Minimal command-line script that mines a UCM, exports a `.jucm`, and renders a PNG. |
+| File                                    | What it is                                                       |
+|-----------------------------------------|------------------------------------------------------------------|
+| `pm4py_ucm_tutorial.ipynb`              | **Main tutorial notebook** — guided tour of the full model-discovery feature surface against a realistic claims-payment log. Recommended starting point for the discovery / rendering / decomposition side of the package. |
+| `scenario_synthesis_tutorial.ipynb`     | **Scenario-synthesis tutorial** — pedagogical walkthrough of the scenario layer: concurrency-aware variants, the `LoopEntryGuard`, variant-driven vs data-driven OR-fork conditions, transparent support for decomposed UCMs. Small synthetic examples per section. |
+| `scenario_synthesis.ipynb`              | Empirical companion to the scenario tutorial — runs the full pipeline on `ClaimsPaymentLog` in both encodings side-by-side, with the numbers from the paper. |
+| `IssueTracker.zip`                      | Small, readable event log (~100 K events / 11 K cases, 9 distinct activities, 5 roles). Drives sections 0-5 of the main notebook. |
+| `ClaimsPaymentLog.zip`                  | Heavier, denser event log (~90 K events, more activities and actor types). Drives the second half of the main notebook and both scenario notebooks. |
+| `mine_and_export.py`                    | Minimal command-line script that mines a UCM, exports a `.jucm`, and renders a PNG. |
 
-## Tutorial notebook
+## Main tutorial notebook
 
 Open `pm4py_ucm_tutorial.ipynb` in JupyterLab, VS Code, or any
 notebook-aware editor. It covers, with runnable cells:
@@ -33,6 +35,32 @@ notebook-aware editor. It covers, with runnable cells:
 Each section writes its outputs to a local `output/` directory so
 you can open them in jUCMNav, peek at the XML, or include in a
 report.
+
+## Scenario-synthesis notebooks
+
+Two complementary notebooks focus on the scenario-synthesis layer:
+
+- **`scenario_synthesis_tutorial.ipynb`** — pedagogical, one concept
+  per section on small synthetic examples. Start here if you're new
+  to scenario synthesis.
+  1. Why sequence-variant clustering over-counts and how the choice
+     signature fixes it.
+  2. Your first `discover_scenarios` call and what it populates
+     (variables, initializations, arc conditions).
+  3. Loop counters and the `LoopEntryGuard` — why 0-iteration
+     scenarios need special treatment.
+  4. Variant-driven vs data-driven condition encodings side-by-side.
+  5. Decomposition is orthogonal: flat and multi-map UCMs get the
+     same scenario coverage.
+  6. What the three CSV reports contain and how to audit a run.
+- **`scenario_synthesis.ipynb`** — empirical demonstration on
+  `ClaimsPaymentLog`. Runs the full pipeline in both encodings,
+  reports fitness / compression / per-fork accuracy, and drops both
+  `.jucm` files into `scenario_output/` so you can open them
+  side-by-side in jUCMNav.
+
+Both notebooks require `pm4py` (for reading XES). The data-driven
+sections additionally require `scikit-learn`.
 
 ## Mine-and-export script
 

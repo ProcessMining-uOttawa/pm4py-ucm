@@ -21,13 +21,31 @@ python -m venv .venv
 # source .venv/bin/activate       # macOS/Linux
 
 pip install -r web/requirements.txt
-streamlit run web/streamlit_app.py
+streamlit run web/streamlit_app.py        # V1 (model only)
+streamlit run web/streamlit_app_v2.py     # V2 (model + scenarios)
 ```
 
 Streamlit opens `http://localhost:8501`.
 
-The web-specific deps (`streamlit`, `pm4py`) live in `web/requirements.txt`
-so they stay out of the package's own dev workflow (`pip install -e ".[dev]"`).
+The web-specific deps (`streamlit`, `pm4py`, `scikit-learn`) live in
+`web/requirements.txt` so they stay out of the package's own dev workflow
+(`pip install -e ".[dev]"`). `scikit-learn` is only needed by V2's
+data-driven scenario condition mining; V1 ignores it.
+
+## V1 vs V2
+
+- **V1** (`streamlit_app.py`) — mine a UCM from a log, preview in UCM or
+  BPMN notation, download PNG + `.jucm`. Stable, deployed.
+- **V2** (`streamlit_app_v2.py`) — superset of V1. Adds a **Scenarios**
+  tab that runs concurrency-aware variant clustering and synthesizes one
+  executable jUCMNav `ScenarioDef` per variant, with downloads for the
+  `.jucm` (now carrying the `<scenarioGroups>`), `variants.csv`,
+  `case_variant_map.csv`, and (data-driven mode only)
+  `condition_mining.csv`. Both variant-driven and data-driven OR-fork
+  encodings are exposed; the data-driven option greys out when
+  `scikit-learn` is missing. The Scenarios tab always runs with
+  `decomposition=None` so OR-forks in every XOR receive a `variant_id`
+  condition — XORs pushed into plug-in maps would otherwise lose them.
 
 ## Using the app
 
@@ -44,8 +62,13 @@ Two tabs at the top of the page:
   - **`.xes`** / **`.xes.gz`** — standard XES files are mined directly.
   - **`.zip`** — searched for the first `.xes` / `.xes.gz` entry inside.
   - **`.csv`** — a column-mapping section appears after upload (see step 2).
-  - Upload size is capped at 75 MB by `.streamlit/config.toml` (raise it
-    there if you genuinely need bigger files).
+  - Upload cap is **1 GB when running locally** and **75 MB on the
+    public Community Cloud deployment**. The server layer allows 1 GB
+    everywhere (`.streamlit/config.toml`); the app enforces the tighter
+    75 MB when it detects it's running on Community Cloud (via the
+    `HOSTNAME` / `/mount/src` fingerprints). Self-hosted deployments
+    (Docker on your own VM, an on-prem server, …) get the local 1 GB
+    ceiling by default.
 
 Once a log is chosen (from a sample or an upload) its bytes are cached
 for the rest of the session. Changing notation / decomposition /
@@ -166,8 +189,14 @@ become spaces, archive/compression suffixes stripped).
 The app is designed for a low-traffic public demo (Streamlit Community
 Cloud or similar). A few hardening points worth knowing:
 
-- `maxUploadSize` is capped at **75 MB** in [`.streamlit/config.toml`](../.streamlit/config.toml).
-  Bigger logs need to be either mined locally or have the cap raised.
+- Upload cap is **two-tier**. The Streamlit server layer
+  ([`.streamlit/config.toml`](../.streamlit/config.toml)) allows
+  **1 GB** everywhere, so the file uploader itself never blocks a
+  local run. The app then re-checks the payload size and rejects
+  anything above **75 MB** *only when it detects it is running on
+  Streamlit Community Cloud* (via the `HOSTNAME` / `/mount/src`
+  fingerprints). Result: 1 GB locally, 75 MB on the public demo,
+  self-hosted deployments default to the local ceiling.
 - The Pillow decompression-bomb guard is raised to **1 billion pixels**
   rather than disabled. Realistic mined UCMs are far below that.
 - CSV reading uses `low_memory=False` so columns with mid-file dtype

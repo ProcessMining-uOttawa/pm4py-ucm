@@ -26,6 +26,10 @@ from .api import (
     convert_to_ucm,
     view_ucm,
     save_vis_ucm,
+    discover_scenarios,
+    write_variants_report,
+    write_case_variant_map,
+    write_condition_mining_report,
 )
 from .objects.ucm.obj import UCM
 
@@ -40,6 +44,10 @@ __all__ = [
     "convert_to_ucm",
     "view_ucm",
     "save_vis_ucm",
+    "discover_scenarios",
+    "write_variants_report",
+    "write_case_variant_map",
+    "write_condition_mining_report",
 ]
 
 __version__ = "0.3.2"
