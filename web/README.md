@@ -46,7 +46,14 @@ data-driven scenario condition mining; V1 ignores it.
   encodings are exposed; the data-driven option greys out when
   `scikit-learn` is missing. Decomposition is honoured across all maps
   (OR-forks in plug-in maps receive their conditions and loop counters
-  the same way root-map forks do). Deployed at
+  the same way root-map forks do). Also adds a **Family** tab
+  (partition the log by 1–2 case attributes, mine one model per
+  combination, download the per-cell zip / combined `.jucm` /
+  dynamic-stub umbrella `.jucm` / grid PNG / interactive HTML
+  statistics report) and a **Compare** tab (rank the family members
+  on heat-mapped statistics tables — including total case durations —
+  and compare any two side by side: models, per-activity deltas,
+  aligned OR-fork branch shares). Deployed at
   https://pm4py-ucm-scenarios.streamlit.app/.
 
 ## Using the app

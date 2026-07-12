@@ -60,8 +60,11 @@ Two [Streamlit](https://streamlit.io) front-ends ship in the
   Also adds a **Family tab** — pick 1–2 case attributes (with
   per-value filters and a pre-mining coverage heatmap), mine one model
   per combination, and download the per-cell zip, the combined
-  `.jucm`, the dynamic-stub umbrella `.jucm`, and the grid PNG — and a
-  **Performance overlay** sidebar section (frequencies/times on
+  `.jucm`, the dynamic-stub umbrella `.jucm`, the grid PNG, and the
+  interactive HTML statistics report — a **Compare tab** — rank the
+  family members on a heat-mapped statistics table and compare any
+  two side by side (models, activity deltas, aligned choice shares) —
+  and a **Performance overlay** sidebar section (frequencies/times on
   activities and edges, applied to every tab's outputs). See
   [`docs/model_families.md`](docs/model_families.md).
 
@@ -523,6 +526,36 @@ in [`docs/model_families.md`](docs/model_families.md). The V2 web
 app's **Family** tab exposes all of it interactively, including a
 pre-mining coverage heatmap and per-attribute value filters.
 
+### Family statistics reports
+
+Compare the family's processes quantitatively — and hand the result
+to collaborators as **one self-contained interactive HTML file**:
+
+```python
+stats = pm4py_ucm.compute_family_stats(family)     # needs family.log_df
+stats.process_frame()                              # pandas: one row per cell
+pm4py_ucm.write_family_report(family, "report.html", stats=stats)
+```
+
+`compute_family_stats` yields three statistics levels per family
+member: **process** (cases, events per case, case-duration
+min/mean/median/max **and total**, behavioural variant counts, replay
+fitness), **activity** (frequency, case coverage, service-time
+min/mean/median/max/total on interval logs), and **choice** — OR-fork
+branch counts *aligned across the family* through the shared
+skeleton, so the same decision point is one comparable row for every
+combination.
+
+`write_family_report` renders it all into a zero-dependency HTML
+report that opens offline in any browser: sortable heat-mapped
+ranking tables, a pair-comparison view (any two members side by side
+with their **model images embedded**, delta cards, activity Δ/ratio
+tables), 100% stacked branch-share bars per choice, and a model
+gallery. Every share and time is shown next to its `n`, and metrics
+the log cannot support are omitted rather than faked. The V2 web
+app's **Compare** tab serves the same statistics interactively and
+offers the report as a download.
+
 ## Performance overlays
 
 Frequencies and times computed from the log, displayed on activities
@@ -581,7 +614,9 @@ pm4py_ucm/
 │           ├── family.py                  # ModelFamily container + zip/dir export
 │           ├── algorithm.py               # per-cell discovery driver
 │           ├── assembly.py                # combined + skeleton-umbrella assembly
-│           └── scenarios.py               # per-cell path scenarios on the umbrella
+│           ├── scenarios.py               # per-cell path scenarios on the umbrella
+│           ├── stats.py                   # FamilyStats: process/activity/choice comparison
+│           └── report.py                  # self-contained interactive HTML report
 └── visualization/ucm/
     ├── visualizer.py                      # apply / view / save (mirrors BPMN)
     ├── stacked.py                         # vertical multi-map composition
