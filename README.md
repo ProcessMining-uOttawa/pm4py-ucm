@@ -28,10 +28,11 @@ pm4py_ucm.view_ucm(ucm)
 pm4py_ucm.write_ucm(ucm, "running-example.jucm")  # opens in jUCMNav
 ```
 
-**Four ways to get started:**
+**Five ways to get started:**
 
 - [`demo/pm4py_ucm_tutorial.ipynb`](demo/pm4py_ucm_tutorial.ipynb) — end-to-end Jupyter walkthrough on a real claims-payment log (discovery, BPMN/UCM rendering, performer mining, hierarchical decomposition, `.jucm` round-trips).
 - [`demo/scenario_synthesis_tutorial.ipynb`](demo/scenario_synthesis_tutorial.ipynb) — pedagogical tutorial for the **scenario-synthesis** layer: concurrency-aware variants, per-loop counters + `LoopEntryGuard`, variant-driven vs data-driven OR-fork conditions, transparent support for decomposed UCMs. Empirical companion in [`demo/scenario_synthesis.ipynb`](demo/scenario_synthesis.ipynb).
+- [`demo/model_families_tutorial.ipynb`](demo/model_families_tutorial.ipynb) — the **model-family** pipeline on the claims log: attribute detection, partition preview, per-cell mining, stack/matrix rendering, combined export, the dynamic-stub **umbrella** (skeleton, resource variation, path scenarios), and **performance overlays** on activities and edges.
 - [`web/streamlit_app.py`](web/streamlit_app.py) (V1, model-only, hosted at https://pm4py-ucm.streamlit.app/) and [`web/streamlit_app_v2.py`](web/streamlit_app_v2.py) (V2, model + scenarios + model families + performance overlays, hosted at https://pm4py-ucm-scenarios.streamlit.app/) — click, don't code: upload an XES/CSV, tune the miner, download the result.
 - The rest of this README — reference docs for the public API.
 

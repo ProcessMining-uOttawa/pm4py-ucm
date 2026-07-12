@@ -143,6 +143,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   two activity metrics and two edge metrics; applied to the Model
   tab and to every family cell (grid rendering + per-cell `.jucm`),
   each cell annotated from its own sub-log.
+- **`demo/model_families_tutorial.ipynb`** — executed end-to-end on
+  `ClaimsPaymentLog`: attribute detection, partition preview,
+  per-cell mining, grid rendering, per-cell/combined/umbrella
+  exports, path scenarios, and performance overlays (rendered,
+  exported as metadata, and used programmatically).
 - **Family assemblies annotated too**: `assemble_ucm_family(...,
   node_metrics=…, edge_metrics=…)` overlays the combined model (each
   cell's maps from that cell's sub-log) and the umbrella (shared
