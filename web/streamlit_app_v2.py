@@ -702,13 +702,20 @@ def _mine_family(
     summary_rows = family.summary_rows()
     summary_df = pd.DataFrame(summary_rows[1:], columns=summary_rows[0])
 
-    # The assemblies above were the last consumers of the full log —
+    # Comparative statistics for the Compare tab and the HTML report —
+    # MUST be computed here, while family.log_df still exists (the
+    # FamilyStats object itself carries no DataFrames and stays small).
+    _phase("Computing family statistics...")
+    family_stats = pm4py_ucm.compute_family_stats(family)
+
+    # The statistics above were the last consumer of the full log —
     # drop it before this result is pickled into the cache so the
     # cached family stays small (grid rendering only needs the cells).
     family.log_df = None
 
     return {
         "family": family,
+        "stats": family_stats,
         "zip": zip_bytes,
         "combined_jucm": combined_bytes,
         "umbrella_jucm": umbrella_bytes,
@@ -766,6 +773,98 @@ def _render_family_grid(
             return full, preview, None
     except Exception as exc:  # pragma: no cover - depends on env
         return None, None, f"{type(exc).__name__}: {exc}"
+
+
+@st.cache_data(show_spinner=False)
+def _build_family_report(
+    mine_fingerprint: str,
+    style: str,
+    _family,
+    _stats,
+) -> Tuple[Optional[bytes], Optional[str]]:
+    """Build the self-contained interactive HTML report (embedded
+    per-cell images in the given notation). Cached on
+    ``(mine_fingerprint, style)`` only — same convention as
+    :func:`_render_family_grid`: switching notation re-renders images
+    but never re-mines. Returns ``(html_bytes, None)`` or
+    ``(None, error_text)``."""
+    from pm4py_ucm.algo.discovery.families.report import family_report_html
+    try:
+        html = family_report_html(
+            _family, stats=_stats, style=style,
+        )
+        return html.encode("utf-8"), None
+    except Exception as exc:  # pragma: no cover - depends on env
+        return None, f"{type(exc).__name__}: {exc}"
+
+
+@st.cache_data(show_spinner=False)
+def _render_family_cell(
+    mine_fingerprint: str,
+    style: str,
+    cell_index: int,
+    _family,
+) -> Optional[bytes]:
+    """One cell's model as a PNG for the Compare tab (cached per
+    (mining run, notation, cell); ``None`` when rendering is
+    unavailable)."""
+    from pm4py_ucm.visualization.ucm.family_grid import _render_cell_png
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            path = _render_cell_png(
+                _family.cells[cell_index].ucm, td, cell_index,
+                {"style": style, "dpi": 144},
+            )
+            return Path(path).read_bytes()
+    except Exception:  # pragma: no cover - depends on env
+        return None
+
+
+def _heat_styler(df, formats=None):
+    """Column-wise sequential heatmap for ``st.dataframe`` without a
+    matplotlib dependency (same blue ramp as the HTML report). Falls
+    back to the plain frame when pandas Styler is unavailable."""
+    lo_rgb, hi_rgb = (247, 251, 255), (33, 102, 172)
+
+    def color_column(col):
+        vals = pd.to_numeric(col, errors="coerce")
+        lo, hi = vals.min(), vals.max()
+        out = []
+        for v in vals:
+            if pd.isna(v) or pd.isna(lo) or pd.isna(hi) or hi <= lo:
+                out.append("")
+                continue
+            t = (v - lo) / (hi - lo)
+            rgb = tuple(
+                round(a + (b - a) * t) for a, b in zip(lo_rgb, hi_rgb)
+            )
+            fg = "color: white;" if t > 0.62 else ""
+            out.append(f"background-color: rgb{rgb}; {fg}")
+        return out
+
+    try:
+        styler = df.style.apply(color_column, axis=0)
+        if formats:
+            styler = styler.format(formats, na_rep="—")
+        return styler
+    except Exception:  # pragma: no cover - Styler needs jinja2
+        return df
+
+
+def _fmt_duration_s(seconds) -> str:
+    """Humanized duration for Streamlit tables (mirrors the report)."""
+    if seconds is None or pd.isna(seconds):
+        return "—"
+    s = abs(float(seconds))
+    sign = "-" if seconds < 0 else ""
+    if s < 60:
+        return f"{sign}{s:.0f}s"
+    if s < 3600:
+        return f"{sign}{s / 60:.1f}m"
+    if s < 86400:
+        return f"{sign}{s / 3600:.1f}h"
+    days = s / 86400
+    return f"{sign}{days:.0f}d" if days >= 100 else f"{sign}{days:.1f}d"
 
 
 # ---------------------------------------------------------------------------
@@ -1117,8 +1216,8 @@ c7.metric("Maps", mined["n_maps"])
 c8.metric("Nodes", mined["n_nodes"])
 
 # ---- Tabs -----------------------------------------------------------------
-model_tab, scenarios_tab, family_tab = st.tabs(
-    ["Model", "Scenarios", "Family"]
+model_tab, scenarios_tab, family_tab, compare_tab = st.tabs(
+    ["Model", "Scenarios", "Family", "Compare"]
 )
 
 # ===== Model tab ===========================================================
@@ -1657,7 +1756,7 @@ with family_tab:
 
                 st.subheader("Downloads")
                 stem = Path(log_name).stem
-                fd1, fd2, fd3, fd4 = st.columns(4)
+                fd1, fd2, fd3, fd4, fd5 = st.columns(5)
                 fd1.download_button(
                     "Per-cell models (.zip)", data=fam["zip"],
                     file_name=_safe_download_name(f"{stem}_family", ".zip"),
@@ -1691,3 +1790,260 @@ with family_tab:
                         ),
                         mime="image/png",
                     )
+                report_bytes, report_error = _build_family_report(
+                    st.session_state["family_fp"], style,
+                    fam["family"], fam["stats"],
+                )
+                if report_bytes is not None:
+                    fd5.download_button(
+                        "Interactive report (.html)", data=report_bytes,
+                        file_name=_safe_download_name(
+                            f"{stem}_family_report", ".html",
+                        ),
+                        mime="text/html",
+                        help="Self-contained statistics report — "
+                             "sortable tables, heatmaps, pairwise "
+                             "process comparison with model images. "
+                             "Opens offline in any browser; see the "
+                             "Compare tab for the interactive version.",
+                    )
+                elif report_error:
+                    fd5.caption(f"Report unavailable: {report_error}")
+
+# ===== Compare tab =========================================================
+with compare_tab:
+    st.subheader("Compare the family's processes")
+    _cmp_fam = st.session_state.get("family_result")
+    if _cmp_fam is None or "stats" not in _cmp_fam:
+        st.info(
+            "Mine a model family in the **Family** tab first — this tab "
+            "ranks its combinations and compares any two of them side "
+            "by side (statistics, models, activities, and choices)."
+        )
+    else:
+        _stats = _cmp_fam["stats"]
+        _cmp_fp = st.session_state.get("family_fp", "")
+        _labels = _stats.cell_labels
+
+        # ---- family-wide ranking table --------------------------------
+        st.markdown(
+            "**Family overview** — one row per combination; click a "
+            "column header to rank. Durations are per case; "
+            "`duration_total_s` is the **total** across all of the "
+            "cell's cases."
+        )
+        _proc = _stats.process_frame()
+        _dur_fmt = {
+            c: _fmt_duration_s
+            for c in _proc.columns if c.startswith("duration_")
+        }
+        st.dataframe(
+            _heat_styler(_proc, _dur_fmt), use_container_width=True,
+        )
+        if not _stats.has_intervals:
+            st.caption(
+                "No `start_timestamp` column in this log — activity "
+                "service times are not derivable (case durations and "
+                "frequencies are unaffected)."
+            )
+
+        st.divider()
+
+        # ---- pair selection --------------------------------------------
+        sc1, sc2 = st.columns(2)
+        _a_label = sc1.selectbox("Process A", _labels, index=0,
+                                 key="cmp_cell_a")
+        _b_label = sc2.selectbox(
+            "Process B", _labels,
+            index=min(1, len(_labels) - 1), key="cmp_cell_b",
+        )
+        _ia, _ib = _labels.index(_a_label), _labels.index(_b_label)
+        _A, _B = _stats.cells[_ia], _stats.cells[_ib]
+
+        _card_defs = [
+            ("Cases", lambda c: c.n_cases, lambda v: f"{v:,.0f}",
+             "normal"),
+            ("Events/case (mean)",
+             lambda c: c.events_per_case.get("mean"),
+             lambda v: f"{v:.1f}", "normal"),
+            ("Variants", lambda c: c.variants.get("n_variants"),
+             lambda v: f"{v:,.0f}", "normal"),
+        ]
+        if _stats.has_timestamps:
+            _card_defs[2:2] = [
+                ("Mean duration", lambda c: c.duration.get("mean"),
+                 _fmt_duration_s, "inverse"),
+                ("Median duration", lambda c: c.duration.get("median"),
+                 _fmt_duration_s, "inverse"),
+                ("TOTAL duration", lambda c: c.duration.get("total"),
+                 _fmt_duration_s, "inverse"),
+            ]
+        # Rows of three — six side-by-side columns truncate the
+        # "A -> B" values on ordinary screens.
+        _cards = []
+        for _row_start in range(0, len(_card_defs), 3):
+            _n = min(3, len(_card_defs) - _row_start)
+            _cards.extend(st.columns(3)[:_n])
+        for _col, (_t, _get, _fmt, _dcolor) in zip(_cards, _card_defs):
+            _va, _vb = _get(_A), _get(_B)
+            if _va is None or _vb is None:
+                _col.metric(_t, "—")
+                continue
+            _d = _vb - _va
+            _delta = ("+" if _d > 0 else "") + _fmt(_d) + (
+                f" ({_d / abs(_va) * 100:+.0f}%)" if _va else ""
+            )
+            _col.metric(
+                _t, f"{_fmt(_va)} → {_fmt(_vb)}",
+                delta=_delta if _d else None,
+                delta_color=_dcolor if _d else "off",
+                help="A → B; the delta is B minus A.",
+            )
+
+        # ---- models side by side ----------------------------------------
+        _imc = st.columns(2)
+        for _col, _tag, _idx, _cell in (
+                (_imc[0], "A", _ia, _A), (_imc[1], "B", _ib, _B)):
+            with _col:
+                _png = _render_family_cell(
+                    _cmp_fp, style, _idx, _cmp_fam["family"],
+                )
+                _cap = (
+                    f"{_tag} — {_cell.label} · n={_cell.n_cases} "
+                    f"({_cell.coverage * 100:.1f}% of the log)"
+                )
+                if _png is not None:
+                    st.image(_png, caption=_cap,
+                             use_container_width=True)
+                else:
+                    st.caption(_cap + " — rendering unavailable")
+
+        # ---- activity comparison ----------------------------------------
+        st.markdown("**Activity comparison** (Δ and ratio are B vs A)")
+        _metric_opts = [
+            ("frequency", "frequency (executions)", False),
+            ("case_coverage", "case coverage (cases)", False),
+        ]
+        if _stats.has_intervals:
+            _metric_opts += [
+                ("mean_time", "mean service time", True),
+                ("median_time", "median service time", True),
+                ("min_time", "min service time", True),
+                ("max_time", "max service time", True),
+                ("total_time", "total service time", True),
+            ]
+        ac1, ac2 = st.columns([2, 1])
+        _m_label = ac1.selectbox(
+            "Metric", [m[1] for m in _metric_opts], key="cmp_metric",
+        )
+        _m_key, _, _m_is_time = next(
+            m for m in _metric_opts if m[1] == _m_label
+        )
+        _per_case = ac2.checkbox(
+            "Per case", value=False, key="cmp_percase",
+            disabled=_m_is_time,
+            help="Divide by the cell's case count — cells differ "
+                 "hugely in size, so absolute counts mislead.",
+        )
+        _rows = []
+        for _act in _stats.activity_names:
+            _ea = _A.activity.get(_act) or {}
+            _eb = _B.activity.get(_act) or {}
+            _va, _vb = _ea.get(_m_key), _eb.get(_m_key)
+            if _va is None and _vb is None:
+                continue
+            if _per_case and not _m_is_time:
+                _va = None if _va is None else _va / _A.n_cases
+                _vb = None if _vb is None else _vb / _B.n_cases
+            _rows.append({
+                "activity": _act,
+                f"A — {_A.label}": _va,
+                f"B — {_B.label}": _vb,
+                "Δ (B−A)": (
+                    _vb - _va if _va is not None and _vb is not None
+                    else None
+                ),
+                "ratio B/A": (
+                    _vb / _va
+                    if _va not in (None, 0) and _vb is not None else None
+                ),
+            })
+        _cmp_df = pd.DataFrame(_rows).set_index("activity")
+        if _m_is_time:
+            _cmp_fmts = {
+                c: _fmt_duration_s for c in _cmp_df.columns
+                if c != "ratio B/A"
+            }
+        elif _per_case:
+            _cmp_fmts = {c: "{:.2f}" for c in _cmp_df.columns
+                         if c != "ratio B/A"}
+        else:
+            _cmp_fmts = {c: "{:,.0f}" for c in _cmp_df.columns
+                         if c != "ratio B/A"}
+        _cmp_fmts["ratio B/A"] = "{:.2f}×"
+        st.dataframe(
+            _heat_styler(_cmp_df, _cmp_fmts), use_container_width=True,
+        )
+
+        # ---- choices ------------------------------------------------------
+        st.markdown("**Choices** — OR-fork branch shares, aligned "
+                    "across the family")
+        if not _stats.choices:
+            st.caption("The family's processes contain no OR-fork "
+                       "choices.")
+        for _ch in _stats.choices:
+            _meta = ("shared skeleton fork" if _ch.shared
+                     else "variation-point fork (not in every process)")
+            if _ch.inside_loop:
+                _meta += (" · inside a loop — counts are evaluations "
+                          "across iterations")
+            with st.expander(_ch.full_name,
+                             expanded=len(_stats.choices) <= 6):
+                st.caption(_meta)
+                _ch_rows = {}
+                for _tag, _idx2, _cell2 in (
+                        ("A — " + _A.label, _ia, _A),
+                        ("B — " + _B.label, _ib, _B)):
+                    _counts = _ch.counts[_idx2]
+                    if _counts is None:
+                        _ch_rows[_tag] = {
+                            b: None for b in _ch.branches
+                        }
+                        continue
+                    _total = sum(_counts) or 1
+                    _ch_rows[_tag] = {
+                        b: c / _total * 100
+                        for b, c in zip(_ch.branches, _counts)
+                    }
+                    _ch_rows[_tag]["n"] = sum(_counts)
+                _ch_df = pd.DataFrame.from_dict(_ch_rows, orient="index")
+                _ch_fmts = {b: "{:.1f}%" for b in _ch.branches}
+                _ch_fmts["n"] = "{:,.0f}"
+                st.dataframe(
+                    _heat_styler(_ch_df, _ch_fmts),
+                    use_container_width=True,
+                )
+
+        # ---- report download ----------------------------------------------
+        st.divider()
+        _rep_bytes, _rep_err = _build_family_report(
+            _cmp_fp, style, _cmp_fam["family"], _stats,
+        )
+        if _rep_bytes is not None:
+            st.download_button(
+                "Download the interactive report (.html)",
+                data=_rep_bytes,
+                file_name=_safe_download_name(
+                    f"{Path(log_name).stem}_family_report", ".html",
+                ),
+                mime="text/html",
+                help="Everything on this tab (and more) as ONE "
+                     "self-contained offline HTML file — sortable "
+                     "heat-mapped tables, pair comparison with the "
+                     "model images embedded, choice bars, and a model "
+                     "gallery. Open it several times to compare "
+                     "several pairs side by side.",
+                key="cmp_report_dl",
+            )
+        elif _rep_err:
+            st.caption(f"Report unavailable: {_rep_err}")
