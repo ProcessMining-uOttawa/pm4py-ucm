@@ -32,7 +32,7 @@ pm4py_ucm.write_ucm(ucm, "running-example.jucm")  # opens in jUCMNav
 
 - [`demo/pm4py_ucm_tutorial.ipynb`](demo/pm4py_ucm_tutorial.ipynb) — end-to-end Jupyter walkthrough on a real claims-payment log (discovery, BPMN/UCM rendering, performer mining, hierarchical decomposition, `.jucm` round-trips).
 - [`demo/scenario_synthesis_tutorial.ipynb`](demo/scenario_synthesis_tutorial.ipynb) — pedagogical tutorial for the **scenario-synthesis** layer: concurrency-aware variants, per-loop counters + `LoopEntryGuard`, variant-driven vs data-driven OR-fork conditions, transparent support for decomposed UCMs. Empirical companion in [`demo/scenario_synthesis.ipynb`](demo/scenario_synthesis.ipynb).
-- [`web/streamlit_app.py`](web/streamlit_app.py) (V1, model-only, hosted at https://pm4py-ucm.streamlit.app/) and [`web/streamlit_app_v2.py`](web/streamlit_app_v2.py) (V2, model + scenarios, hosted at https://pm4py-ucm-scenarios.streamlit.app/) — click, don't code: upload an XES/CSV, tune the miner, download the result.
+- [`web/streamlit_app.py`](web/streamlit_app.py) (V1, model-only, hosted at https://pm4py-ucm.streamlit.app/) and [`web/streamlit_app_v2.py`](web/streamlit_app_v2.py) (V2, model + scenarios + model families + performance overlays, hosted at https://pm4py-ucm-scenarios.streamlit.app/) — click, don't code: upload an XES/CSV, tune the miner, download the result.
 - The rest of this README — reference docs for the public API.
 
 [ucm-wiki]: https://en.wikipedia.org/wiki/Use_Case_Maps
@@ -56,11 +56,18 @@ Two [Streamlit](https://streamlit.io) front-ends ship in the
   four downloads: the `.jucm` with the synthesized scenario group,
   `variants.csv`, `case_variant_map.csv`, and (data-driven mode)
   `condition_mining.csv`. Runs on flat and decomposed UCMs alike.
+  Also adds a **Family tab** — pick 1–2 case attributes (with
+  per-value filters and a pre-mining coverage heatmap), mine one model
+  per combination, and download the per-cell zip, the combined
+  `.jucm`, the dynamic-stub umbrella `.jucm`, and the grid PNG — and a
+  **Performance overlay** sidebar section (frequencies/times on
+  activities and edges, applied to every tab's outputs). See
+  [`docs/model_families.md`](docs/model_families.md).
 
 Both are deployed on Streamlit Community Cloud:
 
 - V1 (model only): https://pm4py-ucm.streamlit.app/
-- V2 (model + scenarios): https://pm4py-ucm-scenarios.streamlit.app/
+- V2 (model + scenarios + families): https://pm4py-ucm-scenarios.streamlit.app/
 
 ![Overview of the PM4Py-UCM web interface](web/WebInterfaceOverview.png)
 
@@ -471,6 +478,77 @@ correlation survives arbitrary decomposition boundaries.
 - The Scenarios tab in
   [`web/streamlit_app_v2.py`](web/streamlit_app_v2.py) — no code needed.
 
+## Model families (attribute-partitioned discovery)
+
+Many logs mix cases that follow *different processes* — a cancer-care
+log contains distinct pathways per cancer type, a claims log may route
+work differently per country. `discover_ucm_family` partitions the log
+by the values of **one or two case-level attributes** and mines one
+model per combination; the family can then be exported as separate
+models, rendered side by side, or assembled into a single
+**overarching model** where UCM's own variability constructs carry the
+family: **dynamic stubs are variation points, plug-in maps are
+variants, and scenario strategies are configurations**.
+
+```python
+family = pm4py_ucm.discover_ucm_family(
+    log, ["cancer_type", "age"],       # 1–2 attributes; numerics are binned
+    decomposition="auto", min_cases=20,
+)
+
+pm4py_ucm.write_ucm_family(family, "family.zip")        # one .jucm per cell
+pm4py_ucm.save_vis_ucm_family(family, "grid.png")       # stack / matrix view
+
+umbrella = pm4py_ucm.assemble_ucm_family(family, mode="umbrella")
+pm4py_ucm.write_ucm(umbrella, "family_umbrella.jucm")   # opens in jUCMNav
+```
+
+The umbrella's root map is the **shared skeleton** of the cell
+processes (computed by anti-unifying the per-cell process trees), with
+a dynamic stub only where behaviour actually diverges; each stub's
+plug-ins are guarded by preconditions over the attributes
+(`cancer_type == Breast && age_group == _40_59`). Behaviourally
+identical variants share one plug-in with a domain-factored condition;
+**resource variation counts as variation** (the same activity done by
+different actors becomes a variation point, each variant drawn inside
+its actor); and by default each combination gets **executable path
+scenarios** — one per behavioural variant of its sub-log, with
+`family_variant` branch conditions and loop counters, so jUCMNav's
+traversal walks genuinely different paths per strategy.
+
+Full documentation — partitioning policy, skeleton merge rules,
+dedup/conditions, path scenarios, grid resolution, value filtering —
+in [`docs/model_families.md`](docs/model_families.md). The V2 web
+app's **Family** tab exposes all of it interactively, including a
+pre-mining coverage heatmap and per-attribute value filters.
+
+## Performance overlays
+
+Frequencies and times computed from the log, displayed on activities
+and edges and exported as jUCMNav metadata:
+
+```python
+pm4py_ucm.annotate_performance(
+    ucm, log,
+    node_metrics=["frequency", "median_time"],
+    edge_metrics=["percentage", "mean_time"],
+)
+pm4py_ucm.save_vis_ucm(ucm, "annotated.png")   # small gray overlay text
+pm4py_ucm.write_ucm(ucm, "annotated.jucm")     # per-metric metadata lines
+```
+
+Activity metrics: `frequency`, `case_coverage`, and (for interval logs
+with a `start_timestamp` column) `mean/median/total_time` service
+times. Edge metrics: directly-follows `frequency`, OR-fork branch
+`percentage`, and `mean/median/total_time` waiting times — attributed
+via activity-to-activity *segments* that walk through bends, joins,
+forks, and static stubs (so decomposed models are covered too). Every
+available metric is additionally exported as its own metadata line for
+jUCMNav's properties view; the family assemblies annotate the shared
+skeleton from the whole log and each variant plug-in from its own
+sub-log. Details in
+[`docs/model_families.md`](docs/model_families.md#2-performance-overlays).
+
 ## Module layout
 
 ```
@@ -483,20 +561,30 @@ pm4py_ucm/
 │   ├── exporter/variants/jucm.py          # UCM → jUCMNav .jucm (XMI 2.0)
 │   ├── importer/variants/jucm.py          # jUCMNav .jucm → UCM
 │   └── layout/layouter.py                 # auto-layout for jUCMNav graphical view
-├── algo/discovery/
-│   ├── ucm/
-│   │   ├── algorithm.py                   # discovery dispatcher (mirrors BPMN)
-│   │   └── variants/inductive.py          # inductive-miner-based discovery
-│   ├── variants/                          # concurrency-aware variant clustering
-│   │   ├── choice_signature.py            # replay algorithm + signature canonicalisation
-│   │   └── clustering.py                  # per-variant clustering + fitness / compression
-│   └── scenarios/                         # scenario synthesis on top of a UCM + clustering
-│       ├── synthesis.py                   # variables, ScenarioDefs, LoopEntryGuard, conditions
-│       ├── decision_mining.py             # data-driven strategy: sklearn tree → jUCMNav expr
-│       ├── expression_minimizer.py        # boolean simplifier for mined expressions
-│       └── reports.py                     # variants.csv / case_variant_map.csv / condition_mining.csv
+├── algo/
+│   ├── performance.py                     # frequency/time overlays on activities + edges
+│   └── discovery/
+│       ├── ucm/
+│       │   ├── algorithm.py               # discovery dispatcher (mirrors BPMN)
+│       │   └── variants/inductive.py      # inductive-miner-based discovery
+│       ├── variants/                      # concurrency-aware variant clustering
+│       │   ├── choice_signature.py        # replay algorithm + signature canonicalisation
+│       │   └── clustering.py              # per-variant clustering + fitness / compression
+│       ├── scenarios/                     # scenario synthesis on top of a UCM + clustering
+│       │   ├── synthesis.py               # variables, ScenarioDefs, LoopEntryGuard, conditions
+│       │   ├── decision_mining.py         # data-driven strategy: sklearn tree → jUCMNav expr
+│       │   ├── expression_minimizer.py    # boolean simplifier for mined expressions
+│       │   └── reports.py                 # variants.csv / case_variant_map.csv / condition_mining.csv
+│       └── families/                      # attribute-partitioned model families
+│           ├── partition.py               # case-attribute detection + log partitioning
+│           ├── family.py                  # ModelFamily container + zip/dir export
+│           ├── algorithm.py               # per-cell discovery driver
+│           ├── assembly.py                # combined + skeleton-umbrella assembly
+│           └── scenarios.py               # per-cell path scenarios on the umbrella
 └── visualization/ucm/
     ├── visualizer.py                      # apply / view / save (mirrors BPMN)
+    ├── stacked.py                         # vertical multi-map composition
+    ├── family_grid.py                     # family stack/matrix rendering (adaptive DPI)
     └── variants/classic.py                # graphviz-based renderer
 ```
 
