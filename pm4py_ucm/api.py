@@ -469,6 +469,7 @@ def discover_ucm_family(
     other_bucket: bool = True,
     unknown_bucket: bool = True,
     include_values: Optional[Dict[str, Any]] = None,
+    ignore_value_case: bool = True,
     case_id_col: str = "case:concept:name",
     parameters: Optional[Dict[str, Any]] = None,
 ):
@@ -479,10 +480,14 @@ def discover_ucm_family(
     Each cell's sub-log runs through the same pipeline as
     :func:`discover_ucm_inductive` — the ``decomposition`` argument is
     simply applied per cell, so the family can be flat or decomposed.
-    Enumeration attributes partition by value (low-count values merge
-    into ``Other`` past ``max_values_per_attribute``); boolean
-    attributes by ``true``/``false``; numeric attributes are binned
-    into ranges (``bins`` quantiles, or explicit
+    Enumeration attributes partition by value **case-insensitively**
+    by default — ``F`` and ``f`` are one value, displayed as the
+    log's most frequent spelling (disable with
+    ``ignore_value_case=False`` for genuinely case-significant
+    codes); low-count values merge into ``Other`` past
+    ``max_values_per_attribute``. Boolean attributes partition by
+    ``true``/``false`` (any letter case); numeric attributes are
+    binned into ranges (``bins`` quantiles, or explicit
     ``bin_edges={attribute: [edges]}``); missing values go to an
     ``Unknown`` bucket. ``include_values={attribute: [labels]}``
     restricts an attribute to the listed values — cases carrying other
@@ -506,6 +511,7 @@ def discover_ucm_family(
         other_bucket=other_bucket,
         unknown_bucket=unknown_bucket,
         include_values=include_values,
+        ignore_value_case=ignore_value_case,
         case_id_col=case_id_col,
         parameters=parameters,
     )

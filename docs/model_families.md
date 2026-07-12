@@ -78,8 +78,8 @@ XES exports). Per attribute type:
 
 | Type          | Partitioning                                                                    |
 |---------------|---------------------------------------------------------------------------------|
-| enumeration   | one cell per value; past `max_values_per_attribute` the least frequent values merge into an **Other** bucket |
-| boolean       | `true` / `false`                                                                 |
+| enumeration   | one cell per value, **case-insensitively** — `F` and `f` are the same value, displayed as the log's most frequent spelling (every merged spelling stays on `PartitionValue.raw_values`); past `max_values_per_attribute` the least frequent values merge into an **Other** bucket |
+| boolean       | `true` / `false` (any letter case)                                               |
 | numeric       | **binned** into ranges — `bins` quantiles, or explicit `bin_edges={attr: [edges]}` |
 | missing value | an **Unknown** bucket (`unknown_bucket=False` drops those cases)                 |
 
@@ -90,8 +90,10 @@ Additional policy knobs:
   mined into overfitted micro-models;
 - `include_values={attribute: [labels]}` — restrict an attribute to the
   listed values (labels as they appear on the axis, including
-  `Other` / `Unknown` and range labels like `"18-39"`); other cases are
-  dropped;
+  `Other` / `Unknown` and range labels like `"18-39"`, matched
+  case-insensitively); other cases are dropped;
+- `ignore_value_case=False` — opt out of the case-insensitive value
+  merging for logs whose codes are genuinely case-significant;
 - `noise_threshold` — forwarded to the inductive miner per cell;
 - `decomposition` — applied per cell, so the family is flat or
   hierarchical exactly like a single model would be.
