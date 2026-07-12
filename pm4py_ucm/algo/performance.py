@@ -161,7 +161,10 @@ def _format_duration(seconds: Optional[float]) -> Optional[str]:
         return f"{sign}{s / 60:.1f}m"
     if s < 86400:
         return f"{sign}{s / 3600:.1f}h"
-    return f"{sign}{s / 86400:.1f}d"
+    days = s / 86400
+    if days >= 500:
+        return f"{sign}{days / 365.25:.1f}y"
+    return f"{sign}{days:.1f}d"
 
 
 _TIME_PREFIX = {"mean_time": "avg", "median_time": "med",

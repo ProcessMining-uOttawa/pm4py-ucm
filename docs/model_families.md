@@ -318,7 +318,8 @@ as supplementary material for a paper. Five views:
   the per-case aggregate *and* the cell total.
 - **Compare** — pick any two family members: headline delta cards
   (absolute and percent change), the two model images side by side
-  (click to zoom), an activity delta table (Δ and ratio, diverging
+  (click to zoom, or open in a separate browser tab at full
+  resolution), an activity delta table (Δ and ratio, diverging
   color scale, optional per-case normalisation), and the two members'
   choice bars aligned. "Multiple windows" = open the file in several
   browser tabs, one pair each.

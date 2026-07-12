@@ -44,8 +44,14 @@ from .stats import FamilyStats, compute_family_stats
 
 
 #: Cell images wider than this are downscaled before embedding — keeps
-#: a 36-cell report in the tens of MB at most while staying readable.
-DEFAULT_IMAGE_MAX_WIDTH = 1600
+#: a 36-cell report in the tens of MB at most while staying readable
+#: when zoomed (the lightbox and the open-in-new-tab view show the
+#: embedded image at its native size).
+DEFAULT_IMAGE_MAX_WIDTH = 2600
+
+#: Raster DPI for the embedded cell images — twice graphviz's default,
+#: same as the family grid's target: crisp text when zoomed in.
+IMAGE_DPI = 192
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +77,7 @@ def _render_cell_images(
         for i, cell in enumerate(family.cells):
             try:
                 path = _render_cell_png(
-                    cell.ucm, td, i, {"style": style, "dpi": 144},
+                    cell.ucm, td, i, {"style": style, "dpi": IMAGE_DPI},
                 )
                 with Image.open(path) as im:
                     if im.width > image_max_width:
@@ -361,17 +367,22 @@ const CAT = ["#0072B2","#E69F00","#009E73","#CC79A7","#56B4E9",
              "#D55E00","#F0E442","#999999"];
 function lerp(a, b, t) { return a + (b - a) * t; }
 function mix(c1, c2, t) {
-  return "rgb(" + [0,1,2].map(i => Math.round(lerp(c1[i], c2[i], t)))
-    .join(",") + ")";
+  return [0,1,2].map(i => Math.round(lerp(c1[i], c2[i], t)));
 }
 const SEQ_LO = [247,251,255], SEQ_HI = [33,102,172];      // white -> blue
 const DIV_NEG = [179,88,6], DIV_MID = [247,247,247], DIV_POS = [33,102,172];
-function seqColor(t) { return mix(SEQ_LO, SEQ_HI, Math.max(0, Math.min(1, t))); }
-function divColor(t) { // t in [-1, 1]
+function seqRgb(t) { return mix(SEQ_LO, SEQ_HI, Math.max(0, Math.min(1, t))); }
+function divRgb(t) { // t in [-1, 1]
   t = Math.max(-1, Math.min(1, t));
   return t < 0 ? mix(DIV_MID, DIV_NEG, -t) : mix(DIV_MID, DIV_POS, t);
 }
-function textOn(t) { return t > 0.62 ? "#fff" : "inherit"; }
+// Background + a text color that stays readable on it — white only
+// when the background's relative luminance is genuinely dark.
+function heatStyle(rgb) {
+  const lum = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+  return "background:rgb(" + rgb.join(",") + ");color:" +
+    (lum < 140 ? "#fff" : "#1a2733");
+}
 
 // ---------- formatting -----------------------------------------------------
 function esc(s) {
@@ -385,6 +396,7 @@ function fmtDur(s) {
   if (s < 3600) return sign + (s/60).toFixed(1) + "m";
   if (s < 86400) return sign + (s/3600).toFixed(1) + "h";
   const d = s / 86400;
+  if (d >= 500) return sign + (d/365.25).toFixed(1) + "y";
   return sign + d.toFixed(d >= 100 ? 0 : 1) + "d";
 }
 function fmtNum(x, dec) {
@@ -485,15 +497,9 @@ function renderTable(el, id, cols, rows, opts) {
         const [lo, hi] = ranges[j];
         if (opts.diverging && opts.diverging[j]) {
           const m = Math.max(Math.abs(lo), Math.abs(hi));
-          if (m > 0) {
-            const t = v / m;
-            stylec = "background:" + divColor(t) +
-              (Math.abs(t) > .62 ? ";color:#fff" : "");
-          }
+          if (m > 0) stylec = heatStyle(divRgb(v / m));
         } else if (hi > lo) {
-          const t = (v - lo) / (hi - lo);
-          stylec = "background:" + seqColor(t) +
-            (t > .62 ? ";color:#fff" : "");
+          stylec = heatStyle(seqRgb((v - lo) / (hi - lo)));
         }
       }
       h += '<td class="' + cls + '" style="' + stylec + '">' +
@@ -604,7 +610,8 @@ function showView(id) {
     "</div>" +
     '<div class="cards-row" id="cmp-cards"></div></div>' +
     '<div class="card"><h2>Models side by side</h2>' +
-    '<p class="hint">Click an image to zoom.</p>' +
+    '<p class="hint">Click an image to zoom in place, or open it in ' +
+    "its own browser tab at full resolution.</p>" +
     '<div class="imgs" id="cmp-imgs"></div></div>' +
     '<div class="card"><h2>Activity comparison</h2>' +
     '<p class="hint">Δ and ratio are B vs A; the Δ column is ' +
@@ -664,16 +671,17 @@ function showView(id) {
       const [tag, c] = p;
       const cap = '<div class="cap"><b>' + tag + " — " + esc(c.label) +
         "</b> · n=" + c.cases + " (" + fmtPct(c.coverage * 100) +
-        " of the log)</div>";
+        ' of the log) · <button class="small ot">open in new tab ⧉' +
+        "</button></div>";
       if (!c.image)
-        return '<div class="imgbox">' + cap +
+        return '<div class="imgbox"><div class="cap"><b>' + tag +
+          " — " + esc(c.label) + "</b></div>" +
           '<div class="noimg">no embedded image</div></div>';
       return '<div class="imgbox">' + cap +
         '<img src="' + c.image + '" alt="' + esc(c.label) +
         '" loading="lazy" data-cap="' + esc(c.label) + '"></div>';
     }).join("");
-    imgs.querySelectorAll("img").forEach(im => im.onclick = () =>
-      lightbox(im.src, im.dataset.cap));
+    wireImages(imgs);
 
     // activity table
     const m = ACT_METRICS[+mSel.value];
@@ -831,30 +839,57 @@ function choiceBlock(ch, rows) {
   const any = DATA.cells.some(c => c.image);
   el.innerHTML = '<div class="card"><h2>The family’s models</h2>' +
     '<p class="hint">One ' + esc(DATA.style).toUpperCase() +
-    '-notation model per attribute combination. Click to zoom.</p>' +
+    "-notation model per attribute combination. Click to zoom, or " +
+    "open in a browser tab at full resolution.</p>" +
     (any ? '<div class="gallery" id="gal"></div>'
          : '<div class="noimg">This report was generated without ' +
            "embedded model images.</div>") + "</div>";
   if (!any) return;
   document.getElementById("gal").innerHTML = DATA.cells.map((c, i) => {
     const cap = '<div class="cap"><b>' + esc(c.label) + "</b> · n=" +
-      c.cases + " (" + fmtPct(c.coverage * 100) + ")</div>";
+      c.cases + " (" + fmtPct(c.coverage * 100) +
+      ') · <button class="small ot">open in new tab ⧉</button></div>';
     if (!c.image)
-      return '<div class="imgbox">' + cap +
-        '<div class="noimg">not rendered</div></div>';
+      return '<div class="imgbox"><div class="cap"><b>' + esc(c.label) +
+        "</b></div>" + '<div class="noimg">not rendered</div></div>';
     return '<div class="imgbox">' + cap + '<img loading="lazy" src="' +
       c.image + '" data-cap="' + esc(c.label) + '" alt="' +
       esc(c.label) + '"></div>';
   }).join("");
-  document.getElementById("gal").querySelectorAll("img").forEach(im =>
-    im.onclick = () => lightbox(im.src, im.dataset.cap));
+  wireImages(document.getElementById("gal"));
 })();
 
+// Wire every image box in `root`: click-to-zoom on the image, and the
+// caption's "open in new tab" button (full embedded resolution).
+function wireImages(root) {
+  root.querySelectorAll(".imgbox").forEach(box => {
+    const im = box.querySelector("img");
+    if (!im) return;
+    im.onclick = () => lightbox(im.src, im.dataset.cap);
+    const bt = box.querySelector("button.ot");
+    if (bt) bt.onclick = () => openTab(im.src);
+  });
+}
+
+function openTab(src) {
+  // A data: URI cannot be opened as a top-level tab — convert the
+  // embedded base64 PNG to a Blob URL first (works offline).
+  const bin = atob(src.split(",")[1]);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  window.open(URL.createObjectURL(new Blob([bytes], {type: "image/png"})),
+              "_blank");
+}
 function lightbox(src, cap) {
   const lb = document.getElementById("lightbox");
   lb.innerHTML = '<div class="lbcap">' + esc(cap || "") +
-    " — click anywhere to close</div><img src=\"" + src + '">';
+    ' — click anywhere to close · <button class="small" id="lb-open">' +
+    "open in new tab ⧉</button></div><img src=\"" + src + '">';
   lb.style.display = "block";
+  document.getElementById("lb-open").onclick = e => {
+    e.stopPropagation();
+    openTab(src);
+  };
 }
 document.addEventListener("keydown", e => {
   if (e.key === "Escape")

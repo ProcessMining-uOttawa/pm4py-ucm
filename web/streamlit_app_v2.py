@@ -813,7 +813,7 @@ def _render_family_cell(
         with tempfile.TemporaryDirectory() as td:
             path = _render_cell_png(
                 _family.cells[cell_index].ucm, td, cell_index,
-                {"style": style, "dpi": 144},
+                {"style": style, "dpi": 192},
             )
             return Path(path).read_bytes()
     except Exception:  # pragma: no cover - depends on env
@@ -823,7 +823,12 @@ def _render_family_cell(
 def _heat_styler(df, formats=None):
     """Column-wise sequential heatmap for ``st.dataframe`` without a
     matplotlib dependency (same blue ramp as the HTML report). Falls
-    back to the plain frame when pandas Styler is unavailable."""
+    back to the plain frame when pandas Styler is unavailable.
+
+    Every colored cell sets an explicit text color chosen by the
+    background's relative luminance — the app may run in Streamlit's
+    dark theme, where the default (white) text is unreadable on the
+    light end of the ramp."""
     lo_rgb, hi_rgb = (247, 251, 255), (33, 102, 172)
 
     def color_column(col):
@@ -838,8 +843,9 @@ def _heat_styler(df, formats=None):
             rgb = tuple(
                 round(a + (b - a) * t) for a, b in zip(lo_rgb, hi_rgb)
             )
-            fg = "color: white;" if t > 0.62 else ""
-            out.append(f"background-color: rgb{rgb}; {fg}")
+            lum = (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2])
+            fg = "white" if lum < 140 else "#1a2733"
+            out.append(f"background-color: rgb{rgb}; color: {fg};")
         return out
 
     try:
@@ -864,6 +870,8 @@ def _fmt_duration_s(seconds) -> str:
     if s < 86400:
         return f"{sign}{s / 3600:.1f}h"
     days = s / 86400
+    if days >= 500:
+        return f"{sign}{days / 365.25:.1f}y"
     return f"{sign}{days:.0f}d" if days >= 100 else f"{sign}{days:.1f}d"
 
 
@@ -1833,12 +1841,21 @@ with compare_tab:
             "cell's cases."
         )
         _proc = _stats.process_frame()
-        _dur_fmt = {
-            c: _fmt_duration_s
-            for c in _proc.columns if c.startswith("duration_")
-        }
+        # Explicit format per column — raw floats would print with
+        # full precision (e.g. 13.929231); never show more than two
+        # decimals.
+        _proc_fmts = {}
+        for _c in _proc.columns:
+            if _c.startswith("duration_"):
+                _proc_fmts[_c] = _fmt_duration_s
+            elif _c.startswith("events_per_case"):
+                _proc_fmts[_c] = "{:.2f}"
+            elif _c.endswith("_pct"):
+                _proc_fmts[_c] = "{:.1f}%"
+            else:
+                _proc_fmts[_c] = "{:,.0f}"
         st.dataframe(
-            _heat_styler(_proc, _dur_fmt), use_container_width=True,
+            _heat_styler(_proc, _proc_fmts), use_container_width=True,
         )
         if not _stats.has_intervals:
             st.caption(
