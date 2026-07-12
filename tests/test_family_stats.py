@@ -164,6 +164,26 @@ class TestPerformanceMinMax:
         assert "min_time" not in stats.activity["Register"]
         assert "max_time" not in stats.activity["Register"]
 
+    def test_pair_min_max(self):
+        df = _make_log(intervals=False)
+        stats = compute_performance_stats(df)
+        entry = stats.pairs[("Register", "Triage")]
+        # Single-timestamp: completion-to-completion, 10 minutes.
+        assert entry["min_time"] == 600.0
+        assert entry["max_time"] == 600.0
+        assert entry["total_time"] == 5 * 600.0  # 4 breast + 1 lung
+
+    def test_sojourn_times_single_timestamp(self):
+        df = _make_log(intervals=False)
+        stats = compute_performance_stats(df)
+        triage = stats.activity["Triage"]
+        assert triage["sojourn_mean_time"] == 600.0
+        assert triage["sojourn_min_time"] == 600.0
+        assert triage["sojourn_max_time"] == 600.0
+        assert triage["sojourn_total_time"] == 5 * 600.0
+        # A case's first activity has no predecessor — no sojourn.
+        assert "sojourn_mean_time" not in stats.activity["Register"]
+
 
 # ---------------------------------------------------------------------------
 # Process level
@@ -239,12 +259,70 @@ class TestActivityStats:
         assert entry["max_time"] == 120.0
         assert entry["total_time"] == 4 * 120.0
 
+    def test_sojourn_in_cell_stats_single_timestamp(self):
+        stats = compute_family_stats(
+            _discover(_make_log(intervals=False)))
+        assert stats.has_intervals is False
+        entry = stats.cells[0].activity["Done"]
+        assert "mean_time" not in entry            # no service times
+        assert entry["sojourn_mean_time"] == 600.0  # but sojourn works
+
     def test_activity_names_union_sorted(self):
         stats = compute_family_stats(
             _discover(_make_variant_log(), miner=_variant_miner))
         assert stats.activity_names == sorted(stats.activity_names)
         assert "Chemo" in stats.activity_names      # lung-only
         assert "Triage" in stats.activity_names     # breast-only
+
+
+# ---------------------------------------------------------------------------
+# Edge level
+# ---------------------------------------------------------------------------
+
+class TestEdgeStats:
+
+    def test_edges_from_single_timestamp_log(self):
+        stats = compute_family_stats(
+            _discover(_make_log(intervals=False)))
+        breast, lung = stats.cells
+        assert breast.edges["Register → Triage"]["frequency"] == 4
+        assert breast.edges["Register → Scan"]["frequency"] == 2
+        assert lung.edges["Register → Scan"]["frequency"] == 5
+        entry = breast.edges["Triage → Done"]
+        assert entry["mean_time"] == 600.0
+        assert entry["min_time"] == 600.0
+        assert entry["max_time"] == 600.0
+        assert entry["total_time"] == 4 * 600.0
+
+    def test_edge_names_ordered_by_family_frequency(self):
+        stats = compute_family_stats(
+            _discover(_make_log(intervals=False)))
+        # Register→Scan and Scan→Done total 7 each; the Triage pairs
+        # total 5 each; ties break alphabetically.
+        assert stats.edge_names == [
+            "Register → Scan", "Scan → Done",
+            "Register → Triage", "Triage → Done",
+        ]
+
+    def test_edge_frame(self):
+        stats = compute_family_stats(
+            _discover(_make_log(intervals=False)))
+        frame = stats.edge_frame("frequency")
+        assert list(frame.index) == stats.edge_names
+        assert frame.loc["Register → Scan", "Lung"] == 5
+
+    def test_no_timestamps_no_edges(self):
+        stats = compute_family_stats(
+            _discover(_make_log(timestamps=False)))
+        assert stats.edge_names == []
+        assert stats.cells[0].edges == {}
+
+    def test_interval_log_edge_waiting_excludes_service(self):
+        stats = compute_family_stats(_discover(_make_log()))
+        # Completion→start on interval logs: 10 min between
+        # completions minus the successor's 2 min service lead-in.
+        entry = stats.cells[0].edges["Triage → Done"]
+        assert entry["mean_time"] == 480.0
 
 
 # ---------------------------------------------------------------------------
@@ -338,13 +416,17 @@ class TestReport:
         family = _discover(_make_log())
         html = family_report_html(family, images=False)
         assert html.startswith("<!DOCTYPE html>")
-        for needle in ("Overview", "Compare", "Activities",
+        for needle in ("Overview", "Compare", "Activities", "Edges",
                        "Choices", "Models"):
             assert needle in html
         data = _report_data(html)
         assert [c["label"] for c in data["cells"]] == ["Breast", "Lung"]
         assert data["choices"][0]["counts"] == [[4, 2], [1, 5]]
         assert data["cells"][0]["duration"]["total"] == 6 * 22 * 60.0
+        assert data["edgeNames"][0] == "Register → Scan"
+        assert (data["cells"][0]["edges"]["Triage → Done"]["frequency"]
+                == 4)
+        assert "sojourn_mean_time" in data["cells"][0]["activity"]["Done"]
         assert "image" not in data["cells"][0]
 
     def test_write_report_and_determinism(self):

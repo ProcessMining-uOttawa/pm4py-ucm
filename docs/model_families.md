@@ -284,10 +284,20 @@ statistics designed for *comparison across cells*:
   min/mean/median/max and the TOTAL across the cell's cases**,
   distinct activities, concurrency-aware behavioural variant counts,
   and replay fitness.
-- **Activity level** — execution frequency, case coverage, and (for
-  interval logs carrying a `start_timestamp` column) service-time
+- **Activity level** — execution frequency, case coverage,
+  **sojourn time** (time since the case's previous event ≈ waiting +
+  service — derivable from *any* timestamped log, so single-timestamp
+  logs get activity-level time statistics too), and (for interval
+  logs carrying a `start_timestamp` column) service-time
   **min/mean/median/max/total** per activity. Metrics the log cannot
   support are omitted, never fabricated.
+- **Edge level** — directly-follows activity pairs (`Register Claim →
+  Quick Assessment`) with traversal frequency and waiting-time
+  min/mean/median/max/total, ordered by family-wide frequency.
+  Waiting is completion→start on interval logs; on single-timestamp
+  logs it is completion→completion (which includes the successor's
+  own duration — the report says so rather than pretending
+  otherwise).
 - **Choice level** — OR-fork branch counts **aligned across cells**:
   the per-cell trees are anti-unified into the family skeleton (the
   same merge that builds the umbrella, control-flow only) and each
@@ -329,6 +339,8 @@ as supplementary material for a paper. Five views:
   heat-mapped, with per-case normalisation for frequency-like
   metrics (the cells of a family routinely differ in size by an
   order of magnitude — absolute counts mislead).
+- **Edges** — the directly-follows pairs × members matrix (traversal
+  frequency, waiting times), busiest handovers first.
 - **Choices** — every aligned OR-fork as one 100% stacked bar per
   member, colorblind-safe categorical palette, exact shares and
   counts on hover, `n` printed next to every bar.

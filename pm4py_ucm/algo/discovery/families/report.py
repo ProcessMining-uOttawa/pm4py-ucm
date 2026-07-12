@@ -46,12 +46,18 @@ from .stats import FamilyStats, compute_family_stats
 #: Cell images wider than this are downscaled before embedding — keeps
 #: a 36-cell report in the tens of MB at most while staying readable
 #: when zoomed (the lightbox and the open-in-new-tab view show the
-#: embedded image at its native size).
+#: embedded image at its native size). Downscaling never goes below
+#: the 96-dpi readability floor (half the rendering DPI): a wide
+#: decomposed model keeps legible text even when that exceeds the
+#: width cap — same discipline as the family grid.
 DEFAULT_IMAGE_MAX_WIDTH = 2600
 
 #: Raster DPI for the embedded cell images — twice graphviz's default,
 #: same as the family grid's target: crisp text when zoomed in.
 IMAGE_DPI = 192
+
+#: Readability floor for the embedded images (see above).
+_IMAGE_FLOOR_DPI = 96
 
 
 # ---------------------------------------------------------------------------
@@ -80,12 +86,24 @@ def _render_cell_images(
                     cell.ucm, td, i, {"style": style, "dpi": IMAGE_DPI},
                 )
                 with Image.open(path) as im:
-                    if im.width > image_max_width:
-                        f = image_max_width / im.width
+                    # Cap the width, but never shrink below the 96-dpi
+                    # readability floor — a large decomposed model
+                    # would otherwise become unreadably small text.
+                    floor_w = round(im.width * _IMAGE_FLOOR_DPI / IMAGE_DPI)
+                    target_w = max(image_max_width, floor_w)
+                    if im.width > target_w:
+                        f = target_w / im.width
                         im = im.convert("RGB").resize(
-                            (image_max_width, max(1, int(im.height * f))),
+                            (target_w, max(1, int(im.height * f))),
                             Image.LANCZOS,
                         )
+                    # Diagrams are flat-color: an adaptive 256-color
+                    # palette shrinks the embedded PNG severalfold at
+                    # no visible cost, which is what keeps the
+                    # floor-protected large images affordable.
+                    im = im.convert("RGB").quantize(
+                        colors=256, method=Image.MEDIANCUT,
+                    )
                     buf = io.BytesIO()
                     im.save(buf, format="PNG", optimize=True)
                 uris.append(
@@ -424,6 +442,30 @@ if (hasI) {
       ["max_time","max service time"], ["total_time","total service time"]])
     ACT_METRICS.push({key: k, label: lab, fmt: fmtDur, perCase: false});
 }
+if (hasT) {
+  // Sojourn = time since the case's PREVIOUS event (~ waiting +
+  // service attributed to the activity) — derivable from completion
+  // timestamps alone, so single-timestamp logs get activity-level
+  // time statistics too.
+  for (const [k, lab] of [
+      ["sojourn_mean_time","mean sojourn time (since previous event)"],
+      ["sojourn_median_time","median sojourn time"],
+      ["sojourn_min_time","min sojourn time"],
+      ["sojourn_max_time","max sojourn time"],
+      ["sojourn_total_time","total sojourn time"]])
+    ACT_METRICS.push({key: k, label: lab, fmt: fmtDur, perCase: false});
+}
+const EDGE_METRICS = [
+  {key: "frequency", label: "frequency (traversals)", fmt: fmtNum,
+   perCase: true},
+];
+if (hasT) {
+  const w = hasI ? "waiting time" : "waiting time (compl.→compl.)";
+  for (const [k, lab] of [["mean_time","mean " + w],
+      ["median_time","median " + w], ["min_time","min " + w],
+      ["max_time","max " + w], ["total_time","total " + w]])
+    EDGE_METRICS.push({key: k, label: lab, fmt: fmtDur, perCase: false});
+}
 const PROC_COLS = (() => {
   const c = [
     {key: "cases", label: "cases", get: x => x.cases, fmt: fmtNum},
@@ -525,6 +567,7 @@ function renderTable(el, id, cols, rows, opts) {
     "<b>" + fmtNum(DATA.coveredCases) + "</b> / " +
       fmtNum(DATA.totalCases) + " cases covered",
     "<b>" + DATA.activityNames.length + "</b> activities",
+    "<b>" + DATA.edgeNames.length + "</b> activity pairs",
     "<b>" + DATA.choices.length + "</b> choice points",
   ];
   if (DATA.droppedCases) chips.push(fmtNum(DATA.droppedCases) + " cases dropped");
@@ -536,7 +579,8 @@ function renderTable(el, id, cols, rows, opts) {
 })();
 
 const VIEWS = [["overview","Overview"],["compare","Compare"],
-  ["activities","Activities"],["choices","Choices"],["models","Models"]];
+  ["activities","Activities"],["edges","Edges"],
+  ["choices","Choices"],["models","Models"]];
 const nav = document.getElementById("nav");
 const main = document.getElementById("main");
 for (const [id, label] of VIEWS) {
@@ -622,6 +666,17 @@ function showView(id) {
     '<input type="checkbox" id="cmp-percase"> per case ' +
     '(divide by the cell’s case count)</label></div>' +
     '<div id="cmp-table"></div></div>' +
+    (DATA.edgeNames.length ?
+      '<div class="card"><h2>Edge comparison</h2>' +
+      '<p class="hint">Directly-follows handovers of A and B — ' +
+      'traversal counts and waiting times' + (hasI ? "" :
+      " (completion-to-completion on this single-timestamp log)") +
+      ".</p>" +
+      '<div class="controls">' +
+      '<label>metric</label><select id="cmp-emetric"></select>' +
+      '<label class="toggle" id="cmp-epc-wrap">' +
+      '<input type="checkbox" id="cmp-epercase"> per case</label></div>' +
+      '<div id="cmp-etable"></div></div>' : "") +
     '<div class="card"><h2>Choices</h2>' +
     '<p class="hint">Branch shares of each OR-fork, A above B. ' +
     'n = branch traversals.</p><div id="cmp-choices"></div></div>';
@@ -632,6 +687,39 @@ function showView(id) {
   const mSel = document.getElementById("cmp-metric");
   mSel.innerHTML = ACT_METRICS.map((m, i) =>
     '<option value="' + i + '">' + esc(m.label) + "</option>").join("");
+  const eSel = document.getElementById("cmp-emetric");
+  if (eSel) eSel.innerHTML = EDGE_METRICS.map((m, i) =>
+    '<option value="' + i + '">' + esc(m.label) + "</option>").join("");
+
+  // A/B delta table over named entries (shared by the activity and
+  // edge comparisons).
+  function deltaTable(el, tableId, names, entryOf, m, perCase, A, B,
+                      rowHeader) {
+    const fmt = perCase ? (v => fmtNum(v, 2)) : m.fmt;
+    const rows = names.map(name => {
+      const ea = entryOf(A, name), eb = entryOf(B, name);
+      let va = ea ? ea[m.key] : null, vb = eb ? eb[m.key] : null;
+      if (va === undefined) va = null;
+      if (vb === undefined) vb = null;
+      if (perCase) {
+        va = va == null ? null : va / A.cases;
+        vb = vb == null ? null : vb / B.cases;
+      }
+      const d = (va != null && vb != null) ? vb - va : null;
+      const r = (va != null && vb != null && va !== 0) ? vb / va : null;
+      return {label: name, cells: [
+        {v: va, text: fmt(va)},
+        {v: vb, text: fmt(vb)},
+        {v: d, text: d == null ? "—" : (d > 0 ? "+" : "") + fmt(d)},
+        {v: r, text: r == null ? "—" : r.toFixed(2) + "×"},
+      ]};
+    }).filter(r => r.cells[0].v != null || r.cells[1].v != null);
+    renderTable(el, tableId,
+      [{label: "A — " + A.label}, {label: "B — " + B.label},
+       {label: "Δ (B−A)"}, {label: "ratio B/A"}],
+      rows, {heat: true, diverging: [false, false, true, false],
+             rowHeader: rowHeader});
+  }
 
   function deltaBadge(a, b, fmt, invert) {
     if (a == null || b == null || isNaN(a) || isNaN(b))
@@ -688,31 +776,21 @@ function showView(id) {
     const perCase = m.perCase && document.getElementById("cmp-percase").checked;
     document.getElementById("cmp-pc-wrap").style.display =
       m.perCase ? "" : "none";
-    const fmt = perCase ? (v => fmtNum(v, 2)) : m.fmt;
-    const rows = DATA.activityNames.map(act => {
-      const ea = A.activity[act], eb = B.activity[act];
-      let va = ea ? ea[m.key] : null, vb = eb ? eb[m.key] : null;
-      if (va === undefined) va = null;
-      if (vb === undefined) vb = null;
-      if (perCase) {
-        va = va == null ? null : va / A.cases;
-        vb = vb == null ? null : vb / B.cases;
-      }
-      const d = (va != null && vb != null) ? vb - va : null;
-      const r = (va != null && vb != null && va !== 0) ? vb / va : null;
-      return {label: act, cells: [
-        {v: va, text: fmt(va)},
-        {v: vb, text: fmt(vb)},
-        {v: d, text: d == null ? "—" :
-          (d > 0 ? "+" : "") + fmt(d)},
-        {v: r, text: r == null ? "—" : r.toFixed(2) + "×"},
-      ]};
-    }).filter(r => r.cells[0].v != null || r.cells[1].v != null);
-    renderTable(document.getElementById("cmp-table"), "cmp",
-      [{label: "A — " + A.label}, {label: "B — " + B.label},
-       {label: "Δ (B−A)"}, {label: "ratio B/A"}],
-      rows, {heat: true, diverging: [false, false, true, false],
-             rowHeader: "activity"});
+    deltaTable(document.getElementById("cmp-table"), "cmp",
+      DATA.activityNames, (c, name) => c.activity[name],
+      m, perCase, A, B, "activity");
+
+    // edge table (only when the log carries timestamps)
+    if (eSel) {
+      const em = EDGE_METRICS[+eSel.value];
+      const ePerCase = em.perCase &&
+        document.getElementById("cmp-epercase").checked;
+      document.getElementById("cmp-epc-wrap").style.display =
+        em.perCase ? "" : "none";
+      deltaTable(document.getElementById("cmp-etable"), "cmpE",
+        DATA.edgeNames, (c, name) => c.edges[name],
+        em, ePerCase, A, B, "edge");
+    }
 
     // choices
     document.getElementById("cmp-choices").innerHTML =
@@ -726,6 +804,10 @@ function showView(id) {
   }
   selA.onchange = selB.onchange = mSel.onchange = draw;
   document.getElementById("cmp-percase").onchange = draw;
+  if (eSel) {
+    eSel.onchange = draw;
+    document.getElementById("cmp-epercase").onchange = draw;
+  }
   document.getElementById("swap").onclick = () => {
     const t = selA.value; selA.value = selB.value; selB.value = t; draw();
   };
@@ -768,52 +850,86 @@ function choiceBlock(ch, rows) {
     legend + bars + "</div>";
 }
 
-// ---------- Activities ---------------------------------------------------------
-(function () {
-  const el = document.getElementById("view-activities");
+// ---------- generic metric matrix (Activities / Edges views) -----------------
+function matrixView(cfg) {
+  const el = document.getElementById("view-" + cfg.id);
+  if (!cfg.names.length) {
+    el.innerHTML = '<div class="card"><h2>' + cfg.title + "</h2>" +
+      '<p class="hint">' + cfg.empty + "</p></div>";
+    return;
+  }
   el.innerHTML =
-    '<div class="card"><h2>Activities × processes</h2>' +
-    '<p class="hint">Every activity across the whole family; ' +
-    'columns are the family members. Click headers to rank.</p>' +
+    '<div class="card"><h2>' + cfg.title + "</h2>" +
+    '<p class="hint">' + cfg.hint + "</p>" +
     '<div class="controls">' +
-    '<label>metric</label><select id="am-metric"></select>' +
-    '<label class="toggle" id="am-pc-wrap"><input type="checkbox" ' +
-    'id="am-percase"> per case</label>' +
-    '<label class="toggle"><input type="checkbox" id="am-heat" checked> ' +
-    "heatmap</label></div>" +
-    '<div id="am-table"></div>' +
-    '<p class="note">Heatmap scaling is per column (per process); ' +
-    "— marks activities the process never executes.</p></div>";
-  const mSel = document.getElementById("am-metric");
-  mSel.innerHTML = ACT_METRICS.map((m, i) =>
+    '<label>metric</label><select id="' + cfg.id + '-metric"></select>' +
+    '<label class="toggle" id="' + cfg.id + '-pc-wrap">' +
+    '<input type="checkbox" id="' + cfg.id + '-percase"> per case</label>' +
+    '<label class="toggle"><input type="checkbox" id="' + cfg.id +
+    '-heat" checked> heatmap</label></div>' +
+    '<div id="' + cfg.id + '-table"></div>' +
+    '<p class="note">' + cfg.note + "</p></div>";
+  const mSel = document.getElementById(cfg.id + "-metric");
+  mSel.innerHTML = cfg.metrics.map((m, i) =>
     '<option value="' + i + '">' + esc(m.label) + "</option>").join("");
   function draw() {
-    const m = ACT_METRICS[+mSel.value];
+    const m = cfg.metrics[+mSel.value];
     const perCase = m.perCase &&
-      document.getElementById("am-percase").checked;
-    document.getElementById("am-pc-wrap").style.display =
+      document.getElementById(cfg.id + "-percase").checked;
+    document.getElementById(cfg.id + "-pc-wrap").style.display =
       m.perCase ? "" : "none";
-    const heat = document.getElementById("am-heat").checked;
+    const heat = document.getElementById(cfg.id + "-heat").checked;
     const fmt = perCase ? (v => fmtNum(v, 2)) : m.fmt;
-    const rows = DATA.activityNames.map(act => ({
-      label: act,
+    const rows = cfg.names.map(name => ({
+      label: name,
       cells: DATA.cells.map(c => {
-        const e = c.activity[act];
+        const e = cfg.entry(c, name);
         let v = e ? e[m.key] : null;
         if (v === undefined) v = null;
         if (perCase && v != null) v = v / c.cases;
         return {v: v, text: fmt(v)};
       }),
     }));
-    renderTable(document.getElementById("am-table"), "am",
+    renderTable(document.getElementById(cfg.id + "-table"), cfg.id,
       DATA.cells.map(c => ({label: c.label})), rows,
-      {heat: heat, rowHeader: "activity"});
+      {heat: heat, rowHeader: cfg.rowHeader});
   }
   mSel.onchange = draw;
-  document.getElementById("am-percase").onchange = draw;
-  document.getElementById("am-heat").onchange = draw;
+  document.getElementById(cfg.id + "-percase").onchange = draw;
+  document.getElementById(cfg.id + "-heat").onchange = draw;
   draw();
-})();
+}
+
+matrixView({
+  id: "activities",
+  title: "Activities × processes",
+  hint: "Every activity across the whole family; columns are the " +
+    "family members. Click headers to rank.",
+  note: "Heatmap scaling is per column (per process); — marks " +
+    "activities the process never executes.",
+  empty: "No activities.",
+  rowHeader: "activity",
+  names: DATA.activityNames,
+  metrics: ACT_METRICS,
+  entry: (c, name) => c.activity[name],
+});
+matrixView({
+  id: "edges",
+  title: "Edges — directly-follows activity pairs × processes",
+  hint: "Handovers between two consecutive activities: traversal " +
+    "frequency and waiting time" + (hasI ? "" :
+    " — measured completion-to-completion on this single-timestamp " +
+    "log, so it includes the successor's own duration") +
+    ". Ordered by family-wide frequency; click headers to rank.",
+  note: "Heatmap scaling is per column (per process); — marks pairs " +
+    "the process never traverses.",
+  empty: "This log carries no timestamps — event order and " +
+    "directly-follows statistics are not derivable.",
+  rowHeader: "edge",
+  names: DATA.edgeNames,
+  metrics: EDGE_METRICS,
+  entry: (c, name) => c.edges[name],
+});
 
 // ---------- Choices --------------------------------------------------------------
 (function () {
@@ -897,7 +1013,7 @@ document.addEventListener("keydown", e => {
 });
 
 showView((location.hash || "#overview").slice(1) in
-  {overview:1, compare:1, activities:1, choices:1, models:1}
+  {overview:1, compare:1, activities:1, edges:1, choices:1, models:1}
   ? (location.hash || "#overview").slice(1) : "overview");
 </script>
 </body>

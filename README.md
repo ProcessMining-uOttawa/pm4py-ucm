@@ -537,14 +537,16 @@ stats.process_frame()                              # pandas: one row per cell
 pm4py_ucm.write_family_report(family, "report.html", stats=stats)
 ```
 
-`compute_family_stats` yields three statistics levels per family
+`compute_family_stats` yields four statistics levels per family
 member: **process** (cases, events per case, case-duration
 min/mean/median/max **and total**, behavioural variant counts, replay
-fitness), **activity** (frequency, case coverage, service-time
-min/mean/median/max/total on interval logs), and **choice** — OR-fork
-branch counts *aligned across the family* through the shared
-skeleton, so the same decision point is one comparable row for every
-combination.
+fitness), **activity** (frequency, case coverage, sojourn time since
+the previous event — available even for single-timestamp logs — and
+service-time min/mean/median/max/total on interval logs), **edge**
+(directly-follows pairs with traversal frequency and waiting times),
+and **choice** — OR-fork branch counts *aligned across the family*
+through the shared skeleton, so the same decision point is one
+comparable row for every combination.
 
 `write_family_report` renders it all into a zero-dependency HTML
 report that opens offline in any browser: sortable heat-mapped

@@ -906,6 +906,12 @@ def _accept_log_bytes(name: str, payload: bytes) -> None:
     st.session_state["log_kind"] = kind
     st.session_state.pop("applied_csv_columns", None)
     st.session_state.pop("csv_seeded_for_hash", None)
+    # A different log invalidates the mined family — otherwise the
+    # Family/Compare tabs keep showing the PREVIOUS log's results
+    # (the in-tab fingerprint check does not run when e.g. attribute
+    # detection fails on the new log).
+    st.session_state.pop("family_fp", None)
+    st.session_state.pop("family_result", None)
     if kind == "csv":
         for k, _, _ in _CSV_AUTOPICK:
             st.session_state.pop(k, None)
@@ -1935,7 +1941,48 @@ with compare_tab:
                 else:
                     st.caption(_cap + " — rendering unavailable")
 
-        # ---- activity comparison ----------------------------------------
+        # ---- activity / edge comparison ---------------------------------
+        def _delta_frame(names, entry_of, key, per_case, is_time,
+                         row_name):
+            """Rows: A value, B value, Δ, ratio for every named entry
+            present in either cell; returns (frame, formats)."""
+            rows = []
+            for name in names:
+                ea = entry_of(_A, name) or {}
+                eb = entry_of(_B, name) or {}
+                va, vb = ea.get(key), eb.get(key)
+                if va is None and vb is None:
+                    continue
+                if per_case and not is_time:
+                    va = None if va is None else va / _A.n_cases
+                    vb = None if vb is None else vb / _B.n_cases
+                rows.append({
+                    row_name: name,
+                    f"A — {_A.label}": va,
+                    f"B — {_B.label}": vb,
+                    "Δ (B−A)": (
+                        vb - va if va is not None and vb is not None
+                        else None
+                    ),
+                    "ratio B/A": (
+                        vb / va
+                        if va not in (None, 0) and vb is not None
+                        else None
+                    ),
+                })
+            frame = pd.DataFrame(rows).set_index(row_name)
+            if is_time:
+                fmts = {c: _fmt_duration_s for c in frame.columns
+                        if c != "ratio B/A"}
+            elif per_case:
+                fmts = {c: "{:.2f}" for c in frame.columns
+                        if c != "ratio B/A"}
+            else:
+                fmts = {c: "{:,.0f}" for c in frame.columns
+                        if c != "ratio B/A"}
+            fmts["ratio B/A"] = "{:.2f}×"
+            return frame, fmts
+
         st.markdown("**Activity comparison** (Δ and ratio are B vs A)")
         _metric_opts = [
             ("frequency", "frequency (executions)", False),
@@ -1948,6 +1995,18 @@ with compare_tab:
                 ("min_time", "min service time", True),
                 ("max_time", "max service time", True),
                 ("total_time", "total service time", True),
+            ]
+        if _stats.has_timestamps:
+            # Sojourn = time since the case's previous event — the
+            # activity-level time statistic that works WITHOUT a
+            # start_timestamp column.
+            _metric_opts += [
+                ("sojourn_mean_time",
+                 "mean sojourn time (since previous event)", True),
+                ("sojourn_median_time", "median sojourn time", True),
+                ("sojourn_min_time", "min sojourn time", True),
+                ("sojourn_max_time", "max sojourn time", True),
+                ("sojourn_total_time", "total sojourn time", True),
             ]
         ac1, ac2 = st.columns([2, 1])
         _m_label = ac1.selectbox(
@@ -1962,45 +2021,59 @@ with compare_tab:
             help="Divide by the cell's case count — cells differ "
                  "hugely in size, so absolute counts mislead.",
         )
-        _rows = []
-        for _act in _stats.activity_names:
-            _ea = _A.activity.get(_act) or {}
-            _eb = _B.activity.get(_act) or {}
-            _va, _vb = _ea.get(_m_key), _eb.get(_m_key)
-            if _va is None and _vb is None:
-                continue
-            if _per_case and not _m_is_time:
-                _va = None if _va is None else _va / _A.n_cases
-                _vb = None if _vb is None else _vb / _B.n_cases
-            _rows.append({
-                "activity": _act,
-                f"A — {_A.label}": _va,
-                f"B — {_B.label}": _vb,
-                "Δ (B−A)": (
-                    _vb - _va if _va is not None and _vb is not None
-                    else None
-                ),
-                "ratio B/A": (
-                    _vb / _va
-                    if _va not in (None, 0) and _vb is not None else None
-                ),
-            })
-        _cmp_df = pd.DataFrame(_rows).set_index("activity")
-        if _m_is_time:
-            _cmp_fmts = {
-                c: _fmt_duration_s for c in _cmp_df.columns
-                if c != "ratio B/A"
-            }
-        elif _per_case:
-            _cmp_fmts = {c: "{:.2f}" for c in _cmp_df.columns
-                         if c != "ratio B/A"}
-        else:
-            _cmp_fmts = {c: "{:,.0f}" for c in _cmp_df.columns
-                         if c != "ratio B/A"}
-        _cmp_fmts["ratio B/A"] = "{:.2f}×"
+        _cmp_df, _cmp_fmts = _delta_frame(
+            _stats.activity_names,
+            lambda c, n: c.activity.get(n), _m_key,
+            _per_case, _m_is_time, "activity",
+        )
         st.dataframe(
             _heat_styler(_cmp_df, _cmp_fmts), use_container_width=True,
         )
+
+        if _stats.edge_names:
+            _wait_label = (
+                "waiting time" if _stats.has_intervals
+                else "waiting time (completion-to-completion)"
+            )
+            st.markdown(
+                "**Edge comparison** — directly-follows handovers "
+                "between two activities (Δ and ratio are B vs A)"
+            )
+            _e_opts = [
+                ("frequency", "frequency (traversals)", False),
+                ("mean_time", f"mean {_wait_label}", True),
+                ("median_time", f"median {_wait_label}", True),
+                ("min_time", f"min {_wait_label}", True),
+                ("max_time", f"max {_wait_label}", True),
+                ("total_time", f"total {_wait_label}", True),
+            ]
+            ec1, ec2 = st.columns([2, 1])
+            _e_label = ec1.selectbox(
+                "Edge metric", [m[1] for m in _e_opts],
+                key="cmp_emetric",
+            )
+            _e_key, _, _e_is_time = next(
+                m for m in _e_opts if m[1] == _e_label
+            )
+            _e_per_case = ec2.checkbox(
+                "Per case", value=False, key="cmp_epercase",
+                disabled=_e_is_time,
+            )
+            _edge_df, _edge_fmts = _delta_frame(
+                _stats.edge_names,
+                lambda c, n: c.edges.get(n), _e_key,
+                _e_per_case, _e_is_time, "edge",
+            )
+            st.dataframe(
+                _heat_styler(_edge_df, _edge_fmts),
+                use_container_width=True,
+            )
+            if not _stats.has_intervals:
+                st.caption(
+                    "Single-timestamp log: waiting times are measured "
+                    "completion-to-completion, so they include the "
+                    "successor activity's own duration."
+                )
 
         # ---- choices ------------------------------------------------------
         st.markdown("**Choices** — OR-fork branch shares, aligned "

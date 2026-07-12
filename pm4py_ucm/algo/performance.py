@@ -16,7 +16,9 @@ Activities (:data:`NODE_METRICS`):
 * ``mean_time`` / ``median_time`` / ``total_time`` — activity service
   time. Only derivable from *interval* logs (a ``start_timestamp``
   column alongside the completion timestamp); silently omitted for
-  single-timestamp logs.
+  single-timestamp logs. (:class:`PerformanceStats` additionally
+  carries min/max and per-activity *sojourn* times for the family
+  statistics reports — those extra entries are not overlay metrics.)
 
 Edges (:data:`EDGE_METRICS`):
 
@@ -62,14 +64,20 @@ class PerformanceStats:
     """Log statistics keyed by activity name and activity pair."""
 
     #: ``{activity: {"frequency", "case_coverage", "mean_time",
-    #: "median_time", "min_time", "max_time", "total_time"}}`` (time
-    #: entries absent for single-timestamp logs). ``min_time`` /
-    #: ``max_time`` feed the family statistics reports; they are not
-    #: part of :data:`NODE_METRICS`, so the overlay/metadata output is
+    #: "median_time", "min_time", "max_time", "total_time",
+    #: "sojourn_mean_time", ...}}``. The plain ``*_time`` entries are
+    #: service times, only derivable from interval logs; the
+    #: ``sojourn_*_time`` entries are the time since the case's
+    #: **previous event** (completion to completion ≈ waiting +
+    #: service), derivable from any timestamped log. The extra keys
+    #: feed the family statistics reports; they are not part of
+    #: :data:`NODE_METRICS`, so the overlay/metadata output is
     #: unchanged by their presence.
     activity: Dict[str, Dict[str, float]] = field(default_factory=dict)
     #: ``{(a, b): {"frequency", "mean_time", "median_time",
-    #: "total_time"}}`` for directly-follows pairs.
+    #: "min_time", "max_time", "total_time"}}`` for directly-follows
+    #: pairs — waiting times (completion → start for interval logs,
+    #: completion → completion otherwise).
     pairs: Dict[Tuple[str, str], Dict[str, float]] = field(
         default_factory=dict)
     total_cases: int = 0
@@ -141,8 +149,29 @@ def compute_performance_stats(
             "frequency": int(len(g)),
             "mean_time": float(g["delta"].mean()),
             "median_time": float(g["delta"].median()),
+            "min_time": float(g["delta"].min()),
+            "max_time": float(g["delta"].max()),
             "total_time": float(g["delta"].sum()),
         }
+
+    # Per-activity SOJOURN time: completion minus the case's previous
+    # completion (≈ waiting + service attributed to the activity).
+    # Unlike service times this needs no start_timestamp, so
+    # single-timestamp logs get activity-level time statistics too.
+    # A case's first event has no predecessor and is excluded.
+    sojourn = pd.DataFrame({
+        "act": act,
+        "delta": (end_ts - end_ts.shift(1)).dt.total_seconds(),
+    })[case.eq(case.shift(1)).values]
+    for name, g in sojourn.groupby("act", sort=True):
+        entry = stats.activity.get(str(name))
+        if entry is None:
+            continue
+        entry["sojourn_mean_time"] = float(g["delta"].mean())
+        entry["sojourn_median_time"] = float(g["delta"].median())
+        entry["sojourn_min_time"] = float(g["delta"].min())
+        entry["sojourn_max_time"] = float(g["delta"].max())
+        entry["sojourn_total_time"] = float(g["delta"].sum())
     return stats
 
 

@@ -9,9 +9,15 @@ Compare tab:
   case duration (min / mean / median / max and the **total** across
   cases), distinct activities, and the concurrency-aware behavioural
   variant counts + replay fitness;
-* **activity level** — execution frequency, case coverage, and (for
-  interval logs carrying a ``start_timestamp`` column) service-time
+* **activity level** — execution frequency, case coverage, *sojourn*
+  time (since the case's previous event — derivable from any
+  timestamped log), and (for interval logs carrying a
+  ``start_timestamp`` column) service-time
   min / mean / median / max / **total** per activity, per cell;
+* **edge level** — directly-follows activity pairs with traversal
+  frequency and waiting-time min / mean / median / max / total
+  (completion → start on interval logs, completion → completion
+  otherwise);
 * **choice level** — OR-fork branch counts *aligned across cells*:
   the per-cell trees are anti-unified into the family skeleton (the
   same merge that builds the umbrella, control-flow only), each cell's
@@ -75,10 +81,18 @@ class CellStats:
     #: replayed cleanly.
     variants: Dict[str, float] = field(default_factory=dict)
     #: per-activity statistics: ``{activity: {"frequency",
-    #: "case_coverage", "mean_time", "median_time", "min_time",
-    #: "max_time", "total_time"}}`` (time entries only for interval
-    #: logs).
+    #: "case_coverage", "mean_time", ..., "sojourn_mean_time", ...}}``.
+    #: Plain ``*_time`` entries are service times (interval logs
+    #: only); ``sojourn_*_time`` entries are the time since the case's
+    #: previous event (any timestamped log).
     activity: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    #: per-edge (directly-follows activity pair) statistics, keyed by
+    #: the display label ``"A → B"``: ``{"frequency", "mean_time",
+    #: "median_time", "min_time", "max_time", "total_time"}`` —
+    #: waiting times (completion → start on interval logs;
+    #: completion → completion otherwise, which includes the
+    #: successor's service time). Empty for logs without timestamps.
+    edges: Dict[str, Dict[str, float]] = field(default_factory=dict)
 
 
 @dataclass
@@ -137,6 +151,10 @@ class FamilyStats:
     #: Observed value combinations excluded for having fewer than
     #: ``min_cases`` cases: ``[(labels, n_cases), ...]``.
     skipped: List[Tuple[Tuple[str, ...], int]] = field(default_factory=list)
+    #: Union of the cells' directly-follows edges (``"A → B"``
+    #: labels), ordered by descending family-wide frequency so the
+    #: busiest handovers list first. Empty without timestamps.
+    edge_names: List[str] = field(default_factory=list)
 
     @property
     def cell_labels(self) -> List[str]:
@@ -195,6 +213,22 @@ class FamilyStats:
         frame = pd.DataFrame(data)
         return frame.reindex(sorted(frame.index))
 
+    def edge_frame(self, metric: str = "frequency"):
+        """Directly-follows edges × cells matrix for one edge metric
+        (``frequency`` or waiting-time ``mean_time`` / ``median_time``
+        / ``min_time`` / ``max_time`` / ``total_time``)."""
+        import pandas as pd
+
+        data = {
+            c.label: {
+                edge: entry.get(metric)
+                for edge, entry in c.edges.items()
+                if entry.get(metric) is not None
+            }
+            for c in self.cells
+        }
+        return pd.DataFrame(data).reindex(self.edge_names)
+
     def choice_count_frame(self, choice: "FamilyChoice"):
         """Cells × branches matrix of traversal counts (NaN = the cell
         never reaches the choice)."""
@@ -233,6 +267,7 @@ class FamilyStats:
                 for labels, n in self.skipped
             ],
             "activityNames": list(self.activity_names),
+            "edgeNames": list(self.edge_names),
             "cells": [
                 {
                     "labels": list(c.labels),
@@ -247,6 +282,9 @@ class FamilyStats:
                     "variants": dict(c.variants),
                     "activity": {
                         act: dict(entry) for act, entry in c.activity.items()
+                    },
+                    "edges": {
+                        edge: dict(entry) for edge, entry in c.edges.items()
                     },
                 }
                 for c in self.cells
@@ -518,6 +556,7 @@ def compute_family_stats(
             timestamp_col, start_timestamp_col,
         )
 
+        edge_stats: Dict[str, Dict[str, float]] = {}
         if has_timestamps:
             perf = compute_performance_stats(
                 cell_df,
@@ -528,6 +567,13 @@ def compute_family_stats(
             )
             activity_stats = {
                 act: dict(entry) for act, entry in perf.activity.items()
+            }
+            # Directly-follows edges — the between-activities view.
+            # Frequencies and waiting times need only completion
+            # timestamps, so single-timestamp logs are covered.
+            edge_stats = {
+                f"{a} → {b}": dict(entry)
+                for (a, b), entry in perf.pairs.items()
             }
         else:
             # No timestamps at all — frequencies and coverage only.
@@ -597,7 +643,18 @@ def compute_family_stats(
             duration=duration,
             variants=variants,
             activity=activity_stats,
+            edges=edge_stats,
         ))
+
+    # Edge union, busiest handovers first (family-wide frequency
+    # desc, label asc) — the natural reading order for a ranking.
+    edge_totals: Dict[str, float] = {}
+    for c in cells:
+        for edge, entry in c.edges.items():
+            edge_totals[edge] = (
+                edge_totals.get(edge, 0.0) + entry.get("frequency", 0.0)
+            )
+    edge_names = sorted(edge_totals, key=lambda e: (-edge_totals[e], e))
 
     # A shared choice a cell never traversed (all its cases replayed
     # as noise, or the fork sits in a skipped region) keeps None —
@@ -607,6 +664,7 @@ def compute_family_stats(
         cells=cells,
         choices=choices,
         activity_names=sorted(all_activities),
+        edge_names=edge_names,
         has_intervals=has_intervals,
         has_timestamps=has_timestamps,
         total_cases=family.total_cases,
