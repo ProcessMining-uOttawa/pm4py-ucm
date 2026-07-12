@@ -428,6 +428,10 @@ class TestReport:
                 == 4)
         assert "sojourn_mean_time" in data["cells"][0]["activity"]["Done"]
         assert "image" not in data["cells"][0]
+        # Branding: tool generation + a link to the project home.
+        assert "PM4Py-UCM V3" in html
+        assert ("https://github.com/ProcessMining-uOttawa/pm4py-ucm"
+                in html)
 
     def test_write_report_and_determinism(self):
         family = _discover(_make_log())
