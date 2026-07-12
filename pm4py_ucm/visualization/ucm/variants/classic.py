@@ -294,12 +294,17 @@ def _node_style(
         #     ``_emit_map``). The activity name always floats as an
         #     ``xlabel``, both for bound (inside a cluster) and
         #     unbound RespRefs — keeps the text off the path line.
+        # A ``_perf`` metadata entry (performance overlay) renders as
+        # a smaller gray line under the name.
         resp_name = _wrapped_resp_name(node)
+        perf = _perf_text(node)
         if style_name == STYLE_UCM:
             style["label"] = ""
             # Bold responsibility name so it stands out from path-line
             # labels and edge condition glyphs around the marker square.
-            style["xlabel"] = _html_bold(resp_name)
+            style["xlabel"] = _html_bold(resp_name, sub=perf)
+        elif perf:
+            style["label"] = _html_label(resp_name, sub=perf, bold=False)
         else:
             style["label"] = resp_name
         return style
@@ -321,16 +326,59 @@ def _node_style(
     return style
 
 
-def _html_bold(label: str) -> str:
-    """Wrap a wrapped (``\\n``-separated) plain label in a graphviz
-    HTML-like ``<B>…</B>`` string. Escapes ``&``/``<``/``>`` and turns
-    newlines into ``<BR/>`` so multi-line wrapped names still render."""
-    safe = (label
+def _html_escape(label: str) -> str:
+    return (label
             .replace("&", "&amp;")
             .replace("<", "&lt;")
             .replace(">", "&gt;")
             .replace("\n", "<BR/>"))
-    return f"<<B>{safe}</B>>"
+
+
+#: Style of the performance-overlay sub-line under activity names.
+_PERF_FONT = 'POINT-SIZE="9" COLOR="#555555"'
+
+
+def _html_label(label: str, sub: "Optional[str]" = None,
+                bold: bool = True) -> str:
+    """Graphviz HTML-like label: the (wrapped) ``label``, optionally
+    bold, with an optional smaller gray ``sub`` line under it (the
+    performance overlay)."""
+    safe = _html_escape(label)
+    if bold:
+        safe = f"<B>{safe}</B>"
+    if sub:
+        safe += f'<BR/><FONT {_PERF_FONT}>{_html_escape(sub)}</FONT>'
+    return f"<{safe}>"
+
+
+def _html_bold(label: str, sub: "Optional[str]" = None) -> str:
+    """Wrap a wrapped (``\\n``-separated) plain label in a graphviz
+    HTML-like ``<B>…</B>`` string (optionally with a performance
+    sub-line)."""
+    return _html_label(label, sub=sub, bold=True)
+
+
+def _perf_text(element) -> "Optional[str]":
+    """The element's ``_perf`` overlay metadata value, if any."""
+    for md in getattr(element, "metadata", None) or []:
+        if md.name == "_perf":
+            return md.value
+    return None
+
+
+def _edge_perf_text(c: "UCM.NodeConnection") -> "Optional[str]":
+    """The arc's overlay — stored on its SOURCE node under a
+    branch-indexed key (jUCMNav's metamodel has no metadata on
+    connections)."""
+    try:
+        branch = c.source.succ_connections.index(c)
+    except ValueError:
+        return None
+    key = f"_perf_branch{branch}"
+    for md in getattr(c.source, "metadata", None) or []:
+        if md.name == key:
+            return md.value
+    return None
 
 
 def _wrapped_resp_name(node: "UCM.RespRef") -> str:
@@ -365,6 +413,11 @@ def apply(ucm: UCM, parameters: Optional[Dict[str, Any]] = None) -> Digraph:
           boxes, gateway diamonds, BPMN start/end events).
         * ``format`` – output format passed to graphviz (``"png"``, ``"svg"``,
           ``"pdf"`` …). Defaults to ``"png"``.
+        * ``dpi`` – raster resolution in dots per inch for bitmap
+          formats (graphviz default: 96). Layout is computed in points
+          and is DPI-independent, so a higher value scales the whole
+          drawing — including text — proportionally. ``192`` doubles
+          the pixel size of every glyph.
         * ``rankdir`` – ``"LR"`` (default) or ``"TB"``.
         * ``bgcolor`` – background colour. Defaults to transparent.
         * ``font_size`` – integer font size for node labels.
@@ -406,6 +459,7 @@ def apply(ucm: UCM, parameters: Optional[Dict[str, Any]] = None) -> Digraph:
                 f"(available: {[m.name for m in ucm.maps]})"
             )
         map_index = matching[0]
+    dpi = parameters.get("dpi", None)
 
     filename = tempfile.NamedTemporaryFile(suffix=".gv", delete=False).name
 
@@ -440,6 +494,12 @@ def apply(ucm: UCM, parameters: Optional[Dict[str, Any]] = None) -> Digraph:
                     # them to render even when graphviz would otherwise
                     # drop them under tight spacing.
                     "forcelabels": "true",
+                    # Raster resolution for bitmap outputs. Layout is
+                    # in points, so this scales the whole drawing —
+                    # text included — without changing its shape.
+                    # Only emitted when the caller asked for it, so
+                    # default output stays byte-identical.
+                    **({"dpi": str(int(dpi))} if dpi else {}),
                 },
                 node_attr={
                     "fontname": DEFAULT_FONT,
@@ -611,6 +671,16 @@ def _emit_map(
         if c.name:
             existing = edge_attrs.get("label", "")
             edge_attrs["label"] = (existing + " " + c.name).strip()
+        # Performance overlay on the edge — small and gray so path
+        # structure stays dominant.
+        perf = _edge_perf_text(c)
+        if perf:
+            existing = edge_attrs.get("label", "")
+            edge_attrs["label"] = (
+                existing + "\n" + perf if existing else perf
+            )
+            edge_attrs.setdefault("fontsize", "9")
+            edge_attrs.setdefault("fontcolor", "#555555")
         # An EmptyPoint is a routing waypoint, not a visible node — the
         # edge should pass *through* it as if uninterrupted. Drop the
         # arrowhead when terminating at an EmptyPoint so the segment

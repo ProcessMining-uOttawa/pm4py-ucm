@@ -183,6 +183,14 @@ def _parse_root(root: ET.Element) -> UCM:
                 ucm._counter.reserve(node._id)
             by_xpath[f"{prefix}/@nodes.{n_idx}"] = node
 
+            # Metadata annotations (e.g. jUCMNav's ``_hits``, our
+            # performance overlay ``_perf``) — preserved for
+            # round-trips and for the visualizer.
+            for md_el in node_el.findall("metadata"):
+                node.add_metadata(
+                    md_el.get("name", ""), md_el.get("value", ""),
+                )
+
             # RespRef.respDef
             if isinstance(node, UCM.RespRef):
                 rd = node_el.get("respDef")
@@ -247,6 +255,10 @@ def _parse_root(root: ET.Element) -> UCM:
                 name=_unwrap_name(conn_el.get("name", "")),
                 condition=condition,
             )
+            for md_el in conn_el.findall("metadata"):
+                conn.add_metadata(
+                    md_el.get("name", ""), md_el.get("value", ""),
+                )
             ucm_map.add_connection(conn)
             # Connections have no ID in modern files; if present (legacy),
             # reserve it on the counter to prevent collisions.

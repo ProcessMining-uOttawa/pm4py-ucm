@@ -129,9 +129,14 @@ def _load_font(size: int):
 def _composite(
     panels: List[Tuple[str, str]],
     output_path: str,
+    scale: float = 1.0,
 ) -> str:
     """Composite ``panels`` (list of ``(title, png_path)``) into one
     vertical PNG with title strips and horizontal separators.
+
+    ``scale`` multiplies the title-strip font and spacing constants so
+    the chrome keeps its proportion to the maps when they were
+    rendered at a non-default ``dpi`` (e.g. ``scale=2.0`` for 192 dpi).
 
     Returns the path the composite was written to.
     """
@@ -144,15 +149,20 @@ def _composite(
     # backgrounds when this code first shipped.
     images = [(title, Image.open(p).convert("RGBA")) for title, p in panels]
 
-    font = _load_font(_TITLE_FONT_SIZE)
+    title_font_size = max(1, round(_TITLE_FONT_SIZE * scale))
+    pad_top = round(_TITLE_PAD_TOP * scale)
+    pad_bottom = round(_TITLE_PAD_BOTTOM * scale)
+    sep_margin = round(_SEPARATOR_MARGIN * scale)
+    sep_thickness = max(1, round(_SEPARATOR_THICKNESS * scale))
+    font = _load_font(title_font_size)
 
     # Width of the composite = widest panel; pad narrower panels.
     width = max(im.width for _, im in images)
 
     # Compute total height: per panel = title strip + image + separator
     # (except the last panel which doesn't need a trailing separator).
-    title_strip = _TITLE_PAD_TOP + _TITLE_FONT_SIZE + _TITLE_PAD_BOTTOM
-    sep_total = _SEPARATOR_MARGIN * 2 + _SEPARATOR_THICKNESS
+    title_strip = pad_top + title_font_size + pad_bottom
+    sep_total = sep_margin * 2 + sep_thickness
     total_h = 0
     for i, (_, im) in enumerate(images):
         total_h += title_strip + im.height
@@ -175,7 +185,7 @@ def _composite(
         except AttributeError:  # very old Pillow
             text_w, _ = draw.textsize(text, font=font)  # type: ignore
         draw.text(
-            (max(0, (width - text_w) // 2), y + _TITLE_PAD_TOP),
+            (max(0, (width - text_w) // 2), y + pad_top),
             text, font=font, fill=_TITLE_COLOR,
         )
         y += title_strip
@@ -189,13 +199,13 @@ def _composite(
 
         # Separator between panels (but not after the last one).
         if i != len(images) - 1:
-            y += _SEPARATOR_MARGIN
+            y += sep_margin
             draw.rectangle(
-                [(_SEPARATOR_MARGIN, y),
-                 (width - _SEPARATOR_MARGIN, y + _SEPARATOR_THICKNESS - 1)],
+                [(sep_margin, y),
+                 (width - sep_margin, y + sep_thickness - 1)],
                 fill=_SEPARATOR_COLOR,
             )
-            y += _SEPARATOR_THICKNESS + _SEPARATOR_MARGIN
+            y += sep_thickness + sep_margin
 
     composite.save(output_path)
 
@@ -258,4 +268,7 @@ def render(
         return output_path
 
     panels = _render_each(ucm, maps, parameters)
-    return _composite(panels, output_path)
+    # Title strips scale with the rendered dpi so the chrome keeps its
+    # proportion to the maps (graphviz default is 96 dpi).
+    scale = float(parameters.get("dpi") or 96) / 96.0
+    return _composite(panels, output_path, scale=scale)

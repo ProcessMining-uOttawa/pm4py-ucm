@@ -572,11 +572,21 @@ def _parent_map(tree) -> Dict[int, Any]:
     return out
 
 
-def _build_plan(tree, opts: Dict[str, Any]) -> _PlanNode:
-    """Recursively decide cuts for every map in the decomposition."""
+def _build_plan(
+    tree,
+    opts: Dict[str, Any],
+    reserved_names: Optional[Set[str]] = None,
+) -> _PlanNode:
+    """Recursively decide cuts for every map in the decomposition.
+
+    ``reserved_names`` seeds the uniqueness set for derived plug-in map
+    names — pass the names of maps already present in a shared container
+    so a second decomposition into the same :class:`UCM` cannot produce
+    a duplicate map name (duplicates get a `` 2`` / `` 3`` suffix).
+    """
     info = _annotate(tree)
     parent_of = _parent_map(tree)
-    used_names: Set[str] = set()
+    used_names: Set[str] = set(reserved_names or ())
 
     def recurse(subtree, name_hint: Optional[str], is_root: bool,
                 parent_of_cut) -> _PlanNode:
@@ -613,13 +623,19 @@ def _flatten_plan(plan: _PlanNode) -> List[_PlanNode]:
 # Build the UCM from a plan
 # ---------------------------------------------------------------------------
 
-def _build_ucm(plan: _PlanNode, urn_name: str, root_map_name: str) -> UCM:
-    """Materialise every map of ``plan`` into a fresh :class:`UCM`.
+def _build_ucm(
+    plan: _PlanNode,
+    urn_name: str,
+    root_map_name: str,
+    container: Optional[UCM] = None,
+) -> UCM:
+    """Materialise every map of ``plan`` into a fresh :class:`UCM` (or
+    into ``container`` when given — the model-family assembly path).
 
     For each map we install a cut handler that emits a Stub for each
     intended cut child, recording (stub, plug-in plan) for later binding.
     """
-    ucm = UCM(name=urn_name)
+    ucm = container if container is not None else UCM(name=urn_name)
     # Re-name root in plan to whatever the caller asked for so the root
     # map keeps its existing name (spec requirement).
     plan.name = root_map_name
@@ -739,6 +755,7 @@ def apply(tree, parameters: Optional[Dict[str, Any]] = None) -> UCM:
     performers = parameters.get("performers")
     performer_kind = parameters.get("performer_kind")
     additional_components = parameters.get("additional_components")
+    container: Optional[UCM] = parameters.get("container")
 
     # Handle the root-loop edge case: when the tree itself is a loop
     # and on_loop is enabled, wrap in a synthetic single-child sequence
@@ -749,13 +766,25 @@ def apply(tree, parameters: Optional[Dict[str, Any]] = None) -> UCM:
     # at the loop plug-in.
     tree = _maybe_wrap_root_loop(tree, opts)
 
-    plan = _build_plan(tree, opts)
-    ucm, stubs_to_bind, map_for = _build_ucm(plan, urn_name, map_name)
+    reserved = (
+        {m.name for m in container.maps} | {map_name}
+        if container is not None else None
+    )
+    plan = _build_plan(tree, opts, reserved_names=reserved)
+    ucm, stubs_to_bind, map_for = _build_ucm(
+        plan, urn_name, map_name, container=container,
+    )
 
+    # Post-processing is scoped to the maps this call created — with an
+    # existing ``container``, previously added maps have already been
+    # processed and must not be touched again.
+    new_maps = list(map_for.values())
     if simplify:
-        _ft.simplify_empty_points(ucm)
+        for m in new_maps:
+            _ft._simplify_map(ucm, m)
     if routing_points:
-        _ft.insert_routing_empty_points(ucm)
+        for m in new_maps:
+            _ft._insert_routing_for_map(ucm, m)
 
     # Bindings *after* simplification so that the in/out arcs we record
     # are the surviving ones (the simplifier can replace arc objects).

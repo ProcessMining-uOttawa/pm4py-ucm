@@ -54,10 +54,17 @@ def _complement(lit: Literal) -> Literal:
 
     ``(B > N)`` <-> ``(B <= N)`` and ``(B < N)`` <-> ``(B >= N)``
     are mutually exclusive over integers. ``A == V`` <-> ``A != V``
-    flips the comparator. Other operators have no syntactic
-    complement at this layer and are returned with a sentinel op
-    that never matches anything real."""
+    flips the comparator. ``X == true`` <-> ``X == false`` flips the
+    *value*: the literals ``true`` / ``false`` only ever denote
+    jUCMNav boolean variables in this package (a two-valued string
+    column is classified boolean, never enumeration, by the
+    attribute extractor), so the pair is a genuine complement.
+    Other operators have no syntactic complement at this layer and
+    are returned with a sentinel op that never matches anything
+    real."""
     var, op, val = lit
+    if op == "==" and val in ("true", "false"):
+        return (var, "==", "false" if val == "true" else "true")
     flip = {
         ">": "<=", "<=": ">",
         "<": ">=", ">=": "<",
@@ -414,7 +421,10 @@ def _merge_complement_pairs(
                 continue
             lit_a = next(iter(diff_a))
             lit_b = next(iter(diff_b))
-            if _complement(lit_a) != lit_b:
+            # Check both directions: boolean-value complements are
+            # asymmetric (complement of ``X != true`` is ``X == true``,
+            # but complement of ``X == true`` is ``X == false``).
+            if _complement(lit_a) != lit_b and _complement(lit_b) != lit_a:
                 continue
             common = a & b
             # Drop both originals, add the merged clause once.

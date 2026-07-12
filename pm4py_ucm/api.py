@@ -29,6 +29,8 @@ from .algo.discovery.resources import algorithm as _resources
 from .algo.discovery.variants import clustering as _clustering
 from .algo.discovery.scenarios import synthesis as _scenarios
 from .algo.discovery.scenarios import reports as _scenario_reports
+from .algo.discovery import families as _families
+from .algo import performance as _performance
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +409,208 @@ write_condition_mining_report` for the column semantics."""
         scenario_group, file_path,
     )
     return file_path
+
+
+# ---------------------------------------------------------------------------
+# Performance overlays
+# ---------------------------------------------------------------------------
+
+def annotate_performance(
+    ucm: UCM,
+    log,
+    node_metrics=("frequency",),
+    edge_metrics=("frequency",),
+    parameters: Optional[Dict[str, Any]] = None,
+) -> UCM:
+    """Overlay performance information from ``log`` on ``ucm``.
+
+    Activity metrics (up to two keeps the diagram readable):
+    ``frequency`` (executions), ``case_coverage`` (cases containing
+    the activity), and — for interval logs carrying a
+    ``start_timestamp`` column — ``mean_time`` / ``median_time`` /
+    ``total_time`` service times. Edge metrics: directly-follows
+    ``frequency``, ``percentage`` (an OR-fork branch's share of the
+    fork's traversals), and ``mean_time`` / ``median_time`` /
+    ``total_time`` waiting times between the edge's two activities.
+
+    The overlay is stored as ``_perf`` metadata: rendered by the
+    visualizer as a small gray annotation under activity names and on
+    edges, and exported to ``.jucm`` as node ``<metadata>`` entries
+    (jUCMNav shows them in the properties view). Re-annotating
+    replaces the previous overlay; pass empty metric sequences to
+    remove a layer. Returns the same ``ucm``. See
+    :mod:`pm4py_ucm.algo.performance` for details, including how edge
+    statistics are attributed to activity-to-activity segments."""
+    import pandas as pd
+    if not isinstance(log, pd.DataFrame):
+        import pm4py
+        log = pm4py.convert_to_dataframe(log)
+    return _performance.annotate_performance(
+        ucm, log,
+        node_metrics=node_metrics,
+        edge_metrics=edge_metrics,
+        parameters=parameters,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Model families (attribute-partitioned discovery)
+# ---------------------------------------------------------------------------
+
+def discover_ucm_family(
+    log,
+    attributes,
+    decomposition=None,
+    noise_threshold: float = 0.0,
+    min_cases: int = 10,
+    max_values_per_attribute: int = 12,
+    bins: int = 4,
+    bin_edges: Optional[Dict[str, Any]] = None,
+    other_bucket: bool = True,
+    unknown_bucket: bool = True,
+    include_values: Optional[Dict[str, Any]] = None,
+    case_id_col: str = "case:concept:name",
+    parameters: Optional[Dict[str, Any]] = None,
+):
+    """Mine a *family* of UCM models: partition ``log`` by the values
+    of 1–2 case-level attributes (e.g. cancer type × age group) and
+    discover one model per partition cell.
+
+    Each cell's sub-log runs through the same pipeline as
+    :func:`discover_ucm_inductive` — the ``decomposition`` argument is
+    simply applied per cell, so the family can be flat or decomposed.
+    Enumeration attributes partition by value (low-count values merge
+    into ``Other`` past ``max_values_per_attribute``); boolean
+    attributes by ``true``/``false``; numeric attributes are binned
+    into ranges (``bins`` quantiles, or explicit
+    ``bin_edges={attribute: [edges]}``); missing values go to an
+    ``Unknown`` bucket. ``include_values={attribute: [labels]}``
+    restricts an attribute to the listed values — cases carrying other
+    values are dropped from the family entirely. Observed combinations
+    with fewer than ``min_cases`` cases are skipped (recorded on the
+    family, shown grayed in the grid rendering).
+
+    Returns a
+    :class:`~pm4py_ucm.algo.discovery.families.family.ModelFamily`;
+    feed it to :func:`write_ucm_family`, :func:`save_vis_ucm_family`,
+    or :func:`assemble_ucm_family`.
+    """
+    return _families.discover(
+        log, attributes,
+        decomposition=decomposition,
+        noise_threshold=noise_threshold,
+        min_cases=min_cases,
+        max_values_per_attribute=max_values_per_attribute,
+        bins=bins,
+        bin_edges=bin_edges,
+        other_bucket=other_bucket,
+        unknown_bucket=unknown_bucket,
+        include_values=include_values,
+        case_id_col=case_id_col,
+        parameters=parameters,
+    )
+
+
+def write_ucm_family(family, path: str) -> str:
+    """Write one ``.jucm`` file per family cell plus a
+    ``family_summary.csv`` (cell labels, case counts, coverage, file
+    names). ``path`` ending in ``.zip`` produces a single archive;
+    otherwise it is treated as a directory."""
+    return _families.write_family(family, path)
+
+
+def assemble_ucm_family(
+    family,
+    mode: str = "umbrella",
+    **kwargs,
+) -> UCM:
+    """Assemble a mined family into a single :class:`UCM`.
+
+    ``mode="combined"`` puts every cell model in one URN spec as
+    independent root maps (shared responsibility/component
+    definitions, one ID counter — the same activity is one definition
+    referenced from many maps).
+
+    ``mode="umbrella"`` builds one overarching model: the root map is
+    the **shared skeleton** of the cell processes, with a **dynamic
+    stub at every point where behaviour diverges**. Each stub's
+    plug-ins are the distinct variant sub-maps, guarded by
+    preconditions over the partition attributes
+    (``cancer_type == Breast && age_group == _40_59``); cells that
+    skip a variation point get a pass-through ``skip`` plug-in.
+    Behaviourally identical variants share a single plug-in with a
+    domain-factored OR'd precondition, and one scenario strategy per
+    cell initialises the attribute variables so jUCMNav's traversal
+    selects the matching plug-in at every stub. **Resource variation
+    counts as variation**: the same activity performed by different
+    actors in different cells becomes a variation point too, each
+    variant binding the activity to its cells' actor (disable with
+    ``resource_variation=False``). Pass ``skeleton=False`` for the
+    plain single-stub umbrella (whole cell models as plug-ins).
+    By default the strategies are **path scenarios**: each cell's
+    sub-log is replayed to emit one executable scenario per
+    (combination × behavioural variant), with ``family_variant``
+    branch conditions on outside-loop OR-forks and loop-counter
+    scaffolding — so different strategies traverse the different
+    paths of each combination (``path_scenarios=False`` restores the
+    plain one-strategy-per-combination form). Keyword arguments are
+    forwarded to
+    :func:`~pm4py_ucm.algo.discovery.families.assembly.assemble_umbrella`
+    (``root_map_name``, ``stub_name``, ``dedup``, ``strategies``,
+    ``group_name``, ``skeleton``, ``resource_variation``,
+    ``path_scenarios``, ``max_variants_per_cell``,
+    ``max_loop_iterations``) or
+    :func:`~pm4py_ucm.algo.discovery.families.assembly.assemble_combined`
+    (``urn_name``)."""
+    if mode == "combined":
+        return _families.assemble_combined(family, **kwargs)
+    if mode == "umbrella":
+        return _families.assemble_umbrella(family, **kwargs)
+    raise ValueError(
+        f"Unknown assembly mode {mode!r}; expected 'combined' or 'umbrella'."
+    )
+
+
+def save_vis_ucm_family(
+    family,
+    file_path: str,
+    style: str = "ucm",
+    parameters: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Render the family as a single grid PNG — a vertical stack for
+    one partition attribute, a matrix (rows × columns) for two. Every
+    panel carries the cell's ``n=… (…%)`` caption; skipped
+    combinations render as grayed placeholders.
+
+    Resolution adapts to the family size: rendering aims for
+    ``parameters["target_dpi"]`` (default 192 — twice graphviz's
+    default, so text stays readable in the export) and backs off
+    toward 96 dpi only when the projected composite would exceed
+    ``parameters["max_total_pixels"]`` (default 150M). Pass
+    ``parameters={"dpi": …}`` to pin an exact resolution instead.
+    See :func:`pm4py_ucm.visualization.ucm.family_grid.render`."""
+    from .visualization.ucm import family_grid as _grid
+    params = dict(parameters or {})
+    params.setdefault("style", style)
+    return _grid.render(family, file_path, parameters=params)
+
+
+def view_ucm_family(
+    family,
+    style: str = "ucm",
+    parameters: Optional[Dict[str, Any]] = None,
+):
+    """Render the family grid to a temporary PNG and open it in the
+    system viewer (Windows); returns the image path."""
+    import os
+    import tempfile
+    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
+    save_vis_ucm_family(family, tmp, style=style, parameters=parameters)
+    try:
+        os.startfile(tmp)  # Windows
+    except (AttributeError, OSError):
+        pass
+    return tmp
 
 
 def save_vis_ucm(
