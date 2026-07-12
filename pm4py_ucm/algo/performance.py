@@ -62,8 +62,11 @@ class PerformanceStats:
     """Log statistics keyed by activity name and activity pair."""
 
     #: ``{activity: {"frequency", "case_coverage", "mean_time",
-    #: "median_time", "total_time"}}`` (time entries absent for
-    #: single-timestamp logs).
+    #: "median_time", "min_time", "max_time", "total_time"}}`` (time
+    #: entries absent for single-timestamp logs). ``min_time`` /
+    #: ``max_time`` feed the family statistics reports; they are not
+    #: part of :data:`NODE_METRICS`, so the overlay/metadata output is
+    #: unchanged by their presence.
     activity: Dict[str, Dict[str, float]] = field(default_factory=dict)
     #: ``{(a, b): {"frequency", "mean_time", "median_time",
     #: "total_time"}}`` for directly-follows pairs.
@@ -110,6 +113,8 @@ def compute_performance_stats(
         for name, entry in (
                 ("mean", grouped.mean()),
                 ("median", grouped.median()),
+                ("min", grouped.min()),
+                ("max", grouped.max()),
                 ("total", grouped.sum())):
             for act, value in entry.items():
                 if str(act) in stats.activity and value == value:

@@ -613,6 +613,68 @@ def view_ucm_family(
     return tmp
 
 
+def compute_family_stats(family, parameters: Optional[Dict[str, Any]] = None):
+    """Comparative statistics for every cell of a mined family — the
+    data layer behind :func:`write_family_report` and the web app's
+    Compare tab.
+
+    Three levels, all designed for ranking and cross-cell comparison:
+    **process** (cases, events, events per case, case-duration
+    min/mean/median/max and **total**, behavioural variant counts,
+    replay fitness), **activity** (frequency, case coverage, and — for
+    interval logs with a ``start_timestamp`` column — service-time
+    min/mean/median/max/total per activity), and **choice** (OR-fork
+    branch counts *aligned across cells* through the family's shared
+    skeleton, so the same decision point is one comparable row for
+    every combination).
+
+    Needs ``family.log_df`` — call it right after
+    :func:`discover_ucm_family` (the result carries no DataFrames and
+    stays small). ``parameters`` may override the column names
+    (``case_id_col``, ``activity_col``, ``timestamp_col``,
+    ``start_timestamp_col``). Returns a
+    :class:`~pm4py_ucm.algo.discovery.families.stats.FamilyStats`
+    with pandas helpers (``process_frame``, ``activity_frame``,
+    ``choice_share_frame``) and a JSON-ready ``to_dict``."""
+    params = dict(parameters or {})
+    return _families.compute_family_stats(
+        family,
+        case_id_col=params.get("case_id_col", "case:concept:name"),
+        activity_col=params.get("activity_col", "concept:name"),
+        timestamp_col=params.get("timestamp_col", "time:timestamp"),
+        start_timestamp_col=params.get(
+            "start_timestamp_col", "start_timestamp"),
+    )
+
+
+def write_family_report(
+    family,
+    path: str,
+    stats=None,
+    title: Optional[str] = None,
+    images: bool = True,
+    style: str = "ucm",
+) -> str:
+    """Write a **self-contained interactive HTML report** comparing the
+    family's processes — sortable heat-mapped statistics tables, a
+    pair-comparison view (any two combinations side by side, with
+    their model images and per-activity deltas), aligned OR-fork
+    branch-share bars, and a model gallery. One file, no external
+    dependencies: it opens offline in any browser and can be archived
+    as supplementary material for a paper.
+
+    ``stats`` defaults to :func:`compute_family_stats` on the family
+    (which then needs ``family.log_df``); pass a precomputed
+    ``FamilyStats`` when the log has been dropped. ``images=False``
+    (or a machine without the graphviz binary) omits the embedded
+    per-cell model images; ``style`` picks their notation (``"ucm"``
+    or ``"bpmn"``). Returns ``path``."""
+    return _families.write_family_report(
+        family, path, stats=stats, title=title,
+        images=images, style=style,
+    )
+
+
 def save_vis_ucm(
     ucm: UCM,
     file_path: str,
