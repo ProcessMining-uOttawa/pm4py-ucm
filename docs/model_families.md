@@ -16,8 +16,8 @@ This document covers the family feature sets added in v0.4.0–v0.5.0:
    self-contained interactive HTML report for ranking the combinations
    and comparing any two side by side.
 
-Everything here is also available point-and-click in the V2 web app
-(`web/streamlit_app_v2.py`: the **Family** tab, the **Compare** tab,
+Everything here is also available point-and-click in the V3 web app
+(`web/streamlit_app_v3.py`: the **Family** tab, the **Compare** tab,
 and the **Performance overlay** sidebar section).
 
 ---
@@ -351,7 +351,7 @@ timestamps). `images=False` — or a machine without the graphviz
 binary — omits the model images and keeps every statistics view.
 `style="bpmn"` switches the embedded images to BPMN notation.
 
-In the V2 web app, the **Compare** tab offers the same ranking table,
+In the V3 web app, the **Compare** tab offers the same ranking table,
 pair pickers, side-by-side models, activity deltas and aligned choice
 tables directly in Streamlit, plus a download button for the HTML
 report (also available next to the other downloads on the Family
