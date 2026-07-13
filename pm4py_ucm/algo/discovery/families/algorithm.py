@@ -121,6 +121,7 @@ def discover(
     other_bucket: bool = True,
     unknown_bucket: bool = True,
     include_values: Optional[Dict[str, Sequence[str]]] = None,
+    ignore_value_case: bool = True,
     case_id_col: str = "case:concept:name",
     parameters: Optional[Dict[str, Any]] = None,
 ) -> ModelFamily:
@@ -140,11 +141,13 @@ def discover(
     noise_threshold
         Forwarded to the inductive miner per cell.
     min_cases / max_values_per_attribute / bins / bin_edges /
-    other_bucket / unknown_bucket / include_values
+    other_bucket / unknown_bucket / include_values / ignore_value_case
         Partitioning policy — see
         :func:`pm4py_ucm.algo.discovery.families.partition.partition_log`.
         ``include_values`` restricts each attribute to the listed
         values (``{attribute: [labels]}``); other cases are dropped.
+        ``ignore_value_case`` (default ``True``) merges enumeration
+        values differing only in letter case (``F`` / ``f``).
     parameters
         Converter / resource parameters applied per cell (e.g.
         ``resource_attribute``, ``urn_name``). ``map_name`` is ignored:
@@ -168,6 +171,7 @@ def discover(
         other_bucket=other_bucket,
         unknown_bucket=unknown_bucket,
         include_values=include_values,
+        ignore_value_case=ignore_value_case,
     )
     if not part.cells:
         raise ValueError(

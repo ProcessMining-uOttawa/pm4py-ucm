@@ -260,13 +260,41 @@ def _assign_enumeration(
     spec: AttributeSpec,
     max_values: int,
     other_bucket: bool,
+    ignore_case: bool = True,
 ):
     """Return ``(values_axis, {case_id: PartitionValue or None})`` for an
     enumeration attribute. ``None`` marks a dropped case (trimmed value
-    with ``other_bucket=False``)."""
+    with ``other_bucket=False``).
+
+    With ``ignore_case`` (the default), raw values that differ only in
+    letter case (``"F"`` / ``"f"``) are **one** partition value: the
+    displayed label is the log's most frequent spelling (ties broken
+    alphabetically), and every merged spelling is recorded in
+    :attr:`PartitionValue.raw_values`."""
     non_null = series.dropna()
     counts = non_null.astype(str).value_counts()
-    raw_sorted = sorted(counts.index)
+
+    # Group raw spellings that denote the same value. ``forms_for``
+    # maps the canonical (displayed) spelling to every raw form it
+    # absorbs; ``value_counts`` are the merged per-value counts.
+    forms_for: Dict[str, List[str]] = {}
+    value_counts: Dict[str, int] = {}
+    if ignore_case:
+        by_key: Dict[str, List[str]] = {}
+        for raw in counts.index:
+            by_key.setdefault(str(raw).casefold(), []).append(str(raw))
+        for forms in by_key.values():
+            canon = sorted(
+                forms, key=lambda f: (-int(counts[f]), f),
+            )[0]
+            forms_for[canon] = sorted(forms)
+            value_counts[canon] = sum(int(counts[f]) for f in forms)
+    else:
+        for raw in counts.index:
+            forms_for[str(raw)] = [str(raw)]
+            value_counts[str(raw)] = int(counts[raw])
+
+    raw_sorted = sorted(value_counts)
 
     kept = raw_sorted
     merged: List[str] = []
@@ -274,35 +302,39 @@ def _assign_enumeration(
         # Keep the (max_values - 1) most frequent values — determinism
         # via the (count desc, value asc) tie-break — and merge the
         # rest into ``Other``.
-        by_freq = sorted(raw_sorted, key=lambda v: (-int(counts[v]), v))
+        by_freq = sorted(
+            raw_sorted, key=lambda v: (-value_counts[v], v),
+        )
         kept = sorted(by_freq[: max_values - 1])
         merged = sorted(set(raw_sorted) - set(kept))
 
     value_for_raw: Dict[str, Optional[PartitionValue]] = {}
     axis: List[PartitionValue] = []
-    for raw in kept:
+    for value in kept:
         pv = PartitionValue(
-            label=raw,
-            token=spec.sanitise_value(raw),
+            label=value,
+            token=spec.sanitise_value(value),
             kind="value",
-            raw_values=(raw,),
+            raw_values=tuple(forms_for[value]),
         )
         axis.append(pv)
-        value_for_raw[raw] = pv
+        for form in forms_for[value]:
+            value_for_raw[form] = pv
     if merged:
+        merged_forms = [f for value in merged for f in forms_for[value]]
         other = (
             PartitionValue(
                 label=OTHER_LABEL,
                 token=_sanitise_jucmnav_name(OTHER_LABEL),
                 kind="other",
-                raw_values=tuple(merged),
+                raw_values=tuple(sorted(merged_forms)),
             )
             if other_bucket else None
         )
         if other is not None:
             axis.append(other)
-        for raw in merged:
-            value_for_raw[raw] = other
+        for form in merged_forms:
+            value_for_raw[form] = other
 
     import pandas as pd
 
@@ -322,9 +354,9 @@ def _assign_boolean(series, spec: AttributeSpec):
                               raw_values=("false",))
 
     def classify(v):
-        if v in (True, 1, "true", "True"):
+        if v is True or v == 1 or str(v).casefold() == "true":
             return true_pv
-        if v in (False, 0, "false", "False"):
+        if v is False or v == 0 or str(v).casefold() == "false":
             return false_pv
         return None
 
@@ -424,6 +456,7 @@ def partition_log(
     unknown_bucket: bool = True,
     max_enum_cardinality: int = 40,
     include_values: Optional[Dict[str, Sequence[str]]] = None,
+    ignore_value_case: bool = True,
 ) -> Partition:
     """Partition ``log_df`` by the values of 1–2 case-level attributes.
 
@@ -460,7 +493,16 @@ def partition_log(
         ``"18-39"``, and the synthetic ``"Other"``/``"Unknown"``);
         cases carrying other values are dropped (counted in
         ``dropped_cases``). Filtering an attribute down to zero
-        values raises :class:`ValueError`.
+        values raises :class:`ValueError`. With ``ignore_value_case``
+        the labels are matched case-insensitively too.
+    ignore_value_case
+        ``True`` (default): enumeration values that differ only in
+        letter case (``"F"`` / ``"f"``) are **one** partition value —
+        displayed as the log's most frequent spelling, with every
+        merged spelling kept in ``PartitionValue.raw_values``.
+        Booleans always classify case-insensitively
+        (``TRUE``/``True``/``true``). Pass ``False`` for logs whose
+        codes are genuinely case-significant.
 
     Returns
     -------
@@ -493,6 +535,7 @@ def partition_log(
         if spec.type == "enumeration":
             axis, assignment = _assign_enumeration(
                 series, spec, max_values_per_attribute, other_bucket,
+                ignore_case=ignore_value_case,
             )
             binned = False
         elif spec.type == "boolean":
@@ -525,8 +568,16 @@ def partition_log(
             if include_values else None
         )
         if selected is not None:
-            selected_set = {str(s) for s in selected}
-            kept_axis = [v for v in axis if v.label in selected_set]
+            # Case-insensitive matching mirrors the value merging —
+            # a filter of ["f"] must keep the axis value labelled "F".
+            if ignore_value_case:
+                selected_set = {str(s).casefold() for s in selected}
+                kept_axis = [
+                    v for v in axis if v.label.casefold() in selected_set
+                ]
+            else:
+                selected_set = {str(s) for s in selected}
+                kept_axis = [v for v in axis if v.label in selected_set]
             if not kept_axis:
                 raise ValueError(
                     f"include_values for {spec.source_name!r} removes "

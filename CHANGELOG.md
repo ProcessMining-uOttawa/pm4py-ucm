@@ -5,6 +5,61 @@ All notable changes to **pm4py-ucm** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-07-12
+
+Web tool generation **V3** (V2 was the app before the family
+features).
+
+### Added (family statistics reports)
+
+- **`compute_family_stats`** — comparative statistics for every cell
+  of a mined family, computed once at mine time (no DataFrames kept):
+  **process** level (cases, events, events/case, case-duration
+  min/mean/median/max and *total*, behavioural variant counts, replay
+  fitness), **activity** level (frequency, case coverage, *sojourn*
+  time since the case's previous event — available for
+  single-timestamp logs — and service-time min/mean/median/max/total
+  on interval logs), **edge** level (directly-follows pairs with
+  traversal frequency and waiting-time min/mean/median/max/total;
+  completion→start on interval logs, completion→completion otherwise
+  — labeled as such), and **choice** level: OR-fork branch counts
+  *aligned across cells* through the family's skeleton merge, with
+  context naming, inside-loop flagging, and "not reached" distinct
+  from zero. pandas helpers (`process_frame`, `activity_frame`,
+  `edge_frame`, `choice_share_frame`) and a JSON-ready `to_dict`.
+- **`write_family_report`** — a **self-contained interactive HTML
+  report** (embedded JSON + base64 model images + vanilla JS, no
+  external assets, deterministic output, GitHub-linked V3 branding):
+  sortable heat-mapped Overview, pairwise Compare (delta cards,
+  model images side by side with zoom and open-in-new-tab, activity
+  and edge delta/ratio tables on a diverging scale, aligned choice
+  bars), Activities and Edges matrices, Choices as 100% stacked bars
+  with n everywhere, and a model gallery. Colorblind-safe palettes;
+  embedded images render at 192 dpi, never downscale below a 96-dpi
+  readability floor, and are palette-quantized to stay small.
+- **Web app (V3): Compare tab** — heat-mapped family ranking table,
+  A/B pickers with delta metric cards, side-by-side cell models,
+  activity/edge delta tables, per-choice branch-share expanders, and
+  the HTML report as a download (also offered on the Family tab).
+  `web/streamlit_app_v2.py` became `web/streamlit_app_v3.py`; the old
+  path remains as a shim for existing deployments.
+- **Case-insensitive attribute-value categories** in partitioning:
+  raw values differing only in letter case (`F`/`f`) are one value,
+  displayed as the log's most frequent spelling (all spellings kept
+  on `PartitionValue.raw_values`); the `include_values` filter
+  matches case-insensitively and booleans classify in any case. Opt
+  out with `ignore_value_case=False`.
+
+### Changed
+
+- `compute_performance_stats` gains min/max service times, per-pair
+  min/max waiting times, and per-activity sojourn times — extra
+  entries only; overlay/metadata output is byte-stable.
+- Durations of 500 days and more display in years; heat-mapped table
+  text color is chosen by background luminance (readable in dark
+  themes); family-grid **member** separators are thick dark lines and
+  member labels are drawn rotated at a larger size.
+
 ## [0.4.0] — 2026-07-11
 
 ### Added (model families — attribute-partitioned discovery)

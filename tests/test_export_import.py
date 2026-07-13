@@ -7,6 +7,7 @@ emitted XMI.
 """
 
 import os
+import re
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
@@ -421,11 +422,18 @@ class ExportImportTests(unittest.TestCase):
         )
 
     def test_roundtrip_is_deterministic(self):
+        # The created/modified attributes are stamped with the current
+        # time at each serialization — strip them so the comparison
+        # cannot flake when the two exports straddle a second boundary
+        # (same convention as test_family / test_decomposition).
+        def strip_ts(xml):
+            return re.sub(r' (created|modified)="[^"]*"', '', xml)
+
         ucm = small_ucm()
         xml1 = serialize_to_string(ucm)
         ucm2 = parse_string(xml1)
         xml2 = serialize_to_string(ucm2)
-        self.assertEqual(xml1, xml2)
+        self.assertEqual(strip_ts(xml1), strip_ts(xml2))
 
     def test_write_ucm_to_disk_and_read_back(self):
         ucm = small_ucm()

@@ -35,6 +35,8 @@ from .api import (
     assemble_ucm_family,
     save_vis_ucm_family,
     view_ucm_family,
+    compute_family_stats,
+    write_family_report,
     annotate_performance,
 )
 from .objects.ucm.obj import UCM
@@ -59,7 +61,9 @@ __all__ = [
     "assemble_ucm_family",
     "save_vis_ucm_family",
     "view_ucm_family",
+    "compute_family_stats",
+    "write_family_report",
     "annotate_performance",
 ]
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"

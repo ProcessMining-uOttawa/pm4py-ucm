@@ -57,13 +57,22 @@ _CAPTION_COLOR = (96, 96, 96)
 _PLACEHOLDER_BG = (243, 243, 243)
 _PLACEHOLDER_FG = (150, 150, 150)
 _GRID_LINE = (200, 200, 200)
+#: Separator between FAMILY MEMBERS. Much heavier and darker than the
+#: thin light rule :mod:`.stacked` draws between a decomposed model's
+#: own maps — the reader must see at a glance where one member's
+#: root+plug-ins end and the next member begins.
+_MEMBER_LINE = (70, 70, 70)
 
 # Base (96-dpi) chrome metrics — multiplied by the DPI scale factor.
 _PAD = 14                 # inner padding of each grid cell
 _HEADER_FONT_SIZE = 20
-_LABEL_FONT_SIZE = 18
+#: Row (member) labels are drawn rotated 90° in the left gutter at
+#: this size — larger than the old inline labels, and the rotation
+#: gives them the whole panel height to run along.
+_LABEL_FONT_SIZE = 30
 _CAPTION_FONT_SIZE = 14
 _TITLE_FONT_SIZE = 22
+_MEMBER_LINE_W = 5        # member-separator thickness
 _MIN_PANEL_W = 260        # placeholder / empty-cell panel width
 _MIN_PANEL_H = 120
 
@@ -105,6 +114,32 @@ def _text_size(draw, text: str, font) -> Tuple[int, int]:
         return bbox[2] - bbox[0], bbox[3] - bbox[1]
     except AttributeError:  # very old Pillow
         return draw.textsize(text, font=font)  # type: ignore
+
+
+def _vertical_label(text: str, font, probe, max_len_px: int):
+    """The row label as a transparent image rotated 90° (reads
+    bottom-to-top), elided with an ellipsis when longer than the row
+    is tall. Rotation lets the member name use the panel's full
+    height, so it can be drawn much larger than an inline label."""
+    from PIL import Image, ImageDraw
+
+    label = text
+    w, h = _text_size(probe, label, font)
+    if w > max_len_px:
+        while len(label) > 1:
+            label = label[:-1]
+            w, h = _text_size(probe, label + "…", font)
+            if w <= max_len_px:
+                label += "…"
+                break
+    margin = 4
+    im = Image.new("RGBA", (w + 2 * margin, h * 2), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.text((margin, h // 2), label, font=font, fill=_HEADER_COLOR)
+    box = im.getbbox()
+    if box:
+        im = im.crop(box)
+    return im.rotate(90, expand=True)
 
 
 def _choose_dpi(
@@ -309,10 +344,13 @@ def render(
                     row_h[r] = max(row_h[r], h + caption_h + 2 * pad)
 
             # Row-label gutter (always), column headers (matrix only).
+            # Labels are drawn rotated 90°, so the gutter width is
+            # governed by the text HEIGHT (one line of the label
+            # font), not by the longest label.
             gutter_w = 0
             for rv in rows:
-                w, _ = _text_size(probe, rv.label, label_font)
-                gutter_w = max(gutter_w, w)
+                _, h = _text_size(probe, rv.label, label_font)
+                gutter_w = max(gutter_w, h)
             gutter_w += 2 * pad
 
             header_h = (header_fs + 2 * round(10 * scale)) if two_d else 0
@@ -380,11 +418,17 @@ def render(
 
         y = y0
         for r in range(n_rows):
-            # Row label, vertically centred in the row.
-            w, h = _text_size(draw, rows[r].label, label_font)
-            draw.text(
-                (max(0, (gutter_w - w) // 2), y + (row_h[r] - h) // 2),
-                rows[r].label, font=label_font, fill=_HEADER_COLOR,
+            # Row (member) label — rotated 90°, centred in the row,
+            # elided if the row is shorter than the text.
+            lab_im = _vertical_label(
+                rows[r].label, label_font, probe,
+                max_len_px=max(min_panel_h, row_h[r] - 2 * pad),
+            )
+            out.paste(
+                lab_im,
+                (max(0, (gutter_w - lab_im.width) // 2),
+                 y + max(0, (row_h[r] - lab_im.height) // 2)),
+                lab_im,
             )
             x = gutter_w
             for c in range(n_cols):
@@ -414,22 +458,27 @@ def render(
                     )
                 x += col_w[c]
 
-            # Separator line under the row (not after the last).
+            # Separator under the row (not after the last): the
+            # boundary between FAMILY MEMBERS — thick and dark, so it
+            # clearly outranks the thin light rules the stacked
+            # renderer draws between a decomposed member's own maps.
             if r != n_rows - 1:
                 draw.line(
-                    [(gutter_w // 2, y + row_h[r]),
-                     (total_w - pad, y + row_h[r])],
-                    fill=_GRID_LINE, width=max(1, round(scale)),
+                    [(0, y + row_h[r]), (total_w, y + row_h[r])],
+                    fill=_MEMBER_LINE,
+                    width=max(2, round(_MEMBER_LINE_W * scale)),
                 )
             y += row_h[r]
 
-        # Vertical separators between columns (matrix only).
+        # Vertical separators between columns (matrix only) — also
+        # member boundaries, same weight as the row separators.
         if two_d:
             x = gutter_w
             for c in range(n_cols - 1):
                 x += col_w[c]
-                draw.line([(x, y0), (x, total_h - pad)],
-                          fill=_GRID_LINE, width=max(1, round(scale)))
+                draw.line([(x, y0), (x, total_h)],
+                          fill=_MEMBER_LINE,
+                          width=max(2, round(_MEMBER_LINE_W * scale)))
 
         # Record the effective DPI in the PNG metadata (both as the
         # standard physical-dimension chunk and as a readable text

@@ -182,6 +182,70 @@ class TestPartition:
         assert other_value.kind == "other"
         assert other_value.raw_values == ("X", "Y", "Z")
 
+    @staticmethod
+    def _gender_log(spec):
+        """One-activity log with a ``case:gender`` attribute;
+        ``spec`` = [(raw_value, n_cases), ...]."""
+        rows = []
+        ts = pd.Timestamp("2026-01-01")
+        i = 0
+        for val, n in spec:
+            for _ in range(n):
+                rows.append({
+                    "case:concept:name": f"c{i:03d}",
+                    "concept:name": "Act",
+                    "time:timestamp": ts,
+                    "case:gender": val,
+                })
+                i += 1
+        return pd.DataFrame(rows)
+
+    def test_values_merge_case_insensitively(self):
+        # F/f and M/m are the same category; the axis shows one value
+        # per category, counts merged across spellings.
+        df = self._gender_log([("F", 6), ("f", 2), ("M", 3), ("m", 1)])
+        part = partition_log(df, ["gender"])
+        values = part.attributes[0].values
+        assert [v.label for v in values] == ["F", "M"]
+        assert [c.n_cases for c in part.cells] == [8, 4]
+        # Every merged spelling is recorded on the value.
+        assert values[0].raw_values == ("F", "f")
+        assert values[1].raw_values == ("M", "m")
+
+    def test_case_merge_displays_most_frequent_spelling(self):
+        df = self._gender_log([("female", 5), ("Female", 2), ("M", 3)])
+        part = partition_log(df, ["gender"])
+        assert [v.label for v in part.attributes[0].values] == \
+            ["M", "female"]
+        assert part.cells[-1].n_cases == 7
+
+    def test_case_sensitive_opt_out(self):
+        df = self._gender_log([("F", 6), ("f", 2), ("M", 3), ("m", 1)])
+        part = partition_log(df, ["gender"], ignore_value_case=False)
+        assert [v.label for v in part.attributes[0].values] == \
+            ["F", "M", "f", "m"]
+        assert [c.n_cases for c in part.cells] == [6, 3, 2, 1]
+
+    def test_include_values_matches_case_insensitively(self):
+        df = self._gender_log([("F", 6), ("f", 2), ("M", 3), ("m", 1)])
+        part = partition_log(
+            df, ["gender"], include_values={"gender": ["f"]},
+        )
+        assert [c.label for c in part.cells] == ["F"]
+        assert part.cells[0].n_cases == 8
+        assert part.dropped_cases == 4
+
+    def test_case_merge_feeds_other_bucket(self):
+        # After merging, A/a is one dominant value; the cap of 2 keeps
+        # it and folds the two rare categories into Other.
+        df = self._gender_log(
+            [("A", 5), ("a", 4), ("x", 1), ("y", 1)],
+        )
+        part = partition_log(df, ["gender"], max_values_per_attribute=2)
+        labels = [v.label for v in part.attributes[0].values]
+        assert labels == ["A", "Other"]
+        assert [c.n_cases for c in part.cells] == [9, 2]
+
     def test_unknown_bucket_and_drop(self):
         df = _make_log()
         df = df.copy()

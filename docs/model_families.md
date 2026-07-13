@@ -1,6 +1,6 @@
 # Model families and performance overlays
 
-This document covers two feature sets added in v0.4.0:
+This document covers the family feature sets added in v0.4.0–v0.5.0:
 
 1. **Model families** — partition an event log by the values of one or
    two case-level attributes (e.g. *cancer type* × *age group*), mine
@@ -11,10 +11,14 @@ This document covers two feature sets added in v0.4.0:
 2. **Performance overlays** — frequencies and times computed from the
    log and displayed on activities and edges (PNG) and exported as
    jUCMNav metadata (`.jucm`).
+3. **Family statistics reports** — comparative statistics for every
+   family member (process, activity, and choice level) and a
+   self-contained interactive HTML report for ranking the combinations
+   and comparing any two side by side.
 
-Everything here is also available point-and-click in the V2 web app
-(`web/streamlit_app_v2.py`, **Family** tab and the **Performance
-overlay** sidebar section).
+Everything here is also available point-and-click in the V3 web app
+(`web/streamlit_app_v3.py`: the **Family** tab, the **Compare** tab,
+and the **Performance overlay** sidebar section).
 
 ---
 
@@ -74,8 +78,8 @@ XES exports). Per attribute type:
 
 | Type          | Partitioning                                                                    |
 |---------------|---------------------------------------------------------------------------------|
-| enumeration   | one cell per value; past `max_values_per_attribute` the least frequent values merge into an **Other** bucket |
-| boolean       | `true` / `false`                                                                 |
+| enumeration   | one cell per value, **case-insensitively** — `F` and `f` are the same value, displayed as the log's most frequent spelling (every merged spelling stays on `PartitionValue.raw_values`); past `max_values_per_attribute` the least frequent values merge into an **Other** bucket |
+| boolean       | `true` / `false` (any letter case)                                               |
 | numeric       | **binned** into ranges — `bins` quantiles, or explicit `bin_edges={attr: [edges]}` |
 | missing value | an **Unknown** bucket (`unknown_bucket=False` drops those cases)                 |
 
@@ -86,8 +90,10 @@ Additional policy knobs:
   mined into overfitted micro-models;
 - `include_values={attribute: [labels]}` — restrict an attribute to the
   listed values (labels as they appear on the axis, including
-  `Other` / `Unknown` and range labels like `"18-39"`); other cases are
-  dropped;
+  `Other` / `Unknown` and range labels like `"18-39"`, matched
+  case-insensitively); other cases are dropped;
+- `ignore_value_case=False` — opt out of the case-insensitive value
+  merging for logs whose codes are genuinely case-significant;
 - `noise_threshold` — forwarded to the inductive miner per cell;
 - `decomposition` — applied per cell, so the family is flat or
   hierarchical exactly like a single model would be.
@@ -249,6 +255,107 @@ assemblies accept the metric selections too —
 edge_metrics=[...])` annotates the shared skeleton from the **whole**
 family log and each variant plug-in from its **covering cells'**
 sub-log.
+
+---
+
+## 3. Family statistics reports
+
+### Quick start
+
+```python
+family = pm4py_ucm.discover_ucm_family(log, ["Country"], min_cases=10)
+
+stats = pm4py_ucm.compute_family_stats(family)   # needs family.log_df
+print(stats.process_frame().to_string())         # one row per cell
+
+pm4py_ucm.write_family_report(
+    family, "family_report.html", stats=stats,
+    title="Claims — family by Country",
+)
+```
+
+### The statistics (`FamilyStats`)
+
+`compute_family_stats` computes, per family member, three levels of
+statistics designed for *comparison across cells*:
+
+- **Process level** — case count and share of the log, event count,
+  events per case (min/mean/median/max), **case duration
+  min/mean/median/max and the TOTAL across the cell's cases**,
+  distinct activities, concurrency-aware behavioural variant counts,
+  and replay fitness.
+- **Activity level** — execution frequency, case coverage,
+  **sojourn time** (time since the case's previous event ≈ waiting +
+  service — derivable from *any* timestamped log, so single-timestamp
+  logs get activity-level time statistics too), and (for interval
+  logs carrying a `start_timestamp` column) service-time
+  **min/mean/median/max/total** per activity. Metrics the log cannot
+  support are omitted, never fabricated.
+- **Edge level** — directly-follows activity pairs (`Register Claim →
+  Quick Assessment`) with traversal frequency and waiting-time
+  min/mean/median/max/total, ordered by family-wide frequency.
+  Waiting is completion→start on interval logs; on single-timestamp
+  logs it is completion→completion (which includes the successor's
+  own duration — the report says so rather than pretending
+  otherwise).
+- **Choice level** — OR-fork branch counts **aligned across cells**:
+  the per-cell trees are anti-unified into the family skeleton (the
+  same merge that builds the umbrella, control-flow only) and each
+  cell's sub-log is replayed on its configured tree, so "the choice
+  after *Close Assessment*" is one comparable row for every
+  combination. Forks are named by their context (`after Close
+  Assessment_Human: Amend Assessment vs Request Customer Info`),
+  flagged when they sit inside a loop (counts are then evaluations
+  across iterations), and distinguished as *shared skeleton forks*
+  vs *variation-point forks* (present only in some members). Cells
+  that never reach a fork report "not reached" — distinct from zero.
+
+Call it **right after mining** — it needs `family.log_df`, but the
+result carries no DataFrames, so it stays small and picklable after
+the log is dropped. pandas views for notebooks and apps:
+`process_frame()`, `activity_frame(metric)`,
+`choice_count_frame(choice)` / `choice_share_frame(choice)`; JSON via
+`to_dict()`.
+
+### The interactive HTML report
+
+`write_family_report` emits **one self-contained HTML file** — the
+statistics embedded as JSON, the per-cell model images embedded as
+base64 PNGs, and vanilla JavaScript for the interactivity. No CDN, no
+external assets: it opens offline in any browser and can be archived
+as supplementary material for a paper. Five views:
+
+- **Overview** — sortable process-level table (click a header to
+  rank) with per-column heat-mapping; every duration column includes
+  the per-case aggregate *and* the cell total.
+- **Compare** — pick any two family members: headline delta cards
+  (absolute and percent change), the two model images side by side
+  (click to zoom, or open in a separate browser tab at full
+  resolution), an activity delta table (Δ and ratio, diverging
+  color scale, optional per-case normalisation), and the two members'
+  choice bars aligned. "Multiple windows" = open the file in several
+  browser tabs, one pair each.
+- **Activities** — the activities × members matrix for any metric,
+  heat-mapped, with per-case normalisation for frequency-like
+  metrics (the cells of a family routinely differ in size by an
+  order of magnitude — absolute counts mislead).
+- **Edges** — the directly-follows pairs × members matrix (traversal
+  frequency, waiting times), busiest handovers first.
+- **Choices** — every aligned OR-fork as one 100% stacked bar per
+  member, colorblind-safe categorical palette, exact shares and
+  counts on hover, `n` printed next to every bar.
+- **Models** — the per-cell images as a browsable gallery.
+
+The report is deterministic for a given family (no embedded
+timestamps). `images=False` — or a machine without the graphviz
+binary — omits the model images and keeps every statistics view.
+`style="bpmn"` switches the embedded images to BPMN notation.
+
+In the V3 web app, the **Compare** tab offers the same ranking table,
+pair pickers, side-by-side models, activity deltas and aligned choice
+tables directly in Streamlit, plus a download button for the HTML
+report (also available next to the other downloads on the Family
+tab).
 
 ---
 

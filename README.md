@@ -4,7 +4,7 @@
 [![Python](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-blue)](https://www.python.org/)
 [![License: GPL v3+](https://img.shields.io/badge/license-GPLv3%2B-blue.svg)](LICENSE)
 [![Streamlit V1](https://img.shields.io/badge/Streamlit-V1%20model-FF4B4B?logo=streamlit&logoColor=white)](https://pm4py-ucm.streamlit.app/)
-[![Streamlit V2](https://img.shields.io/badge/Streamlit-V2%20scenarios-FF4B4B?logo=streamlit&logoColor=white)](https://pm4py-ucm-scenarios.streamlit.app/)
+[![Streamlit V3](https://img.shields.io/badge/Streamlit-V3%20families-FF4B4B?logo=streamlit&logoColor=white)](https://pm4py-ucm-scenarios.streamlit.app/)
 
 **Use Case Map (UCM) extension for [PM4Py](https://github.com/process-intelligence-solutions/pm4py).**
 
@@ -32,8 +32,8 @@ pm4py_ucm.write_ucm(ucm, "running-example.jucm")  # opens in jUCMNav
 
 - [`demo/pm4py_ucm_tutorial.ipynb`](demo/pm4py_ucm_tutorial.ipynb) — end-to-end Jupyter walkthrough on a real claims-payment log (discovery, BPMN/UCM rendering, performer mining, hierarchical decomposition, `.jucm` round-trips).
 - [`demo/scenario_synthesis_tutorial.ipynb`](demo/scenario_synthesis_tutorial.ipynb) — pedagogical tutorial for the **scenario-synthesis** layer: concurrency-aware variants, per-loop counters + `LoopEntryGuard`, variant-driven vs data-driven OR-fork conditions, transparent support for decomposed UCMs. Empirical companion in [`demo/scenario_synthesis.ipynb`](demo/scenario_synthesis.ipynb).
-- [`demo/model_families_tutorial.ipynb`](demo/model_families_tutorial.ipynb) — the **model-family** pipeline on the claims log: attribute detection, partition preview, per-cell mining, stack/matrix rendering, combined export, the dynamic-stub **umbrella** (skeleton, resource variation, path scenarios), and **performance overlays** on activities and edges.
-- [`web/streamlit_app.py`](web/streamlit_app.py) (V1, model-only, hosted at https://pm4py-ucm.streamlit.app/) and [`web/streamlit_app_v2.py`](web/streamlit_app_v2.py) (V2, model + scenarios + model families + performance overlays, hosted at https://pm4py-ucm-scenarios.streamlit.app/) — click, don't code: upload an XES/CSV, tune the miner, download the result.
+- [`demo/model_families_tutorial.ipynb`](demo/model_families_tutorial.ipynb) — the **model-family** pipeline on the claims log: attribute detection, partition preview, per-cell mining, stack/matrix rendering, combined export, the dynamic-stub **umbrella** (skeleton, resource variation, path scenarios), **performance overlays** on activities and edges, and the **family statistics report** (FamilyStats + the self-contained interactive HTML file).
+- [`web/streamlit_app.py`](web/streamlit_app.py) (V1, model-only, hosted at https://pm4py-ucm.streamlit.app/) and [`web/streamlit_app_v3.py`](web/streamlit_app_v3.py) (V3, model + scenarios + model families + statistics reports, hosted at https://pm4py-ucm-scenarios.streamlit.app/) — click, don't code: upload an XES/CSV, tune the miner, download the result.
 - The rest of this README — reference docs for the public API.
 
 [ucm-wiki]: https://en.wikipedia.org/wiki/Use_Case_Maps
@@ -48,7 +48,9 @@ Two [Streamlit](https://streamlit.io) front-ends ship in the
   event log (XES or CSV), tune the inductive miner / decomposition /
   performer settings interactively, preview the diagram in UCM or BPMN
   notation, and download the rendered PNG plus the `.jucm` file.
-- **`streamlit_app_v2.py` (V2)** — superset of V1. Adds a **Scenarios
+- **`streamlit_app_v3.py` (V3)** — superset of V1. (V2 was this app
+  before the model-family features; `streamlit_app_v2.py` remains as
+  a shim for existing deployments.) Adds a **Scenarios
   tab** that runs concurrency-aware variant clustering and synthesizes
   one executable jUCMNav `ScenarioDef` per variant. Both variant-driven
   and data-driven OR-fork encodings are exposed; the tab surfaces
@@ -60,15 +62,18 @@ Two [Streamlit](https://streamlit.io) front-ends ship in the
   Also adds a **Family tab** — pick 1–2 case attributes (with
   per-value filters and a pre-mining coverage heatmap), mine one model
   per combination, and download the per-cell zip, the combined
-  `.jucm`, the dynamic-stub umbrella `.jucm`, and the grid PNG — and a
-  **Performance overlay** sidebar section (frequencies/times on
+  `.jucm`, the dynamic-stub umbrella `.jucm`, the grid PNG, and the
+  interactive HTML statistics report — a **Compare tab** — rank the
+  family members on a heat-mapped statistics table and compare any
+  two side by side (models, activity deltas, aligned choice shares) —
+  and a **Performance overlay** sidebar section (frequencies/times on
   activities and edges, applied to every tab's outputs). See
   [`docs/model_families.md`](docs/model_families.md).
 
 Both are deployed on Streamlit Community Cloud:
 
 - V1 (model only): https://pm4py-ucm.streamlit.app/
-- V2 (model + scenarios + families): https://pm4py-ucm-scenarios.streamlit.app/
+- V3 (model + scenarios + families + reports): https://pm4py-ucm-scenarios.streamlit.app/
 
 ![Overview of the PM4Py-UCM web interface](web/WebInterfaceOverview.png)
 
@@ -77,7 +82,7 @@ Run either locally with:
 ```bash
 pip install -r web/requirements.txt
 streamlit run web/streamlit_app.py       # V1 (model only)
-streamlit run web/streamlit_app_v2.py    # V2 (model + scenarios)
+streamlit run web/streamlit_app_v3.py    # V3 (scenarios + families)
 ```
 
 See [`web/README.md`](web/README.md) for the full feature walkthrough and
@@ -477,7 +482,7 @@ correlation survives arbitrary decomposition boundaries.
   — empirical demonstration on `ClaimsPaymentLog` (24 variants,
   compression 0.146) in both encodings.
 - The Scenarios tab in
-  [`web/streamlit_app_v2.py`](web/streamlit_app_v2.py) — no code needed.
+  [`web/streamlit_app_v3.py`](web/streamlit_app_v3.py) — no code needed.
 
 ## Model families (attribute-partitioned discovery)
 
@@ -519,9 +524,41 @@ traversal walks genuinely different paths per strategy.
 
 Full documentation — partitioning policy, skeleton merge rules,
 dedup/conditions, path scenarios, grid resolution, value filtering —
-in [`docs/model_families.md`](docs/model_families.md). The V2 web
+in [`docs/model_families.md`](docs/model_families.md). The V3 web
 app's **Family** tab exposes all of it interactively, including a
 pre-mining coverage heatmap and per-attribute value filters.
+
+### Family statistics reports
+
+Compare the family's processes quantitatively — and hand the result
+to collaborators as **one self-contained interactive HTML file**:
+
+```python
+stats = pm4py_ucm.compute_family_stats(family)     # needs family.log_df
+stats.process_frame()                              # pandas: one row per cell
+pm4py_ucm.write_family_report(family, "report.html", stats=stats)
+```
+
+`compute_family_stats` yields four statistics levels per family
+member: **process** (cases, events per case, case-duration
+min/mean/median/max **and total**, behavioural variant counts, replay
+fitness), **activity** (frequency, case coverage, sojourn time since
+the previous event — available even for single-timestamp logs — and
+service-time min/mean/median/max/total on interval logs), **edge**
+(directly-follows pairs with traversal frequency and waiting times),
+and **choice** — OR-fork branch counts *aligned across the family*
+through the shared skeleton, so the same decision point is one
+comparable row for every combination.
+
+`write_family_report` renders it all into a zero-dependency HTML
+report that opens offline in any browser: sortable heat-mapped
+ranking tables, a pair-comparison view (any two members side by side
+with their **model images embedded**, delta cards, activity Δ/ratio
+tables), 100% stacked branch-share bars per choice, and a model
+gallery. Every share and time is shown next to its `n`, and metrics
+the log cannot support are omitted rather than faked. The V3 web
+app's **Compare** tab serves the same statistics interactively and
+offers the report as a download.
 
 ## Performance overlays
 
@@ -581,7 +618,9 @@ pm4py_ucm/
 │           ├── family.py                  # ModelFamily container + zip/dir export
 │           ├── algorithm.py               # per-cell discovery driver
 │           ├── assembly.py                # combined + skeleton-umbrella assembly
-│           └── scenarios.py               # per-cell path scenarios on the umbrella
+│           ├── scenarios.py               # per-cell path scenarios on the umbrella
+│           ├── stats.py                   # FamilyStats: process/activity/choice comparison
+│           └── report.py                  # self-contained interactive HTML report
 └── visualization/ucm/
     ├── visualizer.py                      # apply / view / save (mirrors BPMN)
     ├── stacked.py                         # vertical multi-map composition

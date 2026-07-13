@@ -22,22 +22,25 @@ python -m venv .venv
 
 pip install -r web/requirements.txt
 streamlit run web/streamlit_app.py        # V1 (model only)
-streamlit run web/streamlit_app_v2.py     # V2 (model + scenarios)
+streamlit run web/streamlit_app_v3.py     # V3 (scenarios + families)
 ```
 
 Streamlit opens `http://localhost:8501`.
 
 The web-specific deps (`streamlit`, `pm4py`, `scikit-learn`) live in
 `web/requirements.txt` so they stay out of the package's own dev workflow
-(`pip install -e ".[dev]"`). `scikit-learn` is only needed by V2's
+(`pip install -e ".[dev]"`). `scikit-learn` is only needed by V3's
 data-driven scenario condition mining; V1 ignores it.
 
-## V1 vs V2
+## V1 vs V3
 
 - **V1** (`streamlit_app.py`) — mine a UCM from a log, preview in UCM or
   BPMN notation, download PNG + `.jucm`. Deployed at
   https://pm4py-ucm.streamlit.app/.
-- **V2** (`streamlit_app_v2.py`) — superset of V1. Adds a **Scenarios**
+- **V3** (`streamlit_app_v3.py`) — superset of V1; V2 was this app
+  before the model-family features (`streamlit_app_v2.py` remains as
+  a shim that runs V3, keeping existing deployments whose main-file
+  setting predates the rename working). Adds a **Scenarios**
   tab that runs concurrency-aware variant clustering and synthesizes one
   executable jUCMNav `ScenarioDef` per variant, with downloads for the
   `.jucm` (now carrying the `<scenarioGroups>`), `variants.csv`,
@@ -46,7 +49,14 @@ data-driven scenario condition mining; V1 ignores it.
   encodings are exposed; the data-driven option greys out when
   `scikit-learn` is missing. Decomposition is honoured across all maps
   (OR-forks in plug-in maps receive their conditions and loop counters
-  the same way root-map forks do). Deployed at
+  the same way root-map forks do). Also adds a **Family** tab
+  (partition the log by 1–2 case attributes, mine one model per
+  combination, download the per-cell zip / combined `.jucm` /
+  dynamic-stub umbrella `.jucm` / grid PNG / interactive HTML
+  statistics report) and a **Compare** tab (rank the family members
+  on heat-mapped statistics tables — including total case durations —
+  and compare any two side by side: models, per-activity deltas,
+  aligned OR-fork branch shares). Deployed at
   https://pm4py-ucm-scenarios.streamlit.app/.
 
 ## Using the app
@@ -167,8 +177,12 @@ Once mining completes, the page shows:
 
 1. Push this repo to GitHub.
 2. At <https://share.streamlit.io>, "New app" → pick the repo and branch.
-3. Set **Main file path** to `web/streamlit_app.py`. Streamlit Cloud picks up
+3. Set **Main file path** to `web/streamlit_app.py` (V1) or
+   `web/streamlit_app_v3.py` (V3). Streamlit Cloud picks up
    `web/requirements.txt` automatically (sits next to the main file).
+   (The existing V3 deployment may still point at
+   `web/streamlit_app_v2.py` — that path is a shim that runs V3, so
+   it keeps working; update the setting at leisure.)
 4. **`packages.txt` (apt packages) MUST be at the repo root** — Streamlit
    Cloud's apt-install phase only reads from the root, not from the main
    file's directory. The root `packages.txt` in this repo installs the
