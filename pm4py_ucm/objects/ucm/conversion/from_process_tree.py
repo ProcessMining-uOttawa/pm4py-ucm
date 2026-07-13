@@ -90,6 +90,18 @@ def apply(tree, parameters: Optional[dict] = None) -> UCM:
             Name of the resulting UCMmap. Defaults to ``"DiscoveredMap"``.
         ``urn_name``
             Name of the URN spec. Defaults to ``"PM4PyDiscovery"``.
+        ``container``
+            Optional existing :class:`UCM` to add the converted map to,
+            instead of creating a fresh container. Used by the
+            model-family assembler so that several conversions share
+            one URN spec — one ID counter and one set of
+            responsibility/component *definitions*
+            (``get_or_add_responsibility`` dedupes by name). When set,
+            ``urn_name`` is ignored and post-processing (simplify /
+            routing points) is scoped to the newly added map only.
+            Note that ``performers`` binding is container-wide; family
+            assembly binds performers once at the end instead of
+            per conversion.
         ``simplify``
             Boolean (default ``True``) — after conversion, collapse
             sequences of empty points into a single edge.
@@ -141,8 +153,9 @@ def apply(tree, parameters: Optional[dict] = None) -> UCM:
     performer_kind = parameters.get("performer_kind")
     additional_components = parameters.get("additional_components")
     routing_points: bool = parameters.get("routing_empty_points", True)
+    container: Optional[UCM] = parameters.get("container")
 
-    ucm = UCM(name=urn_name)
+    ucm = container if container is not None else UCM(name=urn_name)
     ucm_map = ucm.add_map(name=map_name)
 
     start = UCM.StartPoint(name="start")
@@ -162,15 +175,18 @@ def apply(tree, parameters: Optional[dict] = None) -> UCM:
         _sys.setrecursionlimit(_required)
     try:
         _attach(tree, start, end, ucm_map)
+        # Post-processing is scoped to the map we just built — with an
+        # existing ``container``, previously added maps have already been
+        # processed and must not be touched again.
         if simplify:
-            simplify_empty_points(ucm)
+            _simplify_map(ucm, ucm_map)
         # Routing empty points run *after* simplification so that the
         # cleanup pass does not undo them. They are inserted on every
         # in- and out-arc of every fork/join, providing layout flexibility
         # (each becomes its own column in the layered drawing) and
         # smoother lines when rendered.
         if routing_points:
-            insert_routing_empty_points(ucm)
+            _insert_routing_for_map(ucm, ucm_map)
     finally:
         _sys.setrecursionlimit(_saved_limit)
 

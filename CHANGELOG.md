@@ -5,6 +5,224 @@ All notable changes to **pm4py-ucm** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-07-11
+
+### Added (model families — attribute-partitioned discovery)
+
+- **`discover_ucm_family`** — partition an event log by the values of
+  1–2 case-level attributes (e.g. cancer type × age group) and mine
+  one UCM per combination. Enumeration attributes partition by value
+  (low-count values merge into an *Other* bucket past a cardinality
+  cap); booleans by true/false; numeric attributes are binned into
+  quantile or user-supplied ranges; missing values go to an *Unknown*
+  bucket; combinations below `min_cases` are skipped but recorded.
+  The existing `decomposition` argument applies per cell, so families
+  can be flat or decomposed. New package
+  `pm4py_ucm.algo.discovery.families` (partition / family / algorithm
+  / assembly modules).
+- **`write_ucm_family`** — one `.jucm` per cell plus a
+  `family_summary.csv`, as a zip archive or a directory.
+- **`assemble_ucm_family(mode="combined")`** — every cell model in a
+  single URN spec as independent root maps, built in **one shared
+  container**: one ID counter and shared responsibility/component
+  definitions (the same activity is one definition referenced from
+  many maps), so repeated runs export byte-identically.
+- **`assemble_ucm_family(mode="umbrella")`** — one overarching model
+  whose root map is the **shared skeleton** of the cell processes,
+  computed by anti-unifying the per-cell process trees: identical
+  subtrees are shared verbatim; sequences share their longest common
+  prefix/suffix of children (equal-length remainders merge
+  position-wise into several localized variation points); loops merge
+  on (do, redo); anything else that differs becomes a variation point
+  wholesale. Each variation point is a **dynamic stub** whose
+  plug-ins are the distinct variant sub-maps, guarded by
+  preconditions over enumeration/boolean scenario variables derived
+  from the partition attributes; a cell whose process skips a
+  variation point gets a pass-through `skip` plug-in. Behaviourally
+  identical variants share one plug-in whose selection condition is
+  factored over the attribute domains (full cover drops an attribute
+  entirely). One `ScenarioDef` (strategy) per combination initialises
+  the variables so jUCMNav's traversal selects the matching plug-in
+  at every stub. When nothing is shared at the root — or with
+  `skeleton=False` — this degenerates to the plain
+  `start → dynamic stub → end` umbrella with whole cell models as
+  plug-ins. This is the first producer of `Stub.dynamic`,
+  multi-binding stubs, and `PluginBinding.precondition` — machinery
+  the exporter/importer already round-tripped.
+- **Per-cell path scenarios in the umbrella** (default,
+  `path_scenarios=True`). Each cell's sub-log is replayed on the
+  cell's *configured tree* (the merged skeleton with each variation
+  point substituted by the cell's variant subtree — assembled from
+  the same node objects the maps were converted from, so replay
+  results correlate back to the UCM's OR-forks). One executable
+  scenario per (combination × behavioural variant, capped by
+  `max_variants_per_cell`): it initialises the attribute variables
+  (plug-in selection at dynamic stubs), a `family_variant`
+  enumeration value (branch selection at outside-loop OR-forks), and
+  per-loop iteration counters. Loop scaffolding (entry guards,
+  decrements, exit conditions) is wired once per conversion unit.
+  **Inside-loop two-way XORs** get combined `family_variant` +
+  loop-counter range conditions (branches distributed across
+  iterations by observed per-variant proportions — the single-model
+  synthesizer's mechanism, parameterised by variable name and fed
+  canonically re-keyed data); enclosing loops are detected on the
+  *configured* trees so a loop in the shared skeleton still governs
+  an XOR inside a variant plug-in. Conditions land on the arc
+  **directly leaving** the fork (`_pull_condition_onto_direct_arc`)
+  — the only arc jUCMNav's traversal evaluates (an earlier revision
+  put them on the routing bend's outbound arc, where they were
+  ignored). On the ClaimsPayment Country umbrella every OR-fork
+  branch arc (92/92) now carries a real condition. Uncovered
+  variants are noted on the scenario group; inside-loop XORs with
+  more than two branches fall back to a deterministic split. New
+  module `pm4py_ucm.algo.discovery.families.scenarios`.
+- **Value filtering** — `discover_ucm_family(...,
+  include_values={attribute: [labels]})` (and `partition_log`)
+  restricts an attribute to the listed values; other cases are
+  dropped. The web app's Family tab gains per-attribute value
+  multiselects (options from the live partition axes, including
+  `Other`/`Unknown`), with the coverage preview honouring the filter.
+- **Evocative variant plug-in names** — variation-point plug-ins are
+  named with the attribute values they cover
+  (`Register Claim [AUS | NZL]`) instead of bare ` 2`/` 3` suffixes.
+- **Resource variation counts as variation** (umbrella + combined).
+  Each `FamilyCell` keeps its own mined `{activity: performer}`
+  mapping, and the umbrella's merge keys include the performer of
+  every activity in a subtree — so the same activity performed by
+  different actors in different cells becomes a variation point even
+  under identical control flow (disable with
+  `resource_variation=False`). Variant plug-ins (and, in combined
+  mode, each cell's maps) bind their cells' performers **visually**
+  (`RespRef.cont_ref`); the shared `Responsibility.performer`
+  definitions are set only for activities the whole family agrees on.
+  A family whose cells are identical in both control flow and
+  performers now emits a warning instead of silently producing a
+  stub-less umbrella.
+- **`save_vis_ucm_family` / `view_ucm_family`** — grid rendering: a
+  vertical stack for one attribute, a rows × columns matrix for two,
+  with per-cell `n (%)` captions and grayed placeholders for skipped
+  combinations (`pm4py_ucm.visualization.ucm.family_grid`).
+- **Converter `container` parameter** —
+  `from_process_tree.apply` / `decomposition.apply` can now build into
+  an existing `UCM` container (post-processing scoped to the new maps;
+  derived plug-in names deduplicated against existing maps).
+- **Web app (V2): Family tab** — 1–2 attribute pickers over the
+  detected case-constant attributes, partition policy controls, a
+  pre-mining case-coverage table, and downloads for the per-cell zip,
+  combined `.jucm`, umbrella `.jucm`, and grid PNG.
+
+### Added (performance overlays)
+
+- **`annotate_performance(ucm, log, node_metrics=…, edge_metrics=…)`**
+  — overlay frequencies and times on the model
+  (`pm4py_ucm.algo.performance`). Activity metrics: `frequency`
+  (executions), `case_coverage`, and `mean/median/total_time` service
+  times for interval logs (`start_timestamp` column). Edge metrics:
+  directly-follows `frequency`, `percentage` (an OR-fork branch's
+  share of the fork's traversals), and `mean/median/total_time`
+  waiting times. Edge statistics are attributed via
+  activity-to-activity *segments* (walked through bends/joins; arcs
+  crossing another fork or a stub are left unannotated rather than
+  guessed), with one annotation on each segment's first arc. The
+  overlay lives in two metadata layers: `perf_<metric>` entries —
+  **every** available metric, one per line, on RespRefs **and
+  connections**, independent of the display selection (jUCMNav lists
+  them line by line in the properties view) — and `_perf`, the
+  display string for the selected metrics, rendered by the classic
+  visualizer as a small gray line under activity names and on edges
+  (both UCM and BPMN styles). The exporter writes `<metadata>` on
+  nodes and connections and the importer parses both (including
+  jUCMNav's own `_hits`), so overlays survive the export→reimport
+  path the web app renders through; metadata-free models export
+  byte-identically to before. Segment resolution walks **through
+  static single-binding stubs** (via the plug-in binding), so
+  decomposed models get edge statistics across stub boundaries;
+  dynamic/multi-binding stubs stop the walk. Re-annotation replaces
+  the previous overlay.
+- **Web app**: a "Performance overlay" sidebar section — pick up to
+  two activity metrics and two edge metrics; applied to the Model
+  tab and to every family cell (grid rendering + per-cell `.jucm`),
+  each cell annotated from its own sub-log.
+- **`demo/model_families_tutorial.ipynb`** — executed end-to-end on
+  `ClaimsPaymentLog`: attribute detection, partition preview,
+  per-cell mining, grid rendering, per-cell/combined/umbrella
+  exports, path scenarios, and performance overlays (rendered,
+  exported as metadata, and used programmatically).
+- **Family assemblies annotated too**: `assemble_ucm_family(...,
+  node_metrics=…, edge_metrics=…)` overlays the combined model (each
+  cell's maps from that cell's sub-log) and the umbrella (shared
+  skeleton from the whole family log, each variant plug-in from its
+  covering cells' sub-log) — so the Family tab's combined and
+  umbrella `.jucm` downloads carry the metadata as well.
+  `annotate_performance` gained a `maps=` parameter to scope
+  annotation to a subset of a model's maps.
+
+### Added (rendering resolution)
+
+- **`dpi` parameter on the classic graphviz renderer** — layout is
+  computed in points, so a higher DPI scales the whole drawing (text
+  included) proportionally. Omitted by default, keeping existing
+  output byte-identical. The stacked composite's title strips now
+  scale with the requested DPI too.
+- **Adaptive family-grid resolution.** The grid renderer aims for
+  ``target_dpi`` (default 192 — twice graphviz's 96, so exported text
+  is actually readable) and enforces a ``max_total_pixels`` budget
+  (default 150M) in two stages: a probe-based DPI choice before
+  rendering, and exact post-render enforcement that uniformly
+  downscales the supersampled panels when panel-shape variance makes
+  the projection undershoot. 96 dpi is a hard readability floor — a
+  very large family exceeds the budget (with a warning) rather than
+  becoming unreadable. Explicit ``dpi`` bypasses both stages. The
+  effective DPI is recorded in the PNG metadata
+  (``pm4py_ucm_dpi`` text chunk + physical-dimension header). The
+  destructive ``max_panel_width`` downscaling that previously crushed
+  wide panels to 1600 px is now **off by default**.
+- **Web app**: the Family tab embeds a downscaled preview of the grid
+  (≤2200 px wide) and serves the full-resolution render through the
+  Grid PNG download, so huge exports don't strain the browser.
+
+### Fixed (performance overlays — jUCMNav validity and coverage)
+
+- **`<metadata>` on connections made jUCMNav reject the file**
+  (`FeatureNotFoundException: Feature 'metadata' not found`) —
+  NodeConnection has no metadata feature in jUCMNav's metamodel.
+  Edge annotations now live on the arc's **source node** under
+  branch-indexed keys (`_perf_branch<i>` display,
+  `perf_branch<i>_<metric>` per metric, for the node's i-th outgoing
+  arc); the visualizer and the export/reimport round trip read them
+  from there, and connections are emitted exactly as before. A
+  regression test asserts connections never carry metadata children.
+- **Most OR-fork branches had no edge statistics** because segment
+  resolution refused to walk backward through joins (and most forks
+  sit right after one). Resolution is now set-based: backward walks
+  fan out through joins, forward walks through forks, and the edge's
+  statistics are the aggregate of the directly-follows pairs over
+  the two activity sets (frequencies/totals add, means are
+  frequency-weighted; medians are kept only for single-pair
+  segments). On the flat claims model, annotated segments went from
+  30 to 47 — including arcs directly after joins.
+
+### Fixed (exporter — multi-binding stubs)
+
+- **Dynamic stubs with several plug-in bindings exported broken
+  back-references.** The shared entry/exit arcs of a multi-binding
+  stub must list *every* binding's ``<in>``/``<out>`` in their
+  ``inBindings``/``outBindings`` attributes (space-separated XPaths,
+  as jUCMNav writes them), but the exporter's lookup tables were
+  single-valued and kept only the last binding — so jUCMNav could not
+  wire the bindings to their plug-in maps. The tables
+  (``connection_to_in``/``connection_to_out`` and the plug-in
+  start/end companions) are now one-to-many. Single-binding output is
+  byte-identical to before.
+
+### Fixed (expression minimizer)
+
+- `X == true` / `X == false` are now recognised as complementary
+  literals (they only ever denote boolean variables in this package),
+  so `(P && X == true) || (P && X == false)` collapses to `P`. The
+  complement-pair merge also checks both directions, restoring
+  symmetry for `X != true` vs `X == true`.
+
 ## [0.3.2] — 2026-05-20
 
 ### Changed (docs)

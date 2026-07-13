@@ -30,6 +30,12 @@ from .api import (
     write_variants_report,
     write_case_variant_map,
     write_condition_mining_report,
+    discover_ucm_family,
+    write_ucm_family,
+    assemble_ucm_family,
+    save_vis_ucm_family,
+    view_ucm_family,
+    annotate_performance,
 )
 from .objects.ucm.obj import UCM
 
@@ -48,6 +54,12 @@ __all__ = [
     "write_variants_report",
     "write_case_variant_map",
     "write_condition_mining_report",
+    "discover_ucm_family",
+    "write_ucm_family",
+    "assemble_ucm_family",
+    "save_vis_ucm_family",
+    "view_ucm_family",
+    "annotate_performance",
 ]
 
-__version__ = "0.3.2"
+__version__ = "0.4.0"

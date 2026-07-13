@@ -7,6 +7,7 @@ Contents:
 | `pm4py_ucm_tutorial.ipynb`              | **Main tutorial notebook** — guided tour of the full model-discovery feature surface against a realistic claims-payment log. Recommended starting point for the discovery / rendering / decomposition side of the package. |
 | `scenario_synthesis_tutorial.ipynb`     | **Scenario-synthesis tutorial** — pedagogical walkthrough of the scenario layer: concurrency-aware variants, the `LoopEntryGuard`, variant-driven vs data-driven OR-fork conditions, transparent support for decomposed UCMs. Small synthetic examples per section. |
 | `scenario_synthesis.ipynb`              | Empirical companion to the scenario tutorial — runs the full pipeline on `ClaimsPaymentLog` in both encodings side-by-side, with the numbers from the paper. |
+| `model_families_tutorial.ipynb`         | **Model-families + performance-overlays tutorial** — partitions `ClaimsPaymentLog` by case attributes, mines one model per combination, renders the stack/matrix grid, exports per-cell / combined / dynamic-stub-umbrella `.jucm` files, and overlays frequencies and times on activities and edges. |
 | `IssueTracker.zip`                      | Small, readable event log (~100 K events / 11 K cases, 9 distinct activities, 5 roles). Drives sections 0-5 of the main notebook. |
 | `ClaimsPaymentLog.zip`                  | Heavier, denser event log (~90 K events, more activities and actor types). Drives the second half of the main notebook and both scenario notebooks. |
 | `mine_and_export.py`                    | Minimal command-line script that mines a UCM, exports a `.jucm`, and renders a PNG. |
@@ -61,6 +62,30 @@ Two complementary notebooks focus on the scenario-synthesis layer:
 
 Both notebooks require `pm4py` (for reading XES). The data-driven
 sections additionally require `scikit-learn`.
+
+## Model-families notebook
+
+**`model_families_tutorial.ipynb`** covers the v0.4.0 feature surface
+end-to-end on `ClaimsPaymentLog`:
+
+1. Detecting the case-constant attributes usable as partition axes.
+2. Previewing the partition (a coverage table) *before* mining.
+3. Mining one UCM per combination and rendering the family as a
+   stack / matrix grid with per-cell `n (%)` captions.
+4. Exporting: one `.jucm` per cell (zip) and the combined single-file
+   form with shared definitions.
+5. Assembling the **umbrella** — the shared skeleton with dynamic
+   stubs at the points of divergence, attribute-guarded plug-ins,
+   resource variation as variation, and executable **path scenarios**
+   (one per combination × behavioural variant).
+6. **Performance overlays** — frequencies and times on activities and
+   edges, both rendered and exported as jUCMNav metadata, plus
+   programmatic use of the same statistics (busiest activities,
+   slowest hand-offs).
+
+Outputs land in `output/families/`; every `.jucm` opens in jUCMNav.
+See [`docs/model_families.md`](../docs/model_families.md) for the full
+reference.
 
 ## Mine-and-export script
 

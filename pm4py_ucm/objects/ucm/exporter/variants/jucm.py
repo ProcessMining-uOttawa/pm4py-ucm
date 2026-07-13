@@ -461,14 +461,24 @@ class _StubContext:
         self.in_xpath: Dict["UCM.InBinding", str] = {}
         # OutBinding -> XPath to its <out> child
         self.out_xpath: Dict["UCM.OutBinding", str] = {}
-        # parent NodeConnection -> InBinding it's the entry of
-        self.connection_to_in: Dict["UCM.NodeConnection", "UCM.InBinding"] = {}
-        # parent NodeConnection -> OutBinding it's the exit of
-        self.connection_to_out: Dict["UCM.NodeConnection", "UCM.OutBinding"] = {}
-        # plug-in StartPoint -> InBinding that points at it
-        self.startpoint_to_in: Dict["UCM.StartPoint", "UCM.InBinding"] = {}
-        # plug-in EndPoint -> OutBinding that points at it
-        self.endpoint_to_out: Dict["UCM.EndPoint", "UCM.OutBinding"] = {}
+        # parent NodeConnection -> InBindings it's the entry of. A
+        # dynamic stub's bindings all share the same entry arc, so
+        # these back-references are one-to-MANY: the ``inBindings``
+        # attribute must list every binding's <in> (space-separated
+        # XPaths), or jUCMNav cannot wire the bindings to their
+        # plug-ins. Same for the three companions below.
+        self.connection_to_in: Dict[
+            "UCM.NodeConnection", List["UCM.InBinding"]] = {}
+        # parent NodeConnection -> OutBindings it's the exit of
+        self.connection_to_out: Dict[
+            "UCM.NodeConnection", List["UCM.OutBinding"]] = {}
+        # plug-in StartPoint -> InBindings that point at it (a plug-in
+        # map bound to several stubs shares its StartPoint)
+        self.startpoint_to_in: Dict[
+            "UCM.StartPoint", List["UCM.InBinding"]] = {}
+        # plug-in EndPoint -> OutBindings that point at it
+        self.endpoint_to_out: Dict[
+            "UCM.EndPoint", List["UCM.OutBinding"]] = {}
         # ----- Export filters (populated in _build_stub_context) -----
         #
         # Whether ``<condition>`` elements should be emitted on
@@ -571,16 +581,20 @@ def _build_stub_context(
                     ib_xpath = f"{bind_xpath}/@in.{in_idx}"
                     ctx.in_xpath[ib] = ib_xpath
                     if ib.stub_entry is not None:
-                        ctx.connection_to_in[ib.stub_entry] = ib
+                        ctx.connection_to_in.setdefault(
+                            ib.stub_entry, []).append(ib)
                     if ib.start_point is not None:
-                        ctx.startpoint_to_in[ib.start_point] = ib
+                        ctx.startpoint_to_in.setdefault(
+                            ib.start_point, []).append(ib)
                 for out_idx, ob in enumerate(binding.out_bindings):
                     ob_xpath = f"{bind_xpath}/@out.{out_idx}"
                     ctx.out_xpath[ob] = ob_xpath
                     if ob.stub_exit is not None:
-                        ctx.connection_to_out[ob.stub_exit] = ob
+                        ctx.connection_to_out.setdefault(
+                            ob.stub_exit, []).append(ob)
                     if ob.end_point is not None:
-                        ctx.endpoint_to_out[ob.end_point] = ob
+                        ctx.endpoint_to_out.setdefault(
+                            ob.end_point, []).append(ob)
 
     # Scenario-layer back-references. For every ScenarioStartPoint /
     # ScenarioEndPoint, record the XPath of the <startPoints> /
@@ -797,10 +811,11 @@ def _emit_node(
     # plug-in side).
     if ctx is not None:
         if isinstance(n, UCM.StartPoint) and n in ctx.startpoint_to_in:
-            attrs.append(("inBindings", ctx.in_xpath[ctx.startpoint_to_in[n]]))
+            attrs.append(("inBindings", " ".join(
+                ctx.in_xpath[ib] for ib in ctx.startpoint_to_in[n])))
         if isinstance(n, UCM.EndPoint) and n in ctx.endpoint_to_out:
-            attrs.append(("outBindings",
-                          ctx.out_xpath[ctx.endpoint_to_out[n]]))
+            attrs.append(("outBindings", " ".join(
+                ctx.out_xpath[ob] for ob in ctx.endpoint_to_out[n])))
         # Bidirectional scenario back-references — the missing half of
         # the link that jUCMNav's scenario tool follows when resolving
         # a ScenarioStartPoint / ScenarioEndPoint. Without this the
@@ -820,12 +835,17 @@ def _emit_node(
     needs_label = isinstance(n, _NODES_WITH_LABEL)
     has_bindings = (isinstance(n, UCM.Stub) and bool(n.bindings)
                     and ctx is not None)
+    has_metadata = bool(n.metadata)
 
-    if not (pre or post or needs_label or has_bindings):
+    if not (pre or post or needs_label or has_bindings or has_metadata):
         w.empty("nodes", attrs)
         return
 
     w.open("nodes", attrs)
+    # Metadata children come first — matches jUCMNav's own child order
+    # (cf. the ``_hits`` entries the editor writes on traversed nodes).
+    for md in n.metadata:
+        w.empty("metadata", [("name", md.name), ("value", md.value)])
     if needs_label:
         label_attrs: List = []
         dx, dy = _compute_label_delta(n, m)
@@ -1052,11 +1072,16 @@ def _emit_connection(
     ]
     if ctx is not None:
         if c in ctx.connection_to_in:
-            attrs.append(("inBindings",
-                          ctx.in_xpath[ctx.connection_to_in[c]]))
+            attrs.append(("inBindings", " ".join(
+                ctx.in_xpath[ib] for ib in ctx.connection_to_in[c])))
         if c in ctx.connection_to_out:
-            attrs.append(("outBindings",
-                          ctx.out_xpath[ctx.connection_to_out[c]]))
+            attrs.append(("outBindings", " ".join(
+                ctx.out_xpath[ob] for ob in ctx.connection_to_out[c])))
+    # NOTE: jUCMNav's metamodel has NO metadata feature on
+    # NodeConnection — emitting <metadata> children here makes the
+    # editor reject the whole file with a FeatureNotFoundException.
+    # Edge-level annotations (e.g. the performance overlay) therefore
+    # live on the arc's source NODE under branch-indexed keys.
     emit_cond = (
         c.condition is not None
         and (ctx is None or ctx.emit_conditions)

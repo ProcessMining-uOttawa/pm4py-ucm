@@ -1,11 +1,14 @@
-"""PM4Py-UCM web front-end — V2 (scenarios).
+"""PM4Py-UCM web front-end — V2 (scenarios + families).
 
 V2 is a superset of V1: same log-source / inductive-miner / performer /
 decomposition controls, same UCM/BPMN preview tab, plus a Scenarios
 tab that runs the concurrency-aware variant clustering + scenario
 synthesis pipeline and exposes every artifact (the executable .jucm,
 variants.csv, case_variant_map.csv, and for data-driven runs
-condition_mining.csv) as a download.
+condition_mining.csv) as a download, plus a Family tab that partitions
+the log by 1–2 case attributes and mines a model per combination
+(grid rendering, per-cell zip, combined .jucm, and a dynamic-stub
+umbrella .jucm with per-combination strategies).
 
 V1 remains untouched at ``web/streamlit_app.py``. Run either:
 
@@ -153,6 +156,8 @@ def _mine(
     resource_attribute: str,
     min_support: float,
     noise_threshold: float,
+    overlay_nodes: Tuple[str, ...],
+    overlay_edges: Tuple[str, ...],
     _file_hash: str,
     _status=None,
 ) -> Dict[str, Any]:
@@ -238,6 +243,14 @@ def _mine(
         ucm = pm4py_ucm.discover_ucm_inductive(
             log, parameters=params, decomposition=decomp_arg,
         )
+
+        if overlay_nodes or overlay_edges:
+            _phase("Computing performance overlay...")
+            pm4py_ucm.annotate_performance(
+                ucm, log,
+                node_metrics=list(overlay_nodes),
+                edge_metrics=list(overlay_edges),
+            )
 
         _phase("Writing .jucm...")
         jucm_path = td / "model.jucm"
@@ -475,6 +488,287 @@ def _synthesize(
 
 
 # ---------------------------------------------------------------------------
+# Model families (cached)
+# ---------------------------------------------------------------------------
+
+@st.cache_data(show_spinner=False)
+def _load_log_df(log_bytes: bytes, log_kind: str, csv_columns,
+                 _file_hash: str) -> pd.DataFrame:
+    """The event log as a DataFrame — the form the family partitioner
+    works on. Cached so attribute detection / preview / mining all hit
+    the same parse."""
+    log = _read_log_for_scenarios(log_bytes, log_kind, csv_columns)
+    if isinstance(log, pd.DataFrame):
+        return log
+    return pm4py.convert_to_dataframe(log)
+
+
+@st.cache_data(show_spinner="Detecting case attributes...")
+def _detect_family_attributes(
+    log_bytes: bytes, log_kind: str, csv_columns, _file_hash: str,
+) -> List[Dict[str, Any]]:
+    """Case-constant attributes usable as partition axes, with the
+    context a user needs to pick one (type, cardinality, missing %)."""
+    from pm4py_ucm.algo.discovery.families import detect_case_attributes
+
+    df = _load_log_df(log_bytes, log_kind, csv_columns, _file_hash)
+    specs, per_case_raw = detect_case_attributes(df)
+    rows: List[Dict[str, Any]] = []
+    for spec in specs.values():
+        series = per_case_raw[spec.source_name]
+        rows.append({
+            "attribute": spec.source_name,
+            "type": spec.type,
+            "distinct": int(series.nunique(dropna=True)),
+            "missing_pct": round(float(series.isna().mean()) * 100, 1),
+        })
+    rows.sort(key=lambda r: r["attribute"])
+    return rows
+
+
+@st.cache_data(show_spinner="Computing partition coverage...")
+def _family_preview(
+    log_bytes: bytes, log_kind: str, csv_columns,
+    attrs: Tuple[str, ...], min_cases: int, max_values: int, bins: int,
+    include_values,  # None or tuple of (attr, (label, ...)) pairs
+    _file_hash: str,
+) -> Dict[str, Any]:
+    """Partition only (no mining) — the coverage heatmap shown before
+    the user commits to mining N models. Also returns the value axes
+    so the UI can offer per-attribute value filters."""
+    from pm4py_ucm.algo.discovery.families import partition_log
+
+    df = _load_log_df(log_bytes, log_kind, csv_columns, _file_hash)
+    part = partition_log(
+        df, list(attrs),
+        min_cases=min_cases,
+        max_values_per_attribute=max_values,
+        bins=bins,
+        include_values=(
+            {k: list(v) for k, v in include_values}
+            if include_values else None
+        ),
+    )
+    counts = part.grid_counts()
+    row_labels = [v.label for v in part.attributes[0].values]
+    if len(part.attributes) == 2:
+        col_labels = [v.label for v in part.attributes[1].values]
+        data = {
+            col: [counts.get((r, col), 0) for r in row_labels]
+            for col in col_labels
+        }
+        pivot = pd.DataFrame(
+            data, index=pd.Index(
+                row_labels, name=part.attributes[0].display_name,
+            ),
+        )
+    else:
+        pivot = pd.DataFrame(
+            {"cases": [counts.get((r,), 0) for r in row_labels]},
+            index=pd.Index(
+                row_labels, name=part.attributes[0].display_name,
+            ),
+        )
+    return {
+        "pivot": pivot,
+        "n_cells": len(part.cells),
+        "n_skipped": len(part.skipped_cells),
+        "total_cases": part.total_cases,
+        "covered_cases": part.covered_cases,
+        "dropped_cases": part.dropped_cases,
+        "axes": {
+            a.display_name: [v.label for v in a.values]
+            for a in part.attributes
+        },
+    }
+
+
+@st.cache_data(show_spinner=False)
+def _mine_family(
+    log_bytes: bytes,
+    log_kind: str,
+    csv_columns,
+    attrs: Tuple[str, ...],
+    min_cases: int,
+    max_values: int,
+    bins: int,
+    include_values,  # None or tuple of (attr, (label, ...)) pairs
+    noise_threshold: float,
+    decomposition_spec,
+    resource_attribute: str,
+    min_support: float,
+    dedup: bool,
+    overlay_nodes: Tuple[str, ...],
+    overlay_edges: Tuple[str, ...],
+    _file_hash: str,
+    _status=None,
+) -> Dict[str, Any]:
+    """Mine the family and produce the notation-independent
+    deliverables in one pass: the per-cell zip, the combined .jucm,
+    and the umbrella .jucm. The mined family object is returned too so
+    the grid PNG can be (re-)rendered per notation WITHOUT re-mining —
+    rendering style must never be part of this function's cache key
+    (see :func:`_render_family_grid`)."""
+    from pm4py_ucm.objects.ucm.exporter.variants.jucm import (
+        serialize_to_string,
+    )
+
+    def _phase(label: str) -> None:
+        if _status is not None:
+            _status.update(label=label)
+
+    _phase("Loading event log...")
+    df = _load_log_df(log_bytes, log_kind, csv_columns, _file_hash)
+
+    params: Dict[str, Any] = {}
+    res_attrs = [a.strip() for a in resource_attribute.replace(",", " ").split()
+                 if a.strip()]
+    if not res_attrs:
+        params["resource_attribute"] = False
+    elif len(res_attrs) == 1:
+        params["resource_attribute"] = res_attrs[0]
+    else:
+        params["resource_attribute"] = res_attrs
+    if res_attrs:
+        params["resource_parameters"] = {"min_support": float(min_support)}
+
+    decomp_arg: Any = (
+        "off" if decomposition_spec == "off" else dict(decomposition_spec)
+    )
+
+    _phase(f"Mining one model per cell ({' × '.join(attrs)})...")
+    family = pm4py_ucm.discover_ucm_family(
+        df, list(attrs),
+        decomposition=decomp_arg,
+        noise_threshold=float(noise_threshold),
+        min_cases=int(min_cases),
+        max_values_per_attribute=int(max_values),
+        bins=int(bins),
+        include_values=(
+            {k: list(v) for k, v in include_values}
+            if include_values else None
+        ),
+        parameters=params,
+    )
+
+    if overlay_nodes or overlay_edges:
+        # Per-cell overlays from each cell's own sub-log — visible in
+        # the grid rendering and the per-cell .jucm files. (The
+        # combined/umbrella assemblies re-convert the trees and are
+        # not annotated.)
+        _phase("Computing performance overlays...")
+        fam_cases = family.log_df["case:concept:name"].astype(str)
+        for cell in family.cells:
+            cell_df = family.log_df[
+                fam_cases.isin(set(cell.case_ids))
+            ]
+            pm4py_ucm.annotate_performance(
+                cell.ucm, cell_df,
+                node_metrics=list(overlay_nodes),
+                edge_metrics=list(overlay_edges),
+            )
+
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+
+        _phase("Writing per-cell .jucm files...")
+        zip_path = td / "family.zip"
+        pm4py_ucm.write_ucm_family(family, str(zip_path))
+        zip_bytes = zip_path.read_bytes()
+
+        _phase("Assembling combined model...")
+        combined_bytes = serialize_to_string(
+            pm4py_ucm.assemble_ucm_family(
+                family, mode="combined",
+                node_metrics=list(overlay_nodes),
+                edge_metrics=list(overlay_edges),
+            ),
+        ).encode("utf-8")
+
+        _phase("Assembling umbrella model (dynamic stub)...")
+        umbrella = pm4py_ucm.assemble_ucm_family(
+            family, mode="umbrella", dedup=bool(dedup),
+            node_metrics=list(overlay_nodes),
+            edge_metrics=list(overlay_edges),
+        )
+        umbrella_bytes = serialize_to_string(umbrella).encode("utf-8")
+        dynamic_stubs = [
+            n for n in umbrella.maps[0].nodes
+            if isinstance(n, pm4py_ucm.UCM.Stub) and n.dynamic
+        ]
+        n_variation_points = len(dynamic_stubs)
+        n_plugins = sum(len(s.bindings) for s in dynamic_stubs)
+
+    summary_rows = family.summary_rows()
+    summary_df = pd.DataFrame(summary_rows[1:], columns=summary_rows[0])
+
+    # The assemblies above were the last consumers of the full log —
+    # drop it before this result is pickled into the cache so the
+    # cached family stays small (grid rendering only needs the cells).
+    family.log_df = None
+
+    return {
+        "family": family,
+        "zip": zip_bytes,
+        "combined_jucm": combined_bytes,
+        "umbrella_jucm": umbrella_bytes,
+        "summary_df": summary_df,
+        "n_cells": len(family.cells),
+        "n_skipped": len(family.skipped_cells),
+        "n_variation_points": n_variation_points,
+        "n_plugins": n_plugins,
+        "total_cases": family.total_cases,
+        "covered_cases": family.covered_cases,
+    }
+
+
+#: Widest inline preview embedded in the page. The full-resolution
+#: grid (which can be tens of thousands of pixels wide at export
+#: quality) goes to the download button only — base64-embedding it
+#: would make the browser tab unusable.
+_GRID_PREVIEW_MAX_W = 2200
+
+
+@st.cache_data(show_spinner=False)
+def _render_family_grid(
+    mine_fingerprint: str,
+    style: str,
+    _family,
+) -> Tuple[Optional[bytes], Optional[bytes], Optional[str]]:
+    """Render the family grid PNG for one notation.
+
+    Cached on ``(mine_fingerprint, style)`` only — ``_family`` (the
+    already-mined models) is deliberately excluded from the key via
+    the underscore prefix. Switching UCM ↔ BPMN therefore re-renders
+    but never re-mines. Returns ``(full_png, preview_png, None)`` or
+    ``(None, None, error_text)``; the preview is capped at
+    :data:`_GRID_PREVIEW_MAX_W` px wide (may be the same bytes as the
+    full render when already narrow)."""
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            png_path = Path(td) / "grid.png"
+            pm4py_ucm.save_vis_ucm_family(
+                _family, str(png_path), style=style,
+            )
+            full = png_path.read_bytes()
+            with _PILImage.open(io.BytesIO(full)) as im:
+                if im.width > _GRID_PREVIEW_MAX_W:
+                    f = _GRID_PREVIEW_MAX_W / im.width
+                    preview_im = im.convert("RGB").resize(
+                        (_GRID_PREVIEW_MAX_W, max(1, int(im.height * f))),
+                        _PILImage.LANCZOS,
+                    )
+                    buf = io.BytesIO()
+                    preview_im.save(buf, format="PNG")
+                    preview = buf.getvalue()
+                else:
+                    preview = full
+            return full, preview, None
+    except Exception as exc:  # pragma: no cover - depends on env
+        return None, None, f"{type(exc).__name__}: {exc}"
+
+
+# ---------------------------------------------------------------------------
 # UI
 # ---------------------------------------------------------------------------
 
@@ -625,6 +919,30 @@ with st.sidebar:
         value=0.0, step=0.05,
         disabled=_min_support_disabled,
     )
+
+    st.subheader("Performance overlay")
+    from pm4py_ucm.algo.performance import (
+        EDGE_METRICS as _EDGE_METRICS,
+        NODE_METRICS as _NODE_METRICS,
+    )
+    overlay_nodes = tuple(st.multiselect(
+        "On activities (max 2)",
+        options=list(_NODE_METRICS), default=[],
+        help=(
+            "frequency = executions; case_coverage = cases containing "
+            "the activity; the time metrics are activity service "
+            "times and need an interval log (start_timestamp column)."
+        ),
+    )[:2])
+    overlay_edges = tuple(st.multiselect(
+        "On edges (max 2)",
+        options=list(_EDGE_METRICS), default=[],
+        help=(
+            "frequency = directly-follows traversals; percentage = an "
+            "OR-fork branch's share of the fork; the time metrics are "
+            "waiting times between the edge's activities."
+        ),
+    )[:2])
 
     st.divider()
     notation = st.radio(
@@ -778,6 +1096,7 @@ try:
             log_bytes, log_kind, csv_columns,
             decomposition_spec, resource_attribute,
             effective_min_support, noise_threshold,
+            overlay_nodes, overlay_edges,
             file_hash, _status=status,
         )
         status.update(label="Done.", state="complete")
@@ -798,7 +1117,9 @@ c7.metric("Maps", mined["n_maps"])
 c8.metric("Nodes", mined["n_nodes"])
 
 # ---- Tabs -----------------------------------------------------------------
-model_tab, scenarios_tab = st.tabs(["Model", "Scenarios"])
+model_tab, scenarios_tab, family_tab = st.tabs(
+    ["Model", "Scenarios", "Family"]
+)
 
 # ===== Model tab ===========================================================
 with model_tab:
@@ -1038,3 +1359,335 @@ with scenarios_tab:
             )
         else:
             d4.caption("_condition_mining.csv is only emitted in data-driven mode._")
+
+# ===== Family tab ==========================================================
+with family_tab:
+    st.subheader("Model family by case attributes")
+    st.caption(
+        "Partition the log by 1–2 case-level attributes (e.g. cancer "
+        "type × age group) and mine one model per combination. The "
+        "sidebar's decomposition setting applies to every cell (flat "
+        "vs decomposed). Outputs: a grid rendering, one .jucm per "
+        "cell (zip), a combined multi-map .jucm, and an overarching "
+        "model whose **dynamic stub** selects the applicable plug-in "
+        "via attribute conditions, with one strategy per combination."
+    )
+
+    try:
+        attr_rows = _detect_family_attributes(
+            log_bytes, log_kind, csv_columns, file_hash,
+        )
+    except Exception as exc:
+        st.error(
+            f"Attribute detection failed: {type(exc).__name__}: {exc}"
+        )
+        with st.expander("Show technical details"):
+            st.code(traceback.format_exc(), language="text")
+        attr_rows = []
+
+    if not attr_rows:
+        st.info(
+            "No case-constant attributes detected in this log — "
+            "nothing to partition on. (Attributes must be constant "
+            "within each case: patient-level fields like cancer type, "
+            "age, or admission channel.)"
+        )
+    else:
+        with st.expander("Detected case attributes", expanded=False):
+            st.dataframe(
+                pd.DataFrame(attr_rows), use_container_width=True,
+                hide_index=True,
+            )
+
+        attr_names = [r["attribute"] for r in attr_rows]
+        attr_type = {r["attribute"]: r["type"] for r in attr_rows}
+
+        pc1, pc2 = st.columns(2)
+        attr1 = pc1.selectbox(
+            "First attribute", options=attr_names, key="family_attr1",
+        )
+        attr2 = pc2.selectbox(
+            "Second attribute (optional)",
+            options=[_NONE_OPT] + [a for a in attr_names if a != attr1],
+            key="family_attr2",
+        )
+        selected_attrs: Tuple[str, ...] = (
+            (attr1,) if attr2 == _NONE_OPT else (attr1, attr2)
+        )
+
+        pc3, pc4, pc5 = st.columns(3)
+        family_min_cases = pc3.number_input(
+            "Min cases per cell", min_value=1, max_value=100_000,
+            value=10, step=1,
+            help=(
+                "Combinations with fewer cases are skipped (shown "
+                "grayed in the grid). Models mined from a handful of "
+                "traces overfit badly."
+            ),
+        )
+        family_max_values = pc4.number_input(
+            "Max values per attribute", min_value=2, max_value=20,
+            value=8, step=1,
+            help=(
+                "Cardinality cap per axis; the least frequent values "
+                "merge into an 'Other' bucket."
+            ),
+        )
+        _any_numeric = any(
+            attr_type.get(a) == "integer" for a in selected_attrs
+        )
+        family_bins = pc5.number_input(
+            "Bins (numeric attributes)", min_value=2, max_value=10,
+            value=4, step=1, disabled=not _any_numeric,
+            help=(
+                "Numeric attributes (e.g. age) are partitioned into "
+                "this many quantile ranges."
+            ),
+        )
+
+        # Coverage heatmap BEFORE mining — see the cell sizes before
+        # committing to mining N models. A first (unfiltered) pass
+        # supplies the value axes for the per-attribute value filters;
+        # the displayed preview then honours the filters.
+        preview = None
+        family_include_values = None
+        try:
+            base_preview = _family_preview(
+                log_bytes, log_kind, csv_columns,
+                selected_attrs, int(family_min_cases),
+                int(family_max_values), int(family_bins),
+                None, file_hash,
+            )
+            filter_cols = st.columns(len(selected_attrs))
+            selections: Dict[str, Tuple[str, ...]] = {}
+            for i, attr in enumerate(selected_attrs):
+                display = (attr[len("case:"):]
+                           if attr.startswith("case:") else attr)
+                options = base_preview["axes"].get(display, [])
+                picked = filter_cols[i].multiselect(
+                    f"Values of {display}",
+                    options=options, default=options,
+                    key=f"family_values_{attr}",
+                    help=(
+                        "Deselect values to exclude them from the "
+                        "family — their cases are dropped entirely."
+                    ),
+                )
+                if picked and len(picked) < len(options):
+                    selections[attr] = tuple(picked)
+            family_include_values = (
+                tuple(sorted(selections.items())) if selections else None
+            )
+            preview = (
+                base_preview if family_include_values is None
+                else _family_preview(
+                    log_bytes, log_kind, csv_columns,
+                    selected_attrs, int(family_min_cases),
+                    int(family_max_values), int(family_bins),
+                    family_include_values, file_hash,
+                )
+            )
+        except Exception as exc:
+            st.error(
+                f"Partitioning failed: {type(exc).__name__}: {exc}"
+            )
+            with st.expander("Show technical details"):
+                st.code(traceback.format_exc(), language="text")
+
+        if preview is not None:
+            st.markdown("**Case coverage per combination** "
+                        "(mined cells need ≥ min cases)")
+            st.dataframe(preview["pivot"], use_container_width=True)
+            pm1, pm2, pm3, pm4 = st.columns(4)
+            pm1.metric("Cells to mine", preview["n_cells"])
+            pm2.metric("Skipped (small)", preview["n_skipped"])
+            cov = (
+                preview["covered_cases"] / preview["total_cases"] * 100
+                if preview["total_cases"] else 0.0
+            )
+            pm3.metric("Case coverage", f"{cov:.1f}%")
+            pm4.metric("Dropped cases", preview["dropped_cases"])
+
+            family_dedup = st.checkbox(
+                "Merge behaviourally identical plug-ins (umbrella)",
+                value=True,
+                help=(
+                    "Combinations whose mined process trees are "
+                    "identical share one plug-in map; its selection "
+                    "condition becomes the simplified OR of the "
+                    "member conditions. The shared plug-ins show "
+                    "which sub-populations follow the same process."
+                ),
+            )
+
+            run_family = st.button(
+                "Mine model family", type="primary", key="run_family",
+                disabled=preview["n_cells"] == 0,
+            )
+            if preview["n_cells"] == 0:
+                st.warning(
+                    "No combination reaches the minimum case count — "
+                    "lower 'Min cases per cell' or pick different "
+                    "attributes."
+                )
+
+            # NOTE: the notation style is deliberately NOT part of
+            # this fingerprint — it only affects grid rendering,
+            # which has its own cache (_render_family_grid). Toggling
+            # UCM ↔ BPMN must never invalidate the mined family.
+            _family_fp = _arg_fingerprint(
+                file_hash, log_kind, csv_columns, selected_attrs,
+                int(family_min_cases), int(family_max_values),
+                int(family_bins), family_include_values,
+                noise_threshold, decomposition_spec,
+                resource_attribute, effective_min_support,
+                family_dedup, overlay_nodes, overlay_edges,
+            )
+            stashed_family_fp = st.session_state.get("family_fp")
+            family_params_changed = (
+                stashed_family_fp is not None
+                and stashed_family_fp != _family_fp
+            )
+            if family_params_changed and not run_family:
+                st.session_state.pop("family_fp", None)
+                st.session_state.pop("family_result", None)
+
+            if run_family:
+                try:
+                    with st.status("Mining model family...",
+                                   expanded=False) as status:
+                        fam = _mine_family(
+                            log_bytes, log_kind, csv_columns,
+                            selected_attrs, int(family_min_cases),
+                            int(family_max_values), int(family_bins),
+                            family_include_values,
+                            noise_threshold, decomposition_spec,
+                            resource_attribute, effective_min_support,
+                            family_dedup, overlay_nodes, overlay_edges,
+                            file_hash, _status=status,
+                        )
+                        status.update(label="Done.", state="complete")
+                    st.session_state["family_fp"] = _family_fp
+                    st.session_state["family_result"] = fam
+                except Exception as exc:
+                    st.error(
+                        f"Family mining failed: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    with st.expander("Show technical details"):
+                        st.code(traceback.format_exc(), language="text")
+                    st.stop()
+
+            fam = st.session_state.get("family_result")
+            if fam is None:
+                if family_params_changed:
+                    st.info(
+                        "Settings changed since the last run — click "
+                        "**Mine model family** to regenerate."
+                    )
+                else:
+                    st.info(
+                        "Review the coverage above, then click "
+                        "**Mine model family**."
+                    )
+            else:
+                fm1, fm2, fm3, fm4, fm5 = st.columns(5)
+                fm1.metric("Models mined", fam["n_cells"])
+                fm2.metric("Skipped cells", fam["n_skipped"])
+                fm3.metric(
+                    "Variation points",
+                    fam["n_variation_points"],
+                    help=(
+                        "Dynamic stubs on the umbrella's root map — "
+                        "the places where the cell processes actually "
+                        "diverge. Structure outside the stubs is "
+                        "shared by every combination."
+                    ),
+                )
+                fm4.metric(
+                    "Variant plug-ins", fam["n_plugins"],
+                    help=(
+                        "Total conditioned plug-in maps across the "
+                        "variation points, after merging behaviourally "
+                        "identical variants (when enabled)."
+                    ),
+                )
+                fcov = (
+                    fam["covered_cases"] / fam["total_cases"] * 100
+                    if fam["total_cases"] else 0.0
+                )
+                fm5.metric("Case coverage", f"{fcov:.1f}%")
+
+                # Grid rendering is per-notation and cached
+                # independently of mining — switching UCM ↔ BPMN only
+                # re-renders the already-mined models.
+                with st.spinner(f"Rendering family grid ({notation})..."):
+                    grid_png, grid_preview, grid_error = (
+                        _render_family_grid(
+                            st.session_state["family_fp"], style,
+                            fam["family"],
+                        )
+                    )
+                if grid_preview is not None:
+                    _fb64 = base64.b64encode(grid_preview).decode("ascii")
+                    st.markdown(
+                        f'<img src="data:image/png;base64,{_fb64}" '
+                        f'width="{_DISPLAY_WIDTH_PX}" '
+                        f'style="max-width:100%; height:auto;" '
+                        f'alt="Model family grid" />',
+                        unsafe_allow_html=True,
+                    )
+                    st.caption(
+                        "One panel per combination — captions show "
+                        "each cell's case count and share of the log. "
+                        "This inline view is a downscaled preview; "
+                        "the **Grid PNG** download below is full "
+                        "resolution (text-readable)."
+                    )
+                elif grid_error:
+                    st.warning(
+                        f"Grid rendering unavailable: {grid_error}"
+                    )
+
+                st.subheader("Cells")
+                st.dataframe(
+                    fam["summary_df"], use_container_width=True,
+                    hide_index=True,
+                )
+
+                st.subheader("Downloads")
+                stem = Path(log_name).stem
+                fd1, fd2, fd3, fd4 = st.columns(4)
+                fd1.download_button(
+                    "Per-cell models (.zip)", data=fam["zip"],
+                    file_name=_safe_download_name(f"{stem}_family", ".zip"),
+                    mime="application/zip",
+                )
+                fd2.download_button(
+                    "Combined .jucm", data=fam["combined_jucm"],
+                    file_name=_safe_download_name(
+                        f"{stem}_family_combined", ".jucm",
+                    ),
+                    mime="application/xml",
+                    help="Every cell model as an independent root map "
+                         "in one file (shared definitions).",
+                )
+                fd3.download_button(
+                    "Umbrella .jucm (dynamic stub)",
+                    data=fam["umbrella_jucm"],
+                    file_name=_safe_download_name(
+                        f"{stem}_family_umbrella", ".jucm",
+                    ),
+                    mime="application/xml",
+                    help="Overarching model: dynamic stub + one "
+                         "conditioned plug-in per (merged) cell + one "
+                         "strategy per combination.",
+                )
+                if grid_png is not None:
+                    fd4.download_button(
+                        "Grid PNG", data=grid_png,
+                        file_name=_safe_download_name(
+                            f"{stem}_family_grid_{style}", ".png",
+                        ),
+                        mime="image/png",
+                    )

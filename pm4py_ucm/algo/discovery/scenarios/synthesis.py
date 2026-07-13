@@ -1271,6 +1271,7 @@ def _set_inside_loop_xor_conditions(
     variants: List[Variant],
     loop_counters: Dict[int, UCM.Variable],
     max_loop_iterations: Optional[int] = None,
+    variant_var_name: str = None,
 ) -> None:
     """Wire an inside-loop XOR's outgoing arcs with combined
     ``variant_id`` + ``loop_counter`` conditions so each branch
@@ -1304,7 +1305,16 @@ def _set_inside_loop_xor_conditions(
     enclosing loop's counter variable wasn't created (which can
     happen for tau-body loops the wiring step skipped) or if the
     XOR has more than two branches (range conditions on multi-way
-    XORs are a follow-up)."""
+    XORs are a follow-up).
+
+    ``variant_var_name`` overrides the variable the guards test —
+    used by the model-family synthesizer, whose variants live in the
+    ``family_variant`` enumeration; the ids/keys in ``tree_xor_id``,
+    ``enclosing_loop_id``, ``variants`` and ``loop_counters`` only
+    need to be mutually consistent (this function just looks them
+    up)."""
+    if variant_var_name is None:
+        variant_var_name = _VARIANT_VAR_NAME
     counter = loop_counters.get(enclosing_loop_id)
     if counter is None or n_branches > 2:
         # No counter to combine with, or multi-way XOR — fall back
@@ -1344,20 +1354,20 @@ def _set_inside_loop_xor_conditions(
                 if upper >= m_v and lower <= 0:
                     # Trivial whole-range — this branch is the only
                     # one this variant ever takes.
-                    clause = f"{_VARIANT_VAR_NAME} == {v.variant_id}"
+                    clause = f"{variant_var_name} == {v.variant_id}"
                 elif upper >= m_v:
                     clause = (
-                        f"{_VARIANT_VAR_NAME} == {v.variant_id} "
+                        f"{variant_var_name} == {v.variant_id} "
                         f"&& {counter_name} > {lower}"
                     )
                 elif lower <= 0:
                     clause = (
-                        f"{_VARIANT_VAR_NAME} == {v.variant_id} "
+                        f"{variant_var_name} == {v.variant_id} "
                         f"&& {counter_name} <= {upper}"
                     )
                 else:
                     clause = (
-                        f"{_VARIANT_VAR_NAME} == {v.variant_id} "
+                        f"{variant_var_name} == {v.variant_id} "
                         f"&& {counter_name} > {lower} "
                         f"&& {counter_name} <= {upper}"
                     )
