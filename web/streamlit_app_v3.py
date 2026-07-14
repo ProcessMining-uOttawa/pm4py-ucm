@@ -41,6 +41,19 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 import streamlit as st
 
+# Make the in-repo package win over any environment-installed copy.
+# The main-file shim launches this app with ``sys.path[0]`` set to the
+# ``web/`` directory, so a bare ``import pm4py_ucm`` would resolve to a
+# site-packages install. On Streamlit Cloud the app *code* is pulled on
+# every push but the virtualenv is only rebuilt when requirements
+# change, so that install can lag the checkout by several releases
+# (missing new APIs / metrics). Prepending the repo root guarantees the
+# app always imports the current checkout's ``pm4py_ucm``.
+import sys as _sys
+_REPO_ROOT = str(Path(__file__).resolve().parent.parent)
+if _REPO_ROOT not in _sys.path:
+    _sys.path.insert(0, _REPO_ROOT)
+
 import pm4py
 import pm4py_ucm
 from pm4py_ucm.algo.discovery.scenarios import reports as _reports
