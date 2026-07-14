@@ -2147,6 +2147,8 @@ with compare_tab:
             )
 
         # ---- models side by side ----------------------------------------
+        st.caption("Double-click either model to open it full-size in a "
+                   "new browser tab.")
         _imc = st.columns(2)
         for _col, _tag, _idx, _cell in (
                 (_imc[0], "A", _ia, _A), (_imc[1], "B", _ib, _B)):
@@ -2159,8 +2161,21 @@ with compare_tab:
                     f"({_cell.coverage * 100:.1f}% of the log)"
                 )
                 if _png is not None:
-                    st.image(_png, caption=_cap,
-                             use_container_width=True)
+                    # data-opentab="1" opts into the shared double-click
+                    # handler (installed by the Model tab, which always
+                    # renders before this tab) so the model opens in a
+                    # new tab — the same behaviour as the Model tab.
+                    _cb64 = base64.b64encode(_png).decode("ascii")
+                    st.markdown(
+                        f'<img src="data:image/png;base64,{_cb64}" '
+                        f'style="max-width:100%; height:auto; '
+                        f'cursor: zoom-in;" '
+                        f'data-opentab="1" '
+                        f'title="Double-click to open in a new browser tab" '
+                        f'alt="Compare {_tag} model" />',
+                        unsafe_allow_html=True,
+                    )
+                    st.caption(_cap)
                 else:
                     st.caption(_cap + " — rendering unavailable")
 
