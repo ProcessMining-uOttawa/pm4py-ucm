@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (web app)
+
+- **The deployed app now always imports the current checkout's
+  `pm4py_ucm`.** Launched via its main-file shim, the app's
+  `sys.path[0]` was the `web/` directory, so `import pm4py_ucm`
+  resolved to a site-packages copy — which on Streamlit Cloud lags the
+  git checkout (the app code is pulled on every push, but the venv is
+  only rebuilt when `requirements.txt` changes). That mismatch showed
+  up as the old performance-overlay metric list and
+  `discover_ucm_family() got an unexpected keyword argument
+  'progress_callback'`. The app now prepends the repo root to
+  `sys.path` before importing, so it uses the checkout's package code.
+
 ## [0.5.2] — 2026-07-14
 
 ### Added (web app)
