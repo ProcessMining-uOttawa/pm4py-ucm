@@ -1146,8 +1146,9 @@ def _representative_value_for_variant(
         mode = series.mode()
         if mode.empty:
             return None
-        v = mode.iloc[0]
-        return "true" if v in (True, 1, "true", "True") else "false"
+        # Case-insensitive: a boolean column may carry raw "TRUE" /
+        # "False" / "1" spellings (issue #6).
+        return "true" if _dm._boolean_value(mode.iloc[0]) else "false"
     if spec.type == "integer":
         # Numeric — use median, apply scale factor, round to int.
         try:

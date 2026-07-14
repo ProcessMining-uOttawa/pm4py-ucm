@@ -10,7 +10,8 @@ this module:
    instead of being lifted into the ``case:`` prefix).
 2. Classifies each attribute into a jUCMNav-compatible type:
 
-   * ``boolean`` — for ``{True, False}`` attributes;
+   * ``boolean`` — for ``{True, False}`` attributes (native bool,
+     ``0``/``1``, or ``"true"``/``"false"`` strings in any case);
    * ``integer`` — for integer-valued numerics;
    * ``integer`` with a scale factor — for real numbers, multiplied
      by the smallest power of 10 that makes every observed value
@@ -48,6 +49,34 @@ import warnings
 #: timestamps, and high-cardinality strings). Synthesizer treats it
 #: as "abandon data-driven mining with a warning".
 NO_USEFUL_ATTRIBUTES = "NO_USEFUL_ATTRIBUTES"
+
+
+def _boolean_value(v):
+    """Interpret ``v`` as a boolean literal, **case-insensitively** for
+    strings.
+
+    Recognises native ``bool``, the numbers ``0`` / ``1``, and the
+    strings ``"true"`` / ``"false"`` / ``"0"`` / ``"1"`` in any case — so
+    ``"True"``, ``"FALSE"`` and ``"TRUE"`` all classify. Returns ``None``
+    when ``v`` is not boolean-like (used both to classify a column as
+    boolean and to encode its values for sklearn)."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        s = v.strip().casefold()
+        if s in ("true", "1"):
+            return True
+        if s in ("false", "0"):
+            return False
+        return None
+    try:
+        if v == 1:
+            return True
+        if v == 0:
+            return False
+    except Exception:
+        pass
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -313,12 +342,14 @@ def extract_case_features(
         if nunique <= 1:
             columns_to_drop.append(col)
             continue  # constants carry no information
-        # Booleans: exactly {True, False} (allowing pandas nullable bool too).
+        # Booleans: every value is a boolean literal — native bool,
+        # 0/1, or "true"/"false" in ANY case ("True", "FALSE", "TRUE"),
+        # with both truth values present. Case-insensitive so mixed
+        # spellings still classify as a boolean variable (issue #6)
+        # rather than a two-value enumeration.
         non_null = series.dropna()
-        if non_null.dtype == bool or (
-            set(non_null.unique()).issubset({True, False, 0, 1, "true", "false"})
-            and nunique <= 2
-        ):
+        bool_values = {_boolean_value(v) for v in non_null.unique()}
+        if bool_values == {True, False}:
             spec = AttributeSpec(
                 source_name=col,
                 jucmnav_name=_sanitise_jucmnav_name(col),
@@ -382,9 +413,8 @@ def extract_case_features(
         col = spec.source_name
         series = per_case[col]
         if spec.type == "boolean":
-            encoded[jname] = series.map(
-                lambda v: 1 if v in (True, 1, "true", "True") else
-                          (0 if v in (False, 0, "false", "False") else None)
+            encoded[jname] = series.map(_boolean_value).map(
+                lambda b: None if b is None else (1 if b else 0)
             ).astype("float")
             feature_columns.append((jname, jname))
         elif spec.type == "integer":
