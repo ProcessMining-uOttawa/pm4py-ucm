@@ -974,18 +974,60 @@ def _fmt_duration_s(seconds) -> str:
 
 st.set_page_config(page_title="PM4Py-UCM (V3 · Families)", layout="wide")
 st.title("PM4Py-UCM")
-_pkg_version = pm4py_ucm.__version__
-_pkg_release_date = getattr(pm4py_ucm, "__release_date__", None)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _latest_release() -> Optional[Dict[str, str]]:
+    """The repository's latest published GitHub release —
+    ``{"tag", "date", "url"}`` — or ``None`` when the API is
+    unreachable (offline, rate-limited). Cached for an hour. The
+    deployed code may be ahead of or behind the latest release, so
+    the header quotes the RELEASE, not the package version — the
+    version constant may never have been published under that tag."""
+    import json
+    import urllib.request
+    try:
+        req = urllib.request.Request(
+            "https://api.github.com/repos/ProcessMining-uOttawa/"
+            "pm4py-ucm/releases/latest",
+            headers={"Accept": "application/vnd.github+json",
+                     "User-Agent": "pm4py-ucm-streamlit"},
+        )
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.load(resp)
+        if not data.get("tag_name"):
+            return None
+        return {
+            "tag": str(data["tag_name"]),
+            "date": str(data.get("published_at") or "")[:10],
+            "url": str(
+                data.get("html_url")
+                or "https://github.com/ProcessMining-uOttawa/pm4py-ucm/"
+                   "releases/latest"
+            ),
+        }
+    except Exception:
+        return None
+
+
+_release = _latest_release()
+if _release is not None:
+    _release_text = (
+        f"Latest release: [pm4py-ucm {_release['tag']}]({_release['url']})"
+        + (f", {_release['date']}" if _release["date"] else "")
+    )
+else:  # offline / rate-limited: a link that always resolves
+    _release_text = (
+        "Releases: [github.com/ProcessMining-uOttawa/pm4py-ucm]"
+        "(https://github.com/ProcessMining-uOttawa/pm4py-ucm/"
+        "releases/latest)"
+    )
 st.caption(
     "Mine a Use Case Map model from an XES or CSV event log, "
     "synthesize executable jUCMNav scenarios with concurrency-aware "
     "variant clustering, and mine attribute-partitioned model "
     "families with comparative statistics reports. "
-    f"Running [pm4py-ucm {_pkg_version}]"
-    f"(https://github.com/ProcessMining-uOttawa/pm4py-ucm/releases/"
-    f"tag/v{_pkg_version})"
-    + (f", released {_pkg_release_date}" if _pkg_release_date else "")
-    + " — by [Daniel Amyot](https://damyot.github.io/), "
+    f"{_release_text} — by [Daniel Amyot](https://damyot.github.io/), "
     "University of Ottawa, Canada."
 )
 
@@ -1105,10 +1147,19 @@ with st.sidebar:
     if "applied_decomp" not in st.session_state:
         st.session_state["applied_decomp"] = candidate_spec
     if candidate_spec != st.session_state["applied_decomp"]:
-        st.warning("Decomposition has unapplied changes.")
+        # Applying must NOT st.rerun(): a rerun aborts the script
+        # before every widget below this point (the rest of the
+        # sidebar — resource attribute, overlays, the Notation radio —
+        # and the whole main body) is instantiated, and Streamlit
+        # DROPS the state of widgets skipped in a run. That is what
+        # silently flipped the Notation radio back to UCM whenever a
+        # decomposition change was applied. Updating the session value
+        # and falling through lets THIS run continue with the new
+        # spec; the button disappears by itself on the next run.
         if st.button("Apply changes", type="primary"):
             st.session_state["applied_decomp"] = candidate_spec
-            st.rerun()
+        else:
+            st.warning("Decomposition has unapplied changes.")
 
     st.subheader("Performers")
     _RES_BUILTIN = ["org:role", "org:resource"]

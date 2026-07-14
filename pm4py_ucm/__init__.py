@@ -67,6 +67,3 @@ __all__ = [
 ]
 
 __version__ = "0.6.0"
-#: Release date of :data:`__version__` (ISO) — update together with
-#: the version bump; surfaced in the web app's header.
-__release_date__ = "2026-07-13"

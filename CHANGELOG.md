@@ -52,11 +52,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   They work on any timestamped log — the activity-level time overlay
   for single-timestamp logs, matching the Compare tab's statistics.
 - **Web app header** — the title is simply *PM4Py-UCM*; the caption
-  states the running pm4py-ucm release (linked to its GitHub release
-  page), the release date (new `pm4py_ucm.__release_date__`), and the
-  author. The Model tab gained an **"Open image in new tab"** button
-  so complex models can be zoomed in a full browser tab (base64 →
-  Blob URL, same technique as the HTML report).
+  states the repository's **latest published release** (queried from
+  the GitHub API, cached an hour, with an always-valid
+  `releases/latest` fallback when offline) and the author. The Model
+  tab gained an **"Open image in new tab"** button so complex models
+  can be zoomed in a full browser tab (base64 → Blob URL behind a
+  plain `target="_blank"` anchor — ordinary link navigation, immune
+  to popup blockers).
+
+### Fixed (web app)
+
+- **Applying a decomposition change no longer resets the sidebar.**
+  The "Apply changes" button called `st.rerun()`, which aborts the
+  script before the widgets below it are instantiated — and Streamlit
+  drops the state of widgets skipped in a run. The Notation radio
+  silently flipped back to UCM (the diagram re-rendered as UCM while
+  the user had selected BPMN), and the resource-attribute, min-support
+  and overlay selections were reset the same way. Applying now
+  updates the session value and lets the run continue — no rerun, no
+  state loss. Reproduced and verified fixed with a headless
+  `streamlit.testing.v1.AppTest` flow.
 
 ## [0.5.0] — 2026-07-12
 
