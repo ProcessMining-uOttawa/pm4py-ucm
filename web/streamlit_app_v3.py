@@ -880,7 +880,15 @@ def _open_image_in_tab_button(png_b64: str, label: str = "Open image "
     with ``target="_blank"`` — ordinary link navigation, so no popup
     blocker is involved (unlike ``window.open``). Runs inside the
     ``components.html`` iframe, whose sandbox allows popups escaping
-    to a new tab."""
+    to a new tab.
+
+    The component also installs — once per page, in the PARENT page's
+    own JS realm so it survives component reloads — a delegated
+    double-click listener: any ``<img data-opentab="1">`` on the page
+    opens in a new tab the same way. The handler reads the image's
+    *current* ``src`` at click time, so re-rendered models never open
+    stale; a delegated document-level listener survives Streamlit
+    re-rendering the ``st.markdown`` image element on every rerun."""
     import streamlit.components.v1 as _components
     _components.html(
         f"""
@@ -900,6 +908,27 @@ def _open_image_in_tab_button(png_b64: str, label: str = "Open image "
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   document.getElementById("ot").href =
     URL.createObjectURL(new Blob([bytes], {{type: "image/png"}}));
+
+  // Double-click-to-open on marked images of the parent page. The
+  // listener is injected as a <script> element so it runs in the
+  // parent realm (functions from a reloaded component iframe can die
+  // with it); the window flag keeps it single-instance.
+  try {{
+    const P = window.parent;
+    if (P && P.document && !P.__pm4pyImgDblclick) {{
+      P.__pm4pyImgDblclick = true;
+      const s = P.document.createElement("script");
+      s.textContent = "document.addEventListener('dblclick'," +
+        "function(e){{var t=e.target;" +
+        "if(!(t&&t.tagName==='IMG'&&t.getAttribute('data-opentab')==='1'))return;" +
+        "var parts=t.src.split(',');if(parts.length<2)return;" +
+        "var bin=atob(parts[1]);var b=new Uint8Array(bin.length);" +
+        "for(var i=0;i<bin.length;i++)b[i]=bin.charCodeAt(i);" +
+        "window.open(URL.createObjectURL(" +
+        "new Blob([b],{{type:'image/png'}})),'_blank');}},true);";
+      P.document.body.appendChild(s);
+    }}
+  }} catch (err) {{ /* cross-origin embedding: button still works */ }}
 }})();
 </script>""",
         height=height,
@@ -1405,14 +1434,16 @@ with model_tab:
     st.markdown(
         f'<img src="data:image/png;base64,{_b64}" '
         f'width="{_DISPLAY_WIDTH_PX}" '
-        f'style="max-width:100%; height:auto;" '
+        f'style="max-width:100%; height:auto; cursor: zoom-in;" '
+        f'data-opentab="1" '
+        f'title="Double-click to open in a new browser tab" '
         f'alt="Mined {notation} model" />',
         unsafe_allow_html=True,
     )
     st.caption(
         f"Mined model ({notation}, decomposition={decomposition_preset}) — "
-        "open it in its own browser tab to zoom complex models more "
-        "easily."
+        "double-click the image (or use the button below) to open it "
+        "in its own browser tab and zoom complex models more easily."
     )
 
     d1, d2, d3 = st.columns(3)

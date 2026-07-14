@@ -58,7 +58,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tab gained an **"Open image in new tab"** button so complex models
   can be zoomed in a full browser tab (base64 → Blob URL behind a
   plain `target="_blank"` anchor — ordinary link navigation, immune
-  to popup blockers).
+  to popup blockers). **Double-clicking the model image does the
+  same** (zoom-in cursor + tooltip hint; a delegated listener in the
+  page's own JS realm survives Streamlit reruns and always opens the
+  image's current render).
 
 ### Fixed (web app)
 
