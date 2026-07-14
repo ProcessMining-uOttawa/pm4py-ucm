@@ -29,7 +29,7 @@ enough to be ignored gracefully; the round-trip is UCM-only.
 from __future__ import annotations
 
 import re
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as ET  # nosec B405 — DTDs rejected in _forbid_dtd
 from typing import Dict, IO, List, Optional, Tuple, Union
 
 from ...obj import UCM
@@ -63,21 +63,71 @@ _INT_RE = re.compile(r"^\d+$")
 # Public entry points
 # ---------------------------------------------------------------------------
 
+def _forbid_dtd(data: Union[str, bytes]) -> None:
+    """Reject a DTD / ``<!DOCTYPE>`` before parsing untrusted ``.jucm``
+    input.
+
+    A DTD is the vehicle for XML entity-expansion ("billion laughs")
+    denial-of-service, which stdlib :mod:`xml.etree.ElementTree`
+    processes. jUCMNav files never carry one, so we refuse it outright —
+    a zero-dependency alternative to ``defusedxml``. Only the *prolog*
+    (everything before the root element) is scanned: a DOCTYPE can only
+    appear there, and because XML must escape ``<`` inside element
+    content, a literal ``<!DOCTYPE`` elsewhere cannot be mistaken for
+    markup, so there are no false positives on well-formed files."""
+    if isinstance(data, bytes):
+        lt, pi_o, pi_c = b"<", b"<?", b"?>"
+        cmt_o, cmt_c = b"<!--", b"-->"
+        doctype, entity = b"<!DOCTYPE", b"<!ENTITY"
+    else:
+        lt, pi_o, pi_c = "<", "<?", "?>"
+        cmt_o, cmt_c = "<!--", "-->"
+        doctype, entity = "<!DOCTYPE", "<!ENTITY"
+    i, n = 0, len(data)
+    while i < n:
+        j = data.find(lt, i)
+        if j == -1:
+            return
+        if data.startswith(pi_o, j):            # XML declaration or PI
+            k = data.find(pi_c, j)
+            if k == -1:
+                return
+            i = k + len(pi_c)
+        elif data.startswith(cmt_o, j):         # comment
+            k = data.find(cmt_c, j)
+            if k == -1:
+                return
+            i = k + len(cmt_c)
+        elif data.startswith(doctype, j) or data.startswith(entity, j):
+            raise ValueError(
+                "DTD/DOCTYPE declarations are not allowed in .jucm input "
+                "(guards against XML entity-expansion attacks)"
+            )
+        else:
+            return  # reached the root element — the prolog is over
+
+
 def apply(
     file_path: Union[str, IO],
     parameters: Optional[dict] = None,
 ) -> UCM:
     """Parse a ``.jucm`` file and return the corresponding :class:`UCM`."""
     if hasattr(file_path, "read"):
-        tree = ET.parse(file_path)
+        data = file_path.read()
     else:
-        tree = ET.parse(str(file_path))
-    return _parse_root(tree.getroot())
+        with open(str(file_path), "rb") as fh:
+            data = fh.read()
+    _forbid_dtd(data)
+    # _forbid_dtd() above rejects DTDs, so there are no custom entities
+    # for ElementTree to expand (no billion-laughs); B314 is mitigated.
+    return _parse_root(ET.fromstring(data))  # nosec B314
 
 
 def parse_string(xml_text: str) -> UCM:
     """Parse a UCM model from a ``.jucm`` XML string."""
-    return _parse_root(ET.fromstring(xml_text))
+    _forbid_dtd(xml_text)
+    # DTDs are rejected by _forbid_dtd() above; B314 is mitigated.
+    return _parse_root(ET.fromstring(xml_text))  # nosec B314
 
 
 # ---------------------------------------------------------------------------

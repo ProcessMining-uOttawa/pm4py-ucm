@@ -7,7 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **The `.jucm` importer refuses DTDs / `<!DOCTYPE>` before parsing**
+  (`_forbid_dtd`), so untrusted `.jucm` input can no longer trigger XML
+  entity-expansion ("billion laughs") denial-of-service through stdlib
+  `ElementTree` — a zero-dependency alternative to `defusedxml`. (XES
+  event-log parsing is delegated to PM4Py.)
+- Marked the component-colour `hashlib.md5` as `usedforsecurity=False`
+  (it only maps a name to a palette index — non-cryptographic).
+- Added `bandit` to the `[dev]` extra for a local static scan
+  (`bandit -r pm4py_ucm web -ll`); the medium/high baseline is clean.
+
 ### Fixed (web app)
+
+- **The header caption shows the running `pm4py_ucm.__version__`**
+  instead of the latest GitHub release, so it reflects the build that is
+  actually executing (and surfaces any environment/code mismatch at a
+  glance).
+- **The deployed app now always imports the current checkout's
+  `pm4py_ucm`.** Launched via its main-file shim, the app's
+  `sys.path[0]` was the `web/` directory, so `import pm4py_ucm`
+  resolved to a site-packages copy — which on Streamlit Cloud lags the
+  git checkout (the app code is pulled on every push, but the venv is
+  only rebuilt when `requirements.txt` changes). That mismatch showed
+  up as the old performance-overlay metric list and
+  `discover_ucm_family() got an unexpected keyword argument
+  'progress_callback'`. The app now prepends the repo root to
+  `sys.path` before importing, so it uses the checkout's package code.
 
 - **The deployed app now always imports the current checkout's
   `pm4py_ucm`.** Launched via its main-file shim, the app's
