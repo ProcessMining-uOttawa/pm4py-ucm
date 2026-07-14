@@ -210,6 +210,7 @@ def cluster(
     log: Any,
     tree,
     coarsen_loops: bool = True,
+    progress_callback=None,
 ) -> ClusteringResult:
     """Replay every case in ``log`` on ``tree`` and group by signature.
 
@@ -226,6 +227,10 @@ def cluster(
         ``{0, 1, >=2}`` before clustering. Pass ``False`` to keep every
         loop iteration's internal choices distinct — useful for the
         loop-sensitivity row of the empirical table.
+    progress_callback
+        Optional ``callback(stage, done, total)`` fired per replayed
+        case (throttled) — replay is the pipeline's dominant cost on
+        large logs. See :mod:`pm4py_ucm.util.progress`.
 
     Returns
     -------
@@ -233,8 +238,11 @@ def cluster(
         Hard partition over conforming cases, plus a noise bucket and
         summary statistics.
     """
+    from ....util.progress import Ticker
+
     cases = _normalise_log(log)
     node_ids = _cs.assign_node_ids(tree)
+    ticker = Ticker(progress_callback, "Replaying cases", len(cases))
 
     # First pass — replay every trace, bucket by signature.
     buckets: Dict[tuple, List[str]] = {}
@@ -255,6 +263,7 @@ def cluster(
         )
         if signature == _cs.NOFIT:
             noise.append(case_id)
+            ticker.tick()
             continue
         buckets.setdefault(signature, []).append(case_id)
         bucket_sequences.setdefault(signature, set()).add(seq_key)
@@ -275,6 +284,8 @@ def cluster(
             existing = cluster_xor.setdefault(xor_nid, {})
             for branch, cnt in branch_counts.items():
                 existing[branch] = existing.get(branch, 0) + cnt
+        ticker.tick()
+    ticker.finish()
 
     # Second pass — order buckets by frequency, assign v1, v2, ...,
     # compute derived artifacts.

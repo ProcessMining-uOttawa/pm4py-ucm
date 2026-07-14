@@ -164,6 +164,7 @@ def _mine(
     overlay_edges: Tuple[str, ...],
     _file_hash: str,
     _status=None,
+    _progress=None,
 ) -> Dict[str, Any]:
     """Read the event log and mine a UCM. Returns .jucm bytes + metadata.
 
@@ -243,7 +244,7 @@ def _mine(
         )
         params["process_tree"] = tree
 
-        _phase("Converting process tree to UCM...")
+        _phase("Mining performers & converting tree to UCM...")
         ucm = pm4py_ucm.discover_ucm_inductive(
             log, parameters=params, decomposition=decomp_arg,
         )
@@ -376,6 +377,7 @@ def _synthesize(
     min_support: float,
     _file_hash: str,
     _status=None,
+    _progress=None,
 ) -> Dict[str, Any]:
     """Run the full concurrency-aware variant + scenario pipeline.
 
@@ -425,13 +427,15 @@ def _synthesize(
     else:
         decomp_arg = dict(decomposition_spec)
 
-    _phase("Converting process tree to UCM...")
+    _phase("Mining performers & converting tree to UCM...")
     ucm = pm4py_ucm.discover_ucm_inductive(
         log, parameters=params, decomposition=decomp_arg,
     )
 
-    _phase("Clustering variants...")
-    clustering = _clustering_mod.cluster(log, tree)
+    _phase("Clustering variants (concurrency-aware replay)...")
+    clustering = _clustering_mod.cluster(
+        log, tree, progress_callback=_progress,
+    )
 
     _phase(f"Synthesizing {condition_strategy} scenarios...")
     synth_kwargs: Dict[str, Any] = dict(
@@ -606,6 +610,7 @@ def _mine_family(
     overlay_edges: Tuple[str, ...],
     _file_hash: str,
     _status=None,
+    _progress=None,
 ) -> Dict[str, Any]:
     """Mine the family and produce the notation-independent
     deliverables in one pass: the per-cell zip, the combined .jucm,
@@ -653,6 +658,7 @@ def _mine_family(
             if include_values else None
         ),
         parameters=params,
+        progress_callback=_progress,
     )
 
     if overlay_nodes or overlay_edges:
@@ -694,6 +700,7 @@ def _mine_family(
             family, mode="umbrella", dedup=bool(dedup),
             node_metrics=list(overlay_nodes),
             edge_metrics=list(overlay_edges),
+            progress_callback=_progress,
         )
         umbrella_bytes = serialize_to_string(umbrella).encode("utf-8")
         dynamic_stubs = [
@@ -710,7 +717,9 @@ def _mine_family(
     # MUST be computed here, while family.log_df still exists (the
     # FamilyStats object itself carries no DataFrames and stays small).
     _phase("Computing family statistics...")
-    family_stats = pm4py_ucm.compute_family_stats(family)
+    family_stats = pm4py_ucm.compute_family_stats(
+        family, progress_callback=_progress,
+    )
 
     # The statistics above were the last consumer of the full log —
     # drop it before this result is pickled into the cache so the
@@ -861,6 +870,115 @@ def _heat_styler(df, formats=None):
         return df
 
 
+def _open_image_in_tab_button(png_b64: str, label: str = "Open image "
+                              "in new tab ⧉", height: int = 46) -> None:
+    """A button-styled link that opens an embedded PNG in its own
+    browser tab at full resolution — much easier to zoom and pan
+    complex models than the inline preview. A ``data:`` URI cannot be
+    a top-level tab, so the embedded JS converts the base64 to a Blob
+    URL **at render time** and sets it as a plain anchor ``href``
+    with ``target="_blank"`` — ordinary link navigation, so no popup
+    blocker is involved (unlike ``window.open``). Runs inside the
+    ``components.html`` iframe, whose sandbox allows popups escaping
+    to a new tab.
+
+    The component also installs — once per page, in the PARENT page's
+    own JS realm so it survives component reloads — a delegated
+    double-click listener: any ``<img data-opentab="1">`` on the page
+    opens in a new tab the same way. The handler reads the image's
+    *current* ``src`` at click time, so re-rendered models never open
+    stale; a delegated document-level listener survives Streamlit
+    re-rendering the ``st.markdown`` image element on every rerun."""
+    import streamlit.components.v1 as _components
+    _components.html(
+        f"""
+<a id="ot" target="_blank" rel="noopener"
+  style="font-family: 'Source Sans Pro', sans-serif; font-size: 0.9rem;
+  display: block; box-sizing: border-box; text-align: center;
+  text-decoration: none; padding: 0.45rem 0.9rem; border-radius: 0.5rem;
+  border: 1px solid rgba(49, 51, 63, 0.2); background: white;
+  color: rgb(49, 51, 63); cursor: pointer; width: 100%;"
+  onmouseover="this.style.borderColor='#ff4b4b';this.style.color='#ff4b4b'"
+  onmouseout="this.style.borderColor='rgba(49,51,63,.2)';this.style.color='rgb(49,51,63)'"
+>{label}</a>
+<script>
+(() => {{
+  const bin = atob("{png_b64}");
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  document.getElementById("ot").href =
+    URL.createObjectURL(new Blob([bytes], {{type: "image/png"}}));
+
+  // Double-click-to-open on marked images of the parent page. The
+  // listener is injected as a <script> element so it runs in the
+  // parent realm (functions from a reloaded component iframe can die
+  // with it); the window flag keeps it single-instance.
+  try {{
+    const P = window.parent;
+    if (P && P.document && !P.__pm4pyImgDblclick) {{
+      P.__pm4pyImgDblclick = true;
+      const s = P.document.createElement("script");
+      s.textContent = "document.addEventListener('dblclick'," +
+        "function(e){{var t=e.target;" +
+        "if(!(t&&t.tagName==='IMG'&&t.getAttribute('data-opentab')==='1'))return;" +
+        "var parts=t.src.split(',');if(parts.length<2)return;" +
+        "var bin=atob(parts[1]);var b=new Uint8Array(bin.length);" +
+        "for(var i=0;i<bin.length;i++)b[i]=bin.charCodeAt(i);" +
+        "window.open(URL.createObjectURL(" +
+        "new Blob([b],{{type:'image/png'}})),'_blank');}},true);";
+      P.document.body.appendChild(s);
+    }}
+  }} catch (err) {{ /* cross-origin embedding: button still works */ }}
+}})();
+</script>""",
+        height=height,
+    )
+
+
+class _ProgressUI:
+    """A ``progress_callback(stage, done, total)`` that renders a
+    progress bar with a remaining-time estimate inside an
+    ``st.status`` container.
+
+    The long pipeline loops (case replay, per-cell family mining,
+    umbrella replay, family statistics) accept this callback and fire
+    it with known totals, so the bar shows genuine fractions rather
+    than a spinner. Repaints are throttled to ~3/second — every
+    update is a websocket message, and unthrottled per-item updates
+    would slow down the very work being measured. Pass instances into
+    the cached miners under a leading-underscore parameter so they
+    stay out of the cache keys (same convention as ``_status``)."""
+
+    def __init__(self, container) -> None:
+        self._container = container
+        self._bar = None
+        self._stage: Optional[str] = None
+        self._t0 = 0.0
+        self._last_paint = 0.0
+
+    def __call__(self, stage: str, done: int, total: int) -> None:
+        import time as _time
+        now = _time.time()
+        if stage != self._stage:
+            self._stage, self._t0 = stage, now
+            self._last_paint = 0.0
+        if done < total and now - self._last_paint < 0.35:
+            return
+        self._last_paint = now
+        frac = (done / total) if total else 1.0
+        text = f"{stage} — {done:,}/{total:,}"
+        if 0 < done < total:
+            elapsed = now - self._t0
+            remaining = elapsed * (total - done) / done
+            text += f" · about {_fmt_duration_s(remaining)} left"
+        if self._bar is None:
+            self._bar = self._container.progress(
+                min(1.0, frac), text=text,
+            )
+        else:
+            self._bar.progress(min(1.0, frac), text=text)
+
+
 def _fmt_duration_s(seconds) -> str:
     """Humanized duration for Streamlit tables (mirrors the report)."""
     if seconds is None or pd.isna(seconds):
@@ -884,13 +1002,62 @@ def _fmt_duration_s(seconds) -> str:
 # ---------------------------------------------------------------------------
 
 st.set_page_config(page_title="PM4Py-UCM (V3 · Families)", layout="wide")
-st.title("PM4Py-UCM · V3")
+st.title("PM4Py-UCM")
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _latest_release() -> Optional[Dict[str, str]]:
+    """The repository's latest published GitHub release —
+    ``{"tag", "date", "url"}`` — or ``None`` when the API is
+    unreachable (offline, rate-limited). Cached for an hour. The
+    deployed code may be ahead of or behind the latest release, so
+    the header quotes the RELEASE, not the package version — the
+    version constant may never have been published under that tag."""
+    import json
+    import urllib.request
+    try:
+        req = urllib.request.Request(
+            "https://api.github.com/repos/ProcessMining-uOttawa/"
+            "pm4py-ucm/releases/latest",
+            headers={"Accept": "application/vnd.github+json",
+                     "User-Agent": "pm4py-ucm-streamlit"},
+        )
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.load(resp)
+        if not data.get("tag_name"):
+            return None
+        return {
+            "tag": str(data["tag_name"]),
+            "date": str(data.get("published_at") or "")[:10],
+            "url": str(
+                data.get("html_url")
+                or "https://github.com/ProcessMining-uOttawa/pm4py-ucm/"
+                   "releases/latest"
+            ),
+        }
+    except Exception:
+        return None
+
+
+_release = _latest_release()
+if _release is not None:
+    _release_text = (
+        f"Latest release: [pm4py-ucm {_release['tag']}]({_release['url']})"
+        + (f", {_release['date']}" if _release["date"] else "")
+    )
+else:  # offline / rate-limited: a link that always resolves
+    _release_text = (
+        "Releases: [github.com/ProcessMining-uOttawa/pm4py-ucm]"
+        "(https://github.com/ProcessMining-uOttawa/pm4py-ucm/"
+        "releases/latest)"
+    )
 st.caption(
     "Mine a Use Case Map model from an XES or CSV event log, "
     "synthesize executable jUCMNav scenarios with concurrency-aware "
     "variant clustering, and mine attribute-partitioned model "
-    "families with comparative statistics reports. V1 (model-only) "
-    "lives at `web/streamlit_app.py`."
+    "families with comparative statistics reports. "
+    f"{_release_text} — by [Daniel Amyot](https://damyot.github.io/), "
+    "University of Ottawa, Canada."
 )
 
 
@@ -1009,10 +1176,19 @@ with st.sidebar:
     if "applied_decomp" not in st.session_state:
         st.session_state["applied_decomp"] = candidate_spec
     if candidate_spec != st.session_state["applied_decomp"]:
-        st.warning("Decomposition has unapplied changes.")
+        # Applying must NOT st.rerun(): a rerun aborts the script
+        # before every widget below this point (the rest of the
+        # sidebar — resource attribute, overlays, the Notation radio —
+        # and the whole main body) is instantiated, and Streamlit
+        # DROPS the state of widgets skipped in a run. That is what
+        # silently flipped the Notation radio back to UCM whenever a
+        # decomposition change was applied. Updating the session value
+        # and falling through lets THIS run continue with the new
+        # spec; the button disappears by itself on the next run.
         if st.button("Apply changes", type="primary"):
             st.session_state["applied_decomp"] = candidate_spec
-            st.rerun()
+        else:
+            st.warning("Decomposition has unapplied changes.")
 
     st.subheader("Performers")
     _RES_BUILTIN = ["org:role", "org:resource"]
@@ -1048,8 +1224,11 @@ with st.sidebar:
         options=list(_NODE_METRICS), default=[],
         help=(
             "frequency = executions; case_coverage = cases containing "
-            "the activity; the time metrics are activity service "
-            "times and need an interval log (start_timestamp column)."
+            "the activity; mean/median/total_time are activity service "
+            "times and need an interval log (start_timestamp column); "
+            "the sojourn_* metrics are the time since the case's "
+            "previous event (≈ waiting + service) and work on any "
+            "timestamped log."
         ),
     )[:2])
     overlay_edges = tuple(st.multiselect(
@@ -1209,13 +1388,14 @@ decomposition_spec = st.session_state["applied_decomp"]
 
 # ---- Mine UCM (for Model tab) ----------------------------------------------
 try:
-    with st.status("Mining UCM...", expanded=False) as status:
+    with st.status("Mining UCM...", expanded=True) as status:
         mined = _mine(
             log_bytes, log_kind, csv_columns,
             decomposition_spec, resource_attribute,
             effective_min_support, noise_threshold,
             overlay_nodes, overlay_edges,
             file_hash, _status=status,
+            _progress=_ProgressUI(status),
         )
         status.update(label="Done.", state="complete")
 except Exception as exc:
@@ -1254,22 +1434,27 @@ with model_tab:
     st.markdown(
         f'<img src="data:image/png;base64,{_b64}" '
         f'width="{_DISPLAY_WIDTH_PX}" '
-        f'style="max-width:100%; height:auto;" '
+        f'style="max-width:100%; height:auto; cursor: zoom-in;" '
+        f'data-opentab="1" '
+        f'title="Double-click to open in a new browser tab" '
         f'alt="Mined {notation} model" />',
         unsafe_allow_html=True,
     )
     st.caption(
         f"Mined model ({notation}, decomposition={decomposition_preset}) — "
-        "open in a new tab or zoom in for a closer look."
+        "double-click the image (or use the button below) to open it "
+        "in its own browser tab and zoom complex models more easily."
     )
 
-    d1, d2 = st.columns(2)
-    d1.download_button(
+    d1, d2, d3 = st.columns(3)
+    with d1:
+        _open_image_in_tab_button(_b64)
+    d2.download_button(
         "Download PNG", data=png_bytes,
         file_name=_safe_download_name(Path(log_name).stem, ".png"),
         mime="image/png",
     )
-    d2.download_button(
+    d3.download_button(
         "Download .jucm (no scenarios)", data=mined["jucm"],
         file_name=_safe_download_name(Path(log_name).stem, ".jucm"),
         mime="application/xml",
@@ -1376,7 +1561,7 @@ with scenarios_tab:
     if run:
         try:
             with st.status("Synthesizing scenarios...",
-                           expanded=False) as status:
+                           expanded=True) as status:
                 synth = _synthesize(
                     log_bytes, log_kind, csv_columns,
                     noise_threshold, condition_strategy,
@@ -1384,6 +1569,7 @@ with scenarios_tab:
                     group_name, decomposition_spec,
                     resource_attribute, effective_min_support,
                     file_hash, _status=status,
+                    _progress=_ProgressUI(status),
                 )
                 status.update(label="Done.", state="complete")
             st.session_state["synth_fp"] = _synth_fp
@@ -1673,7 +1859,7 @@ with family_tab:
             if run_family:
                 try:
                     with st.status("Mining model family...",
-                                   expanded=False) as status:
+                                   expanded=True) as status:
                         fam = _mine_family(
                             log_bytes, log_kind, csv_columns,
                             selected_attrs, int(family_min_cases),
@@ -1683,6 +1869,7 @@ with family_tab:
                             resource_attribute, effective_min_support,
                             family_dedup, overlay_nodes, overlay_edges,
                             file_hash, _status=status,
+                            _progress=_ProgressUI(status),
                         )
                         status.update(label="Done.", state="complete")
                     st.session_state["family_fp"] = _family_fp

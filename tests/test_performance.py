@@ -95,6 +95,31 @@ class TestAnnotate:
                 return md.value
         return None
 
+    def test_sojourn_annotations_on_single_timestamp_log(self):
+        # Sojourn (time since the case's previous event) needs no
+        # start_timestamp column — the one activity-level time overlay
+        # available on single-timestamp logs.
+        ucm = _ucm()
+        annotate_performance(
+            ucm, _log(),                      # no intervals
+            node_metrics=["sojourn_mean_time"],
+            edge_metrics=[],
+        )
+        texts = {
+            n.resp_def.name: self._perf(n)
+            for m in ucm.maps for n in m.nodes
+            if isinstance(n, UCM.RespRef)
+        }
+        assert texts["B"] == "soj avg 10.0m"
+        assert texts["D"] == "soj avg 10.0m"
+        # A case's first activity has no predecessor — no sojourn, and
+        # with only sojourn selected, no overlay at all.
+        assert texts["A"] is None
+        # The every-metric metadata layer carries the sojourn line too.
+        text = serialize_to_string(ucm)
+        assert ('<metadata name="perf_sojourn_mean_time" '
+                'value="10.0m"/>' in text)
+
     def test_activity_annotations(self):
         ucm = _ucm()
         annotate_performance(

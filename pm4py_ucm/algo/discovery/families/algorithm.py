@@ -124,6 +124,7 @@ def discover(
     ignore_value_case: bool = True,
     case_id_col: str = "case:concept:name",
     parameters: Optional[Dict[str, Any]] = None,
+    progress_callback=None,
 ) -> ModelFamily:
     """Mine a :class:`ModelFamily` from ``log`` partitioned by 1–2
     case-level attributes.
@@ -154,6 +155,10 @@ def discover(
         each cell's map is named after its value combination. The
         testing hook ``tree_miner`` (a ``callable(cell_df) -> tree``)
         replaces the default pm4py inductive miner.
+    progress_callback
+        Optional ``callback(stage, done, total)`` fired after each
+        mined cell — per-cell mining dominates the family pipeline's
+        cost. See :mod:`pm4py_ucm.util.progress`.
     """
     parameters = dict(parameters or {})
     tree_miner = parameters.pop("tree_miner", None)
@@ -181,6 +186,10 @@ def discover(
             "Lower min_cases or choose different attributes."
         )
 
+    from ....util.progress import Ticker
+    ticker = Ticker(progress_callback, "Mining one model per cell",
+                    len(part.cells), report_every=1)
+
     cells: List[FamilyCell] = []
     for pcell in part.cells:
         tree = tree_miner(pcell.df)
@@ -207,6 +216,8 @@ def discover(
             ucm=ucm,
             performers=dict(performers or {}),
         ))
+        ticker.tick()
+    ticker.finish()
 
     return ModelFamily(
         attributes=part.attributes,

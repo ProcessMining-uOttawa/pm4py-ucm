@@ -509,8 +509,13 @@ def compute_family_stats(
     timestamp_col: str = "time:timestamp",
     start_timestamp_col: str = "start_timestamp",
     coarsen_loops: bool = True,
+    progress_callback=None,
 ) -> FamilyStats:
     """Compute :class:`FamilyStats` for a mined family.
+
+    ``progress_callback(stage, done, total)`` (optional) fires per
+    processed cell — the per-cell replay dominates this pass. See
+    :mod:`pm4py_ucm.util.progress`.
 
     Needs ``family.log_df`` — call this right after
     :func:`pm4py_ucm.discover_ucm_family`, *before* dropping the log
@@ -545,6 +550,10 @@ def compute_family_stats(
         dedup=True, resource_variation=False,
     )
     choices, choice_by_node = _collect_choices(merged, family)
+
+    from ....util.progress import Ticker
+    ticker = Ticker(progress_callback, "Computing family statistics",
+                    len(family.cells), report_every=1)
 
     cells: List[CellStats] = []
     all_activities: set = set()
@@ -645,6 +654,8 @@ def compute_family_stats(
             activity=activity_stats,
             edges=edge_stats,
         ))
+        ticker.tick()
+    ticker.finish()
 
     # Edge union, busiest handovers first (family-wide frequency
     # desc, label asc) — the natural reading order for a ranking.
