@@ -88,3 +88,9 @@ demo/output/
 # Event logs ship zipped — the notebook unzips them on first use.
 demo/ClaimsPaymentLog.xes
 demo/IssueTracker.xes
+
+# Private / local-only event logs — never commit these (defensive:
+# the real files live outside the repo tree).
+BC-eventlog.csv
+*BC-eventlog*
+*-private.csv

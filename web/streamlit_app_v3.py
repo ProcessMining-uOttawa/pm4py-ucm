@@ -1227,20 +1227,29 @@ with st.sidebar:
         options=list(_NODE_METRICS), default=[],
         help=(
             "frequency = executions; case_coverage = cases containing "
-            "the activity; mean/median/total_time are activity service "
-            "times and need an interval log (start_timestamp column); "
-            "the sojourn_* metrics are the time since the case's "
-            "previous event (≈ waiting + service) and work on any "
-            "timestamped log."
+            "the activity; relative_frequency = share of all events; "
+            "repeat_frequency = repeat executions (rework); the "
+            "mean/median/min/max/std/p90/p95/total_time metrics are "
+            "activity service times and need an interval log "
+            "(start_timestamp column); the sojourn_* metrics are the "
+            "time since the case's previous event (≈ waiting + service) "
+            "and work on any timestamped log. Every available metric is "
+            "written to the .jucm as jUCMNav metadata regardless of the "
+            "≤2 shown on the diagram. See docs/metrics.md."
         ),
     )[:2])
     overlay_edges = tuple(st.multiselect(
         "On edges (max 2)",
         options=list(_EDGE_METRICS), default=[],
         help=(
-            "frequency = directly-follows traversals; percentage = an "
-            "OR-fork branch's share of the fork; the time metrics are "
-            "waiting times between the edge's activities."
+            "frequency = directly-follows traversals; case_frequency = "
+            "distinct cases traversing the handover; relative_frequency "
+            "= share of all traversals; percentage = an OR-fork branch's "
+            "share of the fork; the time metrics are waiting times "
+            "between the edge's activities. case_frequency, "
+            "relative_frequency and the shape aggregates (median/std/"
+            "p90/p95) apply to single-pair segments; min/max and mean/"
+            "total also aggregate across fork-after-join segments."
         ),
     )[:2])
 
@@ -2051,6 +2060,10 @@ with compare_tab:
                 _proc_fmts[_c] = _fmt_duration_s
             elif _c.startswith("events_per_case"):
                 _proc_fmts[_c] = "{:.2f}"
+            elif _c == "rework_case_fraction":
+                _proc_fmts[_c] = "{:.1%}"
+            elif _c == "rework_mean_repeats":
+                _proc_fmts[_c] = "{:.2f}"
             elif _c.endswith("_pct"):
                 _proc_fmts[_c] = "{:.1f}%"
             else:
@@ -2086,6 +2099,9 @@ with compare_tab:
              lambda v: f"{v:.1f}", "normal"),
             ("Variants", lambda c: c.variants.get("n_variants"),
              lambda v: f"{v:,.0f}", "normal"),
+            ("Rework rate (cases w/ a repeat)",
+             lambda c: c.rework.get("case_fraction"),
+             lambda v: f"{v * 100:.0f}%", "inverse"),
         ]
         if _stats.has_timestamps:
             _card_defs[2:2] = [
@@ -2137,10 +2153,12 @@ with compare_tab:
                     st.caption(_cap + " — rendering unavailable")
 
         # ---- activity / edge comparison ---------------------------------
-        def _delta_frame(names, entry_of, key, per_case, is_time,
+        def _delta_frame(names, entry_of, key, per_case, kind,
                          row_name):
             """Rows: A value, B value, Δ, ratio for every named entry
-            present in either cell; returns (frame, formats)."""
+            present in either cell; returns (frame, formats). ``kind``
+            is ``"count"`` | ``"time"`` | ``"ratio"``."""
+            is_time = kind == "time"
             rows = []
             for name in names:
                 ea = entry_of(_A, name) or {}
@@ -2148,7 +2166,7 @@ with compare_tab:
                 va, vb = ea.get(key), eb.get(key)
                 if va is None and vb is None:
                     continue
-                if per_case and not is_time:
+                if per_case and kind == "count":
                     va = None if va is None else va / _A.n_cases
                     vb = None if vb is None else vb / _B.n_cases
                 rows.append({
@@ -2169,6 +2187,9 @@ with compare_tab:
             if is_time:
                 fmts = {c: _fmt_duration_s for c in frame.columns
                         if c != "ratio B/A"}
+            elif kind == "ratio":
+                fmts = {c: "{:.1%}" for c in frame.columns
+                        if c != "ratio B/A"}
             elif per_case:
                 fmts = {c: "{:.2f}" for c in frame.columns
                         if c != "ratio B/A"}
@@ -2180,16 +2201,23 @@ with compare_tab:
 
         st.markdown("**Activity comparison** (Δ and ratio are B vs A)")
         _metric_opts = [
-            ("frequency", "frequency (executions)", False),
-            ("case_coverage", "case coverage (cases)", False),
+            ("frequency", "frequency (executions)", "count"),
+            ("relative_frequency", "relative frequency (share of events)",
+             "ratio"),
+            ("case_coverage", "case coverage (cases)", "count"),
+            ("repeat_frequency", "repeat frequency (rework executions)",
+             "count"),
         ]
         if _stats.has_intervals:
             _metric_opts += [
-                ("mean_time", "mean service time", True),
-                ("median_time", "median service time", True),
-                ("min_time", "min service time", True),
-                ("max_time", "max service time", True),
-                ("total_time", "total service time", True),
+                ("mean_time", "mean service time", "time"),
+                ("median_time", "median service time", "time"),
+                ("min_time", "min service time", "time"),
+                ("max_time", "max service time", "time"),
+                ("std_time", "std service time", "time"),
+                ("p90_time", "P90 service time", "time"),
+                ("p95_time", "P95 service time", "time"),
+                ("total_time", "total service time", "time"),
             ]
         if _stats.has_timestamps:
             # Sojourn = time since the case's previous event — the
@@ -2197,29 +2225,32 @@ with compare_tab:
             # start_timestamp column.
             _metric_opts += [
                 ("sojourn_mean_time",
-                 "mean sojourn time (since previous event)", True),
-                ("sojourn_median_time", "median sojourn time", True),
-                ("sojourn_min_time", "min sojourn time", True),
-                ("sojourn_max_time", "max sojourn time", True),
-                ("sojourn_total_time", "total sojourn time", True),
+                 "mean sojourn time (since previous event)", "time"),
+                ("sojourn_median_time", "median sojourn time", "time"),
+                ("sojourn_min_time", "min sojourn time", "time"),
+                ("sojourn_max_time", "max sojourn time", "time"),
+                ("sojourn_std_time", "std sojourn time", "time"),
+                ("sojourn_p90_time", "P90 sojourn time", "time"),
+                ("sojourn_p95_time", "P95 sojourn time", "time"),
+                ("sojourn_total_time", "total sojourn time", "time"),
             ]
         ac1, ac2 = st.columns([2, 1])
         _m_label = ac1.selectbox(
             "Metric", [m[1] for m in _metric_opts], key="cmp_metric",
         )
-        _m_key, _, _m_is_time = next(
+        _m_key, _, _m_kind = next(
             m for m in _metric_opts if m[1] == _m_label
         )
         _per_case = ac2.checkbox(
             "Per case", value=False, key="cmp_percase",
-            disabled=_m_is_time,
+            disabled=_m_kind != "count",
             help="Divide by the cell's case count — cells differ "
                  "hugely in size, so absolute counts mislead.",
         )
         _cmp_df, _cmp_fmts = _delta_frame(
             _stats.activity_names,
             lambda c, n: c.activity.get(n), _m_key,
-            _per_case, _m_is_time, "activity",
+            _per_case, _m_kind, "activity",
         )
         st.dataframe(
             _heat_styler(_cmp_df, _cmp_fmts), use_container_width=True,
@@ -2235,29 +2266,36 @@ with compare_tab:
                 "between two activities (Δ and ratio are B vs A)"
             )
             _e_opts = [
-                ("frequency", "frequency (traversals)", False),
-                ("mean_time", f"mean {_wait_label}", True),
-                ("median_time", f"median {_wait_label}", True),
-                ("min_time", f"min {_wait_label}", True),
-                ("max_time", f"max {_wait_label}", True),
-                ("total_time", f"total {_wait_label}", True),
+                ("frequency", "frequency (traversals)", "count"),
+                ("case_frequency", "case frequency (distinct cases)",
+                 "count"),
+                ("relative_frequency",
+                 "relative frequency (share of traversals)", "ratio"),
+                ("mean_time", f"mean {_wait_label}", "time"),
+                ("median_time", f"median {_wait_label}", "time"),
+                ("min_time", f"min {_wait_label}", "time"),
+                ("max_time", f"max {_wait_label}", "time"),
+                ("std_time", f"std {_wait_label}", "time"),
+                ("p90_time", f"P90 {_wait_label}", "time"),
+                ("p95_time", f"P95 {_wait_label}", "time"),
+                ("total_time", f"total {_wait_label}", "time"),
             ]
             ec1, ec2 = st.columns([2, 1])
             _e_label = ec1.selectbox(
                 "Edge metric", [m[1] for m in _e_opts],
                 key="cmp_emetric",
             )
-            _e_key, _, _e_is_time = next(
+            _e_key, _, _e_kind = next(
                 m for m in _e_opts if m[1] == _e_label
             )
             _e_per_case = ec2.checkbox(
                 "Per case", value=False, key="cmp_epercase",
-                disabled=_e_is_time,
+                disabled=_e_kind != "count",
             )
             _edge_df, _edge_fmts = _delta_frame(
                 _stats.edge_names,
                 lambda c, n: c.edges.get(n), _e_key,
-                _e_per_case, _e_is_time, "edge",
+                _e_per_case, _e_kind, "edge",
             )
             st.dataframe(
                 _heat_styler(_edge_df, _edge_fmts),

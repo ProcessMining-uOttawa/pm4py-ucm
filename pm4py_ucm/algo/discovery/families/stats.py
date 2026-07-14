@@ -73,8 +73,18 @@ class CellStats:
     #: events per case: ``{"mean", "median", "min", "max"}``.
     events_per_case: Dict[str, float] = field(default_factory=dict)
     #: case duration in seconds: ``{"mean", "median", "min", "max",
-    #: "total"}`` — absent (empty) when the log has no timestamps.
+    #: "total", "std", "p90", "p95"}`` — absent (empty) when the log has
+    #: no timestamps.
     duration: Dict[str, float] = field(default_factory=dict)
+    #: rework / repetition: ``{"case_fraction"``: share of cases with at
+    #: least one repeated activity, ``"mean_repeats_per_case"``: mean
+    #: over cases of Σ(count−1) repeat executions ``}``.
+    rework: Dict[str, float] = field(default_factory=dict)
+    #: ``{activity: n_cases}`` — cases whose first event is that
+    #: activity (sum = :attr:`n_cases`).
+    start_activities: Dict[str, int] = field(default_factory=dict)
+    #: ``{activity: n_cases}`` — cases whose last event is that activity.
+    end_activities: Dict[str, int] = field(default_factory=dict)
     #: behavioural variants (concurrency-aware replay on the cell's
     #: configured tree): ``{"n_variants", "n_sequence_variants",
     #: "fitness"}`` — fitness is the share of cases in [0, 1] that
@@ -187,8 +197,11 @@ class FamilyStats:
             }
             for k in ("mean", "median", "min", "max"):
                 row[f"events_per_case_{k}"] = c.events_per_case.get(k)
-            for k in ("mean", "median", "min", "max", "total"):
+            for k in ("mean", "median", "min", "max", "total",
+                      "std", "p90", "p95"):
                 row[f"duration_{k}_s"] = c.duration.get(k)
+            row["rework_case_fraction"] = c.rework.get("case_fraction")
+            row["rework_mean_repeats"] = c.rework.get("mean_repeats_per_case")
             row["variants"] = c.variants.get("n_variants")
             row["sequence_variants"] = c.variants.get("n_sequence_variants")
             fitness = c.variants.get("fitness")
@@ -279,6 +292,9 @@ class FamilyStats:
                     "activities": c.n_activities,
                     "eventsPerCase": dict(c.events_per_case),
                     "duration": dict(c.duration),
+                    "rework": dict(c.rework),
+                    "startActivities": dict(c.start_activities),
+                    "endActivities": dict(c.end_activities),
                     "variants": dict(c.variants),
                     "activity": {
                         act: dict(entry) for act, entry in c.activity.items()
@@ -320,6 +336,36 @@ def _series_stats(series) -> Dict[str, float]:
     }
 
 
+def _duration_stats(span) -> Dict[str, float]:
+    """Case-duration aggregates including total, sample std (ddof=1) and
+    the P90 / P95 percentiles (linear interpolation)."""
+    out = _series_stats(span)
+    out["total"] = float(span.sum())
+    out["p90"] = float(span.quantile(0.9))
+    out["p95"] = float(span.quantile(0.95))
+    if len(span) > 1:
+        out["std"] = float(span.std())
+    return out
+
+
+def _rework_stats(cell_df, case_id_col: str, activity_col: str
+                  ) -> Dict[str, float]:
+    """``{"case_fraction", "mean_repeats_per_case"}`` — how much a cell
+    repeats activities within a case (a rework indicator)."""
+    case = cell_df[case_id_col].astype(str)
+    act = cell_df[activity_col].astype(str)
+    # Per (case, activity) occurrence counts.
+    counts = act.groupby([case, act]).size()
+    repeats_per_case = (counts - 1).clip(lower=0).groupby(level=0).sum()
+    n_cases = int(case.nunique())
+    if n_cases == 0:
+        return {}
+    return {
+        "case_fraction": float((repeats_per_case > 0).sum()) / n_cases,
+        "mean_repeats_per_case": float(repeats_per_case.sum()) / n_cases,
+    }
+
+
 def _process_level(
     cell_df,
     case_id_col: str,
@@ -329,7 +375,8 @@ def _process_level(
 ) -> Tuple[Dict[str, float], Dict[str, float], int, int]:
     """``(events_per_case, duration, n_events, n_activities)`` for one
     cell's sub-log. ``duration`` includes the **total** (summed) case
-    duration; empty when the log has no completion timestamps."""
+    duration plus std / P90 / P95; empty when the log has no completion
+    timestamps."""
     import pandas as pd
 
     n_events = int(len(cell_df))
@@ -348,9 +395,25 @@ def _process_level(
         span = (
             end.groupby(case).max() - start.groupby(case).min()
         ).dt.total_seconds()
-        duration = _series_stats(span)
-        duration["total"] = float(span.sum())
+        duration = _duration_stats(span)
     return events_per_case, duration, n_events, n_activities
+
+
+def _start_end_activities(
+    cell_df, case_id_col: str, activity_col: str, timestamp_col: str,
+) -> Tuple[Dict[str, int], Dict[str, int]]:
+    """``(start_activities, end_activities)`` — cases beginning / ending
+    with each activity. Ordered by timestamp when present, else by row
+    order within the case."""
+    df = cell_df
+    if timestamp_col in df.columns:
+        df = df.sort_values([case_id_col, timestamp_col])
+    grp = df.groupby(df[case_id_col].astype(str), sort=False)[activity_col]
+    start = {str(a): int(n)
+             for a, n in grp.first().astype(str).value_counts().items()}
+    end = {str(a): int(n)
+           for a, n in grp.last().astype(str).value_counts().items()}
+    return start, end
 
 
 # ---------------------------------------------------------------------------
@@ -589,14 +652,22 @@ def compute_family_stats(
             acts = cell_df[activity_col].astype(str)
             freq = acts.value_counts()
             cov = cell_df.groupby(acts)[case_id_col].nunique()
+            n_ev = int(len(cell_df))
             activity_stats = {
                 str(a): {
                     "frequency": int(freq[a]),
                     "case_coverage": int(cov.get(a, 0)),
+                    "relative_frequency": (
+                        int(freq[a]) / n_ev if n_ev else 0.0),
+                    "repeat_frequency": int(freq[a]) - int(cov.get(a, 0)),
                 }
                 for a in freq.index
             }
         all_activities.update(activity_stats)
+
+        rework = _rework_stats(cell_df, case_id_col, activity_col)
+        start_acts, end_acts = _start_end_activities(
+            cell_df, case_id_col, activity_col, timestamp_col)
 
         # Replay on the configured tree (skeleton with this cell's
         # variants substituted, reusing the original node objects) —
@@ -650,6 +721,9 @@ def compute_family_stats(
             n_activities=n_activities,
             events_per_case=events_per_case,
             duration=duration,
+            rework=rework,
+            start_activities=start_acts,
+            end_activities=end_acts,
             variants=variants,
             activity=activity_stats,
             edges=edge_stats,

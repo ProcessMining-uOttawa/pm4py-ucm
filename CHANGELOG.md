@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (metrics — validation + new statistics)
+
+- **Metric-validation suite** (`tests/test_metric_validation.py`) and a
+  **semantic contract** ([`docs/metrics.md`](docs/metrics.md)) defining
+  every activity/edge/process/choice metric precisely (units, timestamp
+  semantics, aggregation rules, and the deliberate edge-case decisions —
+  negative waiting on overlapping intervals, ties, single-event cases,
+  and the wall-clock/no-working-calendar caveat). The suite validates
+  against four independent oracles (hand-computed distinct-value
+  fixtures, algebraic invariants, metamorphic transforms, simulation
+  ground truth) and reconciles frequencies, waiting times
+  (mean/median/min/max/**stdev**), start/end activities and case
+  durations against pm4py exactly. Verdict: the existing metrics were
+  already correct.
+- **New comparative metrics**, all additive: **rework / repetition**
+  (activity `repeat_frequency`, process rework rate + mean repeats),
+  **relative frequency** (activity & edge), **start / end activity
+  distributions**, **edge case-frequency** (distinct cases per
+  handover), and **P90 / P95 percentiles + sample std** on activity
+  service, sojourn, edge waiting and case duration.
+- Every metric is now selectable in the **performance-overlay menus**
+  and written to the **`.jucm` as `perf_<metric>` metadata**, and is
+  surfaced in the **interactive HTML report** and the web app's
+  **Compare** tab (new columns, cards, and metric selectors). The
+  `.jucm` diagram overlay stays byte-stable (only the ≤2 selected
+  metrics are drawn).
+
 ### Changed (web deployments)
 
 - The original model-only **V1 app is retired**: `web/streamlit_app.py`

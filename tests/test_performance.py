@@ -60,8 +60,8 @@ class TestStats:
     def test_activity_frequencies_and_coverage(self):
         stats = compute_performance_stats(_log())
         assert stats.total_cases == 10
-        assert stats.activity["A"] == {"frequency": 10,
-                                       "case_coverage": 10}
+        assert stats.activity["A"]["frequency"] == 10
+        assert stats.activity["A"]["case_coverage"] == 10
         assert stats.activity["B"]["frequency"] == 6
         assert stats.activity["C"]["case_coverage"] == 4
 
