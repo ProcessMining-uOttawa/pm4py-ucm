@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] — 2026-07-14
+
 ### Added (web app)
 
 - **Double-click a family model to open it in a new browser tab** — the
@@ -42,6 +44,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Compare** tab (new columns, cards, and metric selectors). The
   `.jucm` diagram overlay stays byte-stable (only the ≤2 selected
   metrics are drawn).
+
+### Changed
+
+- **Variant partial-order expressions read cleaner** (#11, display
+  only): a loop that ran once renders `A^1`, and a single-token loop
+  body drops its parentheses (`Test Fix^>=2` instead of
+  `(Test Fix)^>=2`); a parallel of a single activity with a skipped
+  branch (`A || tau ≡ A`) drops its wrapper, while multi-branch
+  parallels and `[A]` choices keep their brackets. Variant clustering,
+  counts and fitness are unchanged. A new README table explains the
+  notation.
+
+### Fixed
+
+- **Case-insensitive boolean type detection** in data-driven decision
+  mining (#6): a case-constant column of mixed-case boolean strings
+  (`"True"` / `"FALSE"` / `"TRUE"`) now classifies as a jUCMNav
+  **boolean** variable — emitting `x == true` / `x == false` and
+  enabling the expression minimizer's complement rule — instead of a
+  two-value enumeration. Clean lowercase / native-bool / `0-1` columns
+  classify exactly as before (byte-stable exports).
 
 ### Changed (web deployments)
 
