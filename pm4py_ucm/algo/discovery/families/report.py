@@ -446,16 +446,26 @@ function fmtPct(x, dec) {
 
 // ---------- metric registry ------------------------------------------------
 const hasT = DATA.hasTimestamps, hasI = DATA.hasIntervals;
+// Ratio (0..1) formatted as a percentage.
+function fmtRatio(x) {
+  return (x == null || isNaN(x)) ? "—" : (x * 100).toFixed(1) + "%";
+}
 const ACT_METRICS = [
   {key: "frequency", label: "frequency (executions)", fmt: fmtNum,
    perCase: true},
+  {key: "relative_frequency", label: "relative frequency (share of events)",
+   fmt: fmtRatio, perCase: false},
   {key: "case_coverage", label: "case coverage (cases)", fmt: fmtNum,
    perCase: true},
+  {key: "repeat_frequency", label: "repeat frequency (rework executions)",
+   fmt: fmtNum, perCase: true},
 ];
 if (hasI) {
   for (const [k, lab] of [["mean_time","mean service time"],
       ["median_time","median service time"], ["min_time","min service time"],
-      ["max_time","max service time"], ["total_time","total service time"]])
+      ["max_time","max service time"], ["std_time","std service time"],
+      ["p90_time","P90 service time"], ["p95_time","P95 service time"],
+      ["total_time","total service time"]])
     ACT_METRICS.push({key: k, label: lab, fmt: fmtDur, perCase: false});
 }
 if (hasT) {
@@ -468,18 +478,27 @@ if (hasT) {
       ["sojourn_median_time","median sojourn time"],
       ["sojourn_min_time","min sojourn time"],
       ["sojourn_max_time","max sojourn time"],
+      ["sojourn_std_time","std sojourn time"],
+      ["sojourn_p90_time","P90 sojourn time"],
+      ["sojourn_p95_time","P95 sojourn time"],
       ["sojourn_total_time","total sojourn time"]])
     ACT_METRICS.push({key: k, label: lab, fmt: fmtDur, perCase: false});
 }
 const EDGE_METRICS = [
   {key: "frequency", label: "frequency (traversals)", fmt: fmtNum,
    perCase: true},
+  {key: "case_frequency", label: "case frequency (distinct cases)",
+   fmt: fmtNum, perCase: true},
+  {key: "relative_frequency", label: "relative frequency (share of traversals)",
+   fmt: fmtRatio, perCase: false},
 ];
 if (hasT) {
   const w = hasI ? "waiting time" : "waiting time (compl.→compl.)";
   for (const [k, lab] of [["mean_time","mean " + w],
       ["median_time","median " + w], ["min_time","min " + w],
-      ["max_time","max " + w], ["total_time","total " + w]])
+      ["max_time","max " + w], ["std_time","std " + w],
+      ["p90_time","P90 " + w], ["p95_time","P95 " + w],
+      ["total_time","total " + w]])
     EDGE_METRICS.push({key: k, label: lab, fmt: fmtDur, perCase: false});
 }
 const PROC_COLS = (() => {
@@ -494,10 +513,14 @@ const PROC_COLS = (() => {
   ];
   if (hasT) {
     for (const [k, lab] of [["min","min"],["median","median"],
-        ["mean","mean"],["max","max"],["total","TOTAL"]])
+        ["mean","mean"],["max","max"],["p90","P90"],["p95","P95"],
+        ["std","std"],["total","TOTAL"]])
       c.push({key: "dur_" + k, label: "duration " + lab,
               get: x => x.duration[k], fmt: fmtDur});
   }
+  c.push({key: "rework", label: "rework (cases w/ repeat)",
+          get: x => x.rework ? x.rework.case_fraction : null,
+          fmt: fmtRatio});
   c.push({key: "variants", label: "variants",
           get: x => x.variants.n_variants, fmt: fmtNum});
   c.push({key: "seqvar", label: "seq. variants",
@@ -759,8 +782,11 @@ function showView(id) {
     if (hasT) {
       defs.push(["mean duration", c => c.duration.mean, fmtDur]);
       defs.push(["median duration", c => c.duration.median, fmtDur]);
+      defs.push(["P90 duration", c => c.duration.p90, fmtDur]);
       defs.push(["TOTAL duration", c => c.duration.total, fmtDur]);
     }
+    defs.push(["rework rate", c => c.rework ? c.rework.case_fraction : null,
+               fmtRatio]);
     defs.push(["variants", c => c.variants.n_variants, fmtNum]);
     document.getElementById("cmp-cards").innerHTML = defs.map(d => {
       const [t, get, fmt] = d, a = get(A), b = get(B);

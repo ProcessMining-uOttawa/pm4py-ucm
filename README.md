@@ -547,14 +547,17 @@ pm4py_ucm.write_family_report(family, "report.html", stats=stats)
 
 `compute_family_stats` yields four statistics levels per family
 member: **process** (cases, events per case, case-duration
-min/mean/median/max **and total**, behavioural variant counts, replay
-fitness), **activity** (frequency, case coverage, sojourn time since
-the previous event — available even for single-timestamp logs — and
-service-time min/mean/median/max/total on interval logs), **edge**
-(directly-follows pairs with traversal frequency and waiting times),
-and **choice** — OR-fork branch counts *aligned across the family*
-through the shared skeleton, so the same decision point is one
-comparable row for every combination.
+min/mean/median/max/**total**/std/P90/P95, **rework rate**, start/end
+activity distributions, behavioural variant counts, replay fitness),
+**activity** (frequency, relative frequency, case coverage, **repeat
+frequency**, sojourn time since the previous event — available even for
+single-timestamp logs — and service-time min/mean/median/max/std/P90/
+P95/total on interval logs), **edge** (directly-follows pairs with
+traversal frequency, **case frequency**, relative frequency, and
+waiting-time aggregates), and **choice** — OR-fork branch counts
+*aligned across the family* through the shared skeleton, so the same
+decision point is one comparable row for every combination. Every
+metric is defined in [`docs/metrics.md`](docs/metrics.md).
 
 `write_family_report` renders it all into a zero-dependency HTML
 report that opens offline in any browser: sortable heat-mapped
@@ -581,17 +584,29 @@ pm4py_ucm.save_vis_ucm(ucm, "annotated.png")   # small gray overlay text
 pm4py_ucm.write_ucm(ucm, "annotated.jucm")     # per-metric metadata lines
 ```
 
-Activity metrics: `frequency`, `case_coverage`, and (for interval logs
-with a `start_timestamp` column) `mean/median/total_time` service
-times. Edge metrics: directly-follows `frequency`, OR-fork branch
-`percentage`, and `mean/median/total_time` waiting times — attributed
+Activity metrics: `frequency`, `case_coverage`, `relative_frequency`,
+`repeat_frequency` (rework), and (for interval logs with a
+`start_timestamp` column) `mean/median/min/max/std/p90/p95/total_time`
+service times, plus the `sojourn_*` variants on any timestamped log.
+Edge metrics: directly-follows `frequency`, `case_frequency`,
+`relative_frequency`, OR-fork branch `percentage`, and the
+`mean/median/min/max/std/p90/p95/total_time` waiting times — attributed
 via activity-to-activity *segments* that walk through bends, joins,
-forks, and static stubs (so decomposed models are covered too). Every
-available metric is additionally exported as its own metadata line for
-jUCMNav's properties view; the family assemblies annotate the shared
-skeleton from the whole log and each variant plug-in from its own
-sub-log. Details in
+forks, and static stubs (so decomposed models are covered too). The
+sidebar's ≤2 selections control what is drawn on the diagram, but
+**every** available metric is exported as its own `perf_<metric>`
+metadata line for jUCMNav's properties view; the family assemblies
+annotate the shared skeleton from the whole log and each variant
+plug-in from its own sub-log. Overlay walkthrough in
 [`docs/model_families.md`](docs/model_families.md#2-performance-overlays).
+
+**📏 [`docs/metrics.md`](docs/metrics.md) is the readable, complete list
+of every metric definition** — activity, edge, process and choice —
+with units, timestamp semantics, aggregation rules, and the deliberate
+edge-case decisions (negative waiting on overlapping intervals, tie
+handling, and the working-calendar caveat: all times are raw wall-clock,
+with no weekends/holidays subtracted). It is the semantic contract the
+metric-validation suite enforces against pm4py.
 
 ## Module layout
 
@@ -758,6 +773,13 @@ process-tree → UCM converter accepts duck-typed trees (`operator.value`,
 `children`, `label`), which the tests use to exercise every operator in
 isolation. The `tests/test_export_import.py` suite verifies that round-trip
 through the jUCMNav XMI back-end is byte-deterministic.
+
+The performance and family-statistics metrics are validated in
+`tests/test_metric_validation.py` against four independent oracles —
+a hand-computed distinct-value fixture, algebraic invariants,
+metamorphic transforms, and simulation ground truth — with an optional
+differential check against pm4py's own DFG/duration functions. The
+metrics they enforce are specified in [`docs/metrics.md`](docs/metrics.md).
 
 ## License
 

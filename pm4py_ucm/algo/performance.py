@@ -13,27 +13,36 @@ Activities (:data:`NODE_METRICS`):
 
 * ``frequency`` — number of executions (events);
 * ``case_coverage`` — number of cases containing the activity;
-* ``mean_time`` / ``median_time`` / ``total_time`` — activity service
-  time. Only derivable from *interval* logs (a ``start_timestamp``
-  column alongside the completion timestamp); silently omitted for
-  single-timestamp logs;
-* ``sojourn_mean_time`` / ``sojourn_median_time`` /
-  ``sojourn_total_time`` — time since the case's *previous* event
-  (≈ waiting + service attributed to the activity). Derivable from
-  any timestamped log, so single-timestamp logs get activity-level
-  time overlays too. (:class:`PerformanceStats` additionally carries
-  min/max entries for the family statistics reports — those are not
-  overlay metrics.)
+* ``relative_frequency`` — share of all events;
+* ``repeat_frequency`` — repeat executions (``frequency −
+  case_coverage``), a rework indicator;
+* ``mean_time`` / ``median_time`` / ``min_time`` / ``max_time`` /
+  ``std_time`` / ``p90_time`` / ``p95_time`` / ``total_time`` —
+  activity service time. Only derivable from *interval* logs (a
+  ``start_timestamp`` column alongside the completion timestamp);
+  silently omitted for single-timestamp logs;
+* ``sojourn_*`` (same eight aggregates) — time since the case's
+  *previous* event (≈ waiting + service attributed to the activity).
+  Derivable from any timestamped log, so single-timestamp logs get
+  activity-level time overlays too.
 
 Edges (:data:`EDGE_METRICS`):
 
 * ``frequency`` — traversals of the activity-to-activity segment the
   edge belongs to (directly-follows count);
+* ``case_frequency`` — distinct cases traversing the segment (single-
+  pair segments only);
+* ``relative_frequency`` — the segment's share of all directly-follows
+  traversals (single-pair segments only);
 * ``percentage`` — the segment's share of its OR-fork's outgoing
   traversals (only on arcs leaving an OR-fork);
-* ``mean_time`` / ``median_time`` / ``total_time`` — waiting time
-  between the segment's two activities (completion to completion for
-  single-timestamp logs; completion to start for interval logs).
+* ``mean_time`` / ``median_time`` / ``min_time`` / ``max_time`` /
+  ``std_time`` / ``p90_time`` / ``p95_time`` / ``total_time`` — waiting
+  time between the segment's two activities (completion to completion
+  for single-timestamp logs; completion to start for interval logs).
+  ``min``/``max`` combine across a multi-pair segment; the
+  distribution-shape aggregates (median, std, percentiles) are kept
+  only for single-pair segments.
 
 Edge statistics are attributed via *segments*: every arc is walked
 backwards and forwards through routing bends, empty points and joins to
@@ -55,13 +64,18 @@ from ..objects.ucm.obj import UCM
 PERF_KEY = "_perf"
 
 NODE_METRICS = (
-    "frequency", "case_coverage",
-    "mean_time", "median_time", "total_time",
-    "sojourn_mean_time", "sojourn_median_time", "sojourn_total_time",
+    "frequency", "case_coverage", "relative_frequency", "repeat_frequency",
+    "mean_time", "median_time", "min_time", "max_time",
+    "std_time", "p90_time", "p95_time", "total_time",
+    "sojourn_mean_time", "sojourn_median_time",
+    "sojourn_min_time", "sojourn_max_time",
+    "sojourn_std_time", "sojourn_p90_time", "sojourn_p95_time",
+    "sojourn_total_time",
 )
 EDGE_METRICS = (
-    "frequency", "percentage",
-    "mean_time", "median_time", "total_time",
+    "frequency", "case_frequency", "relative_frequency", "percentage",
+    "mean_time", "median_time", "min_time", "max_time",
+    "std_time", "p90_time", "p95_time", "total_time",
 )
 
 
@@ -80,13 +94,23 @@ class PerformanceStats:
     #: :data:`NODE_METRICS`, so the overlay/metadata output is
     #: unchanged by their presence.
     activity: Dict[str, Dict[str, float]] = field(default_factory=dict)
-    #: ``{(a, b): {"frequency", "mean_time", "median_time",
-    #: "min_time", "max_time", "total_time"}}`` for directly-follows
-    #: pairs — waiting times (completion → start for interval logs,
-    #: completion → completion otherwise).
+    #: ``{(a, b): {"frequency", "case_frequency", "relative_frequency",
+    #: "mean_time", "median_time", "min_time", "max_time",
+    #: "total_time", "std_time", "p90_time", "p95_time"}}`` for
+    #: directly-follows pairs — waiting times (completion → start for
+    #: interval logs, completion → completion otherwise).
     pairs: Dict[Tuple[str, str], Dict[str, float]] = field(
         default_factory=dict)
     total_cases: int = 0
+    #: Total events in the log (denominator of activity
+    #: ``relative_frequency``).
+    n_events: int = 0
+    #: ``{activity: n_cases}`` — cases whose **first** event is that
+    #: activity. Values sum to :attr:`total_cases`.
+    start_activities: Dict[str, int] = field(default_factory=dict)
+    #: ``{activity: n_cases}`` — cases whose **last** event is that
+    #: activity. Values sum to :attr:`total_cases`.
+    end_activities: Dict[str, int] = field(default_factory=dict)
 
 
 def compute_performance_stats(
@@ -100,18 +124,39 @@ def compute_performance_stats(
     """Compute :class:`PerformanceStats` from an event-log DataFrame."""
     import pandas as pd
 
+    n_events = int(len(log_df))
     stats = PerformanceStats(
         total_cases=int(log_df[case_id_col].nunique()),
+        n_events=n_events,
     )
 
     activities = log_df[activity_col].astype(str)
     freq = activities.value_counts()
     coverage = log_df.groupby(activities)[case_id_col].nunique()
     for name in freq.index:
+        f = int(freq[name])
+        cov = int(coverage.get(name, 0))
         stats.activity[str(name)] = {
-            "frequency": int(freq[name]),
-            "case_coverage": int(coverage.get(name, 0)),
+            "frequency": f,
+            "case_coverage": cov,
+            # Share of all events (0..1).
+            "relative_frequency": f / n_events if n_events else 0.0,
+            # Repeat executions = events beyond the first per case, so a
+            # rework indicator: Σ_case max(0, count_in_case − 1).
+            "repeat_frequency": f - cov,
         }
+
+    # Start / end activity distributions (per case first / last event).
+    ordered_by_case = log_df.sort_values([case_id_col, timestamp_col])
+    grp_act = ordered_by_case.groupby(case_id_col, sort=False)[activity_col]
+    stats.start_activities = {
+        str(a): int(n)
+        for a, n in grp_act.first().astype(str).value_counts().items()
+    }
+    stats.end_activities = {
+        str(a): int(n)
+        for a, n in grp_act.last().astype(str).value_counts().items()
+    }
 
     # Activity service time — interval logs only.
     has_intervals = (
@@ -129,7 +174,10 @@ def compute_performance_stats(
                 ("median", grouped.median()),
                 ("min", grouped.min()),
                 ("max", grouped.max()),
-                ("total", grouped.sum())):
+                ("total", grouped.sum()),
+                ("std", grouped.std()),         # sample std (ddof=1)
+                ("p90", grouped.quantile(0.9)),  # linear interpolation
+                ("p95", grouped.quantile(0.95))):
             for act, value in entry.items():
                 if str(act) in stats.activity and value == value:
                     stats.activity[str(act)][f"{name}_time"] = float(value)
@@ -148,17 +196,29 @@ def compute_performance_stats(
     pdf = pd.DataFrame({
         "a": act,
         "b": act.shift(-1),
+        "case": case.values,
         "delta": (next_start - end_ts).dt.total_seconds(),
     })[same_case.values]
+    total_pairs = int(len(pdf))
     for (a, b), g in pdf.groupby(["a", "b"], sort=True):
-        stats.pairs[(str(a), str(b))] = {
+        d = g["delta"]
+        entry = {
             "frequency": int(len(g)),
-            "mean_time": float(g["delta"].mean()),
-            "median_time": float(g["delta"].median()),
-            "min_time": float(g["delta"].min()),
-            "max_time": float(g["delta"].max()),
-            "total_time": float(g["delta"].sum()),
+            # Distinct cases traversing this handover (≤ frequency); the
+            # gap between the two quantifies rework on the edge.
+            "case_frequency": int(g["case"].nunique()),
+            "relative_frequency": len(g) / total_pairs if total_pairs else 0.0,
+            "mean_time": float(d.mean()),
+            "median_time": float(d.median()),
+            "min_time": float(d.min()),
+            "max_time": float(d.max()),
+            "total_time": float(d.sum()),
+            "p90_time": float(d.quantile(0.9)),
+            "p95_time": float(d.quantile(0.95)),
         }
+        if len(g) > 1:
+            entry["std_time"] = float(d.std())  # sample std (ddof=1)
+        stats.pairs[(str(a), str(b))] = entry
 
     # Per-activity SOJOURN time: completion minus the case's previous
     # completion (≈ waiting + service attributed to the activity).
@@ -173,11 +233,16 @@ def compute_performance_stats(
         entry = stats.activity.get(str(name))
         if entry is None:
             continue
-        entry["sojourn_mean_time"] = float(g["delta"].mean())
-        entry["sojourn_median_time"] = float(g["delta"].median())
-        entry["sojourn_min_time"] = float(g["delta"].min())
-        entry["sojourn_max_time"] = float(g["delta"].max())
-        entry["sojourn_total_time"] = float(g["delta"].sum())
+        d = g["delta"]
+        entry["sojourn_mean_time"] = float(d.mean())
+        entry["sojourn_median_time"] = float(d.median())
+        entry["sojourn_min_time"] = float(d.min())
+        entry["sojourn_max_time"] = float(d.max())
+        entry["sojourn_total_time"] = float(d.sum())
+        entry["sojourn_p90_time"] = float(d.quantile(0.9))
+        entry["sojourn_p95_time"] = float(d.quantile(0.95))
+        if len(g) > 1:
+            entry["sojourn_std_time"] = float(d.std())  # sample (ddof=1)
     return stats
 
 
@@ -203,9 +268,16 @@ def _format_duration(seconds: Optional[float]) -> Optional[str]:
 
 
 _TIME_PREFIX = {"mean_time": "avg", "median_time": "med",
+                "min_time": "min", "max_time": "max",
+                "std_time": "sd", "p90_time": "p90", "p95_time": "p95",
                 "total_time": "sum",
                 "sojourn_mean_time": "soj avg",
                 "sojourn_median_time": "soj med",
+                "sojourn_min_time": "soj min",
+                "sojourn_max_time": "soj max",
+                "sojourn_std_time": "soj sd",
+                "sojourn_p90_time": "soj p90",
+                "sojourn_p95_time": "soj p95",
                 "sojourn_total_time": "soj sum"}
 
 
@@ -217,6 +289,10 @@ def _node_text(entry: Dict[str, float],
             parts.append(f"n={entry['frequency']}")
         elif m == "case_coverage":
             parts.append(f"{entry['case_coverage']} cases")
+        elif m == "relative_frequency" and "relative_frequency" in entry:
+            parts.append(f"{entry['relative_frequency'] * 100:.0f}%")
+        elif m == "repeat_frequency" and "repeat_frequency" in entry:
+            parts.append(f"rpt {int(entry['repeat_frequency'])}")
         elif m in _TIME_PREFIX and m in entry:
             text = _format_duration(entry.get(m))
             if text:
@@ -230,6 +306,10 @@ def _edge_text(entry: Dict[str, float], metrics: Sequence[str],
     for m in metrics:
         if m == "frequency":
             parts.append(str(int(entry["frequency"])))
+        elif m == "case_frequency" and "case_frequency" in entry:
+            parts.append(f"{int(entry['case_frequency'])}c")
+        elif m == "relative_frequency" and "relative_frequency" in entry:
+            parts.append(f"{entry['relative_frequency'] * 100:.0f}%")
         elif m == "percentage" and percentage is not None:
             parts.append(f"{percentage * 100:.0f}%")
         elif m in _TIME_PREFIX and m in entry:
@@ -368,9 +448,18 @@ def _aggregate_pair_stats(
             e["mean_time"] * e["frequency"] for e in entries
         ) / frequency,
         "total_time": sum(e["total_time"] for e in entries),
+        # min and max combine across pairs; the distribution-shape
+        # metrics (median, std, percentiles) do not.
+        "min_time": min(e["min_time"] for e in entries),
+        "max_time": max(e["max_time"] for e in entries),
     }
     if len(entries) == 1:
-        out["median_time"] = entries[0]["median_time"]
+        # A single unambiguous pair — carry its exact statistics.
+        e = entries[0]
+        for k in ("median_time", "std_time", "p90_time", "p95_time",
+                  "case_frequency", "relative_frequency"):
+            if k in e:
+                out[k] = e[k]
     return out
 
 
@@ -396,10 +485,11 @@ def _strip_perf(maps) -> None:
 def _metric_value(metric: str, entry: Dict[str, float],
                   percentage: Optional[float] = None) -> Optional[str]:
     """One metric as a human-readable metadata value."""
-    if metric == "frequency" and "frequency" in entry:
-        return str(int(entry["frequency"]))
-    if metric == "case_coverage" and "case_coverage" in entry:
-        return str(int(entry["case_coverage"]))
+    if metric in ("frequency", "case_coverage", "repeat_frequency",
+                  "case_frequency") and metric in entry:
+        return str(int(entry[metric]))
+    if metric == "relative_frequency" and "relative_frequency" in entry:
+        return f"{entry['relative_frequency'] * 100:.1f}%"
     if metric == "percentage":
         return f"{percentage * 100:.0f}%" if percentage is not None else None
     if metric in _TIME_PREFIX and metric in entry:
