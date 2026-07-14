@@ -15,7 +15,10 @@ from types import SimpleNamespace as NS
 
 from pm4py_ucm import UCM, read_ucm, write_ucm
 from pm4py_ucm.objects.ucm.exporter.variants.jucm import serialize_to_string
-from pm4py_ucm.objects.ucm.importer.variants.jucm import parse_string
+from pm4py_ucm.objects.ucm.importer.variants.jucm import (
+    _forbid_dtd,
+    parse_string,
+)
 from pm4py_ucm.objects.ucm.conversion import from_process_tree as conv
 
 
@@ -454,6 +457,49 @@ class ExportImportTests(unittest.TestCase):
             if isinstance(n, UCM.RespRef):
                 self.assertIsNotNone(n.resp_def)
                 self.assertIn(n.resp_def, ucm2.responsibilities)
+
+
+class DtdGuardTests(unittest.TestCase):
+    """The .jucm importer refuses DTDs / DOCTYPEs before parsing, to
+    block XML entity-expansion ("billion laughs") DoS on untrusted
+    input — a zero-dependency alternative to defusedxml."""
+
+    _BOMB = (
+        '<?xml version="1.0"?>\n'
+        '<!DOCTYPE lolz [\n'
+        '  <!ENTITY lol "lol">\n'
+        '  <!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;">\n'
+        ']>\n'
+        '<urn:URNspec>&lol2;</urn:URNspec>'
+    )
+
+    def test_parse_string_rejects_dtd(self):
+        with self.assertRaises(ValueError):
+            parse_string(self._BOMB)
+
+    def test_read_ucm_file_rejects_dtd(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "evil.jucm")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(self._BOMB)
+            with self.assertRaises(ValueError):
+                read_ucm(path)
+
+    def test_guard_accepts_prolog_declaration_and_comment(self):
+        # No false positive on an XML declaration / comment before the
+        # root element — as str and as bytes.
+        _forbid_dtd('<?xml version="1.0"?><!-- note --><urn:URNspec/>')
+        _forbid_dtd(b'<?xml version="1.0"?><!-- note --><urn:URNspec/>')
+
+    def test_guard_blocks_doctype_after_comment(self):
+        with self.assertRaises(ValueError):
+            _forbid_dtd('<!-- note -->\n<!DOCTYPE r><r/>')
+
+    def test_normal_export_still_round_trips(self):
+        # A real (DTD-free) export is unaffected by the guard.
+        ucm = small_ucm()
+        xml = serialize_to_string(ucm)
+        self.assertIsNotNone(parse_string(xml))
 
 
 if __name__ == "__main__":

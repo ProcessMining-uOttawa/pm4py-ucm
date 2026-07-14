@@ -50,7 +50,10 @@ def component_color(name: str) -> Tuple[str, str]:
     graphviz accepts directly). Empty or ``None`` names map to the
     first palette entry deterministically rather than raising.
     """
-    digest = hashlib.md5((name or "").encode("utf-8")).digest()
+    # Non-cryptographic: MD5 only maps a name to a stable palette index.
+    # usedforsecurity=False documents that and silences SAST warnings.
+    digest = hashlib.md5(
+        (name or "").encode("utf-8"), usedforsecurity=False).digest()
     return PASTEL_PALETTE[digest[0] % len(PASTEL_PALETTE)]
 
 

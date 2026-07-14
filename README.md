@@ -803,6 +803,20 @@ metamorphic transforms, and simulation ground truth — with an optional
 differential check against pm4py's own DFG/duration functions. The
 metrics they enforce are specified in [`docs/metrics.md`](docs/metrics.md).
 
+### Security scan
+
+A lightweight static scan runs locally — no repository code-scanning or
+CI minutes required:
+
+```bash
+bandit -r pm4py_ucm web -ll     # medium+ severity; ships in .[dev]
+```
+
+The medium/high baseline is clean. The `.jucm` importer refuses DTDs
+before parsing (`_forbid_dtd`) so untrusted `.jucm` input cannot trigger
+XML entity-expansion ("billion laughs") — a zero-dependency alternative
+to `defusedxml`. Event-log (XES) parsing is delegated to PM4Py.
+
 ## License
 
 GPL-3.0-or-later, matching the upstream [PM4Py][pm4py-gpl] license.
