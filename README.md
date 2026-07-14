@@ -441,6 +441,28 @@ Loop iteration counts are coarsened to `{0, 1, ≥2}` by default to keep
 the variant count small; pass `coarsen_loops=False` to distinguish
 every iteration count.
 
+### Reading a variant expression
+
+Each variant is summarised as a compact **partial-order expression**
+(shown in `variants.csv`, the Scenarios tab, and scenario
+descriptions). It is a per-variant *projection* of the discovered
+process tree — it shows what this behavioural variant actually did, not
+the whole model:
+
+| Syntax | Source | Meaning |
+|--------|--------|---------|
+| `A` | activity leaf | activity `A` was executed here — no choice, no loop |
+| `X -> Y` | sequence | `X`, then `Y` |
+| `[A]` | XOR / OR | a **choice** point; branch `A` is the one this variant took (another variant may show `[B]` here) |
+| `(X \|\| Y)` | AND (parallel) | `X` and `Y` ran concurrently — any interleaving is the same variant |
+| `A^0` / `A^1` / `A^>=2` | loop | loop body `A` ran zero / exactly once / two-or-more times (the coarsened `{0, 1, ≥2}` bucket) |
+
+Two conventions worth knowing: a parallel branch this variant **skipped**
+shows as `[tau]` (the silent choice was taken), so `(E || [tau])` means
+"`E`, in parallel with an optional branch that was skipped here"; and a
+parallel of a single activity with nothing (`A || tau`) simplifies to
+just `A`.
+
 ### Two condition-encoding strategies
 
 | Strategy       | Arc conditions                                                                | Trade-off                                                                                                     |

@@ -772,11 +772,18 @@ def partial_order_expression(
             return f"[{inner_str}]"
         if tag == "PAR":
             _, nid, frags = sig
-            parts = [_render(f) for f in frags]
-            parts = [p for p in parts if p and p != "tau"]
+            rendered = [(f, _render(f)) for f in frags]
+            parts = [(f, r) for f, r in rendered if r and r != "tau"]
             if not parts:
                 return "tau"
-            return "(" + " || ".join(parts) + ")"
+            if len(parts) == 1:
+                # A parallel block with a single surviving branch is
+                # just that branch (``A || tau ≡ A``). Drop the wrapper
+                # only around an atomic activity; keep it around a
+                # compound so ``->`` / ``||`` precedence stays clear.
+                frag, text = parts[0]
+                return text if frag and frag[0] == "ACT" else f"({text})"
+            return "(" + " || ".join(r for _, r in parts) + ")"
         if tag == "LOOP":
             _, nid, coarse = sig
             node = id_to_node.get(nid)
@@ -785,8 +792,10 @@ def partial_order_expression(
                 body_children = _children(node)
                 if body_children:
                     body_label = _leaf_summary(body_children[0])
-            suffix = {0: "^0", 1: "", 2: "^>=2"}[coarse]
-            return f"({body_label}){suffix}"
+            # ``^0`` / ``^1`` / ``^>=2`` — a single-token body needs no
+            # parentheses (``Test Fix^>=2``, not ``(Test Fix)^>=2``).
+            suffix = {0: "^0", 1: "^1", 2: "^>=2"}[coarse]
+            return f"{body_label}{suffix}"
         if tag == "LOOP_FINE":
             _, nid, iter_count, iter_frags = sig
             parts = [_render(f) for f in iter_frags]
