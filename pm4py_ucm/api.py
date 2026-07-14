@@ -430,7 +430,9 @@ def annotate_performance(
 
     Activity metrics (up to two keeps the diagram readable):
     ``frequency`` (executions), ``case_coverage`` (cases containing
-    the activity), and — for interval logs carrying a
+    the activity), ``sojourn_mean_time`` / ``sojourn_median_time`` /
+    ``sojourn_total_time`` (time since the case's previous event —
+    works on any timestamped log), and — for interval logs carrying a
     ``start_timestamp`` column — ``mean_time`` / ``median_time`` /
     ``total_time`` service times. Edge metrics: directly-follows
     ``frequency``, ``percentage`` (an OR-fork branch's share of the

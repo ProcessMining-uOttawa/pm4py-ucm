@@ -44,6 +44,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   40s left") inside the status box, driven by the callbacks above.
   Phase labels were made honest: the label that read "Converting
   process tree to UCM" while resource mining ran now says so.
+- **Sojourn times as overlay metrics** — `sojourn_mean_time` /
+  `sojourn_median_time` / `sojourn_total_time` (time since the case's
+  previous event) join `NODE_METRICS`: selectable in the web app's
+  performance-overlay sidebar, rendered as `soj avg 2.1d` under
+  activity names, and exported as `perf_sojourn_*` metadata lines.
+  They work on any timestamped log — the activity-level time overlay
+  for single-timestamp logs, matching the Compare tab's statistics.
+- **Web app header** — the title is simply *PM4Py-UCM*; the caption
+  states the running pm4py-ucm release (linked to its GitHub release
+  page), the release date (new `pm4py_ucm.__release_date__`), and the
+  author. The Model tab gained an **"Open image in new tab"** button
+  so complex models can be zoomed in a full browser tab (base64 →
+  Blob URL, same technique as the HTML report).
 
 ## [0.5.0] — 2026-07-12
 

@@ -870,6 +870,42 @@ def _heat_styler(df, formats=None):
         return df
 
 
+def _open_image_in_tab_button(png_b64: str, label: str = "Open image "
+                              "in new tab ⧉", height: int = 46) -> None:
+    """A button-styled link that opens an embedded PNG in its own
+    browser tab at full resolution — much easier to zoom and pan
+    complex models than the inline preview. A ``data:`` URI cannot be
+    a top-level tab, so the embedded JS converts the base64 to a Blob
+    URL **at render time** and sets it as a plain anchor ``href``
+    with ``target="_blank"`` — ordinary link navigation, so no popup
+    blocker is involved (unlike ``window.open``). Runs inside the
+    ``components.html`` iframe, whose sandbox allows popups escaping
+    to a new tab."""
+    import streamlit.components.v1 as _components
+    _components.html(
+        f"""
+<a id="ot" target="_blank" rel="noopener"
+  style="font-family: 'Source Sans Pro', sans-serif; font-size: 0.9rem;
+  display: block; box-sizing: border-box; text-align: center;
+  text-decoration: none; padding: 0.45rem 0.9rem; border-radius: 0.5rem;
+  border: 1px solid rgba(49, 51, 63, 0.2); background: white;
+  color: rgb(49, 51, 63); cursor: pointer; width: 100%;"
+  onmouseover="this.style.borderColor='#ff4b4b';this.style.color='#ff4b4b'"
+  onmouseout="this.style.borderColor='rgba(49,51,63,.2)';this.style.color='rgb(49,51,63)'"
+>{label}</a>
+<script>
+(() => {{
+  const bin = atob("{png_b64}");
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  document.getElementById("ot").href =
+    URL.createObjectURL(new Blob([bytes], {{type: "image/png"}}));
+}})();
+</script>""",
+        height=height,
+    )
+
+
 class _ProgressUI:
     """A ``progress_callback(stage, done, total)`` that renders a
     progress bar with a remaining-time estimate inside an
@@ -937,13 +973,20 @@ def _fmt_duration_s(seconds) -> str:
 # ---------------------------------------------------------------------------
 
 st.set_page_config(page_title="PM4Py-UCM (V3 · Families)", layout="wide")
-st.title("PM4Py-UCM · V3")
+st.title("PM4Py-UCM")
+_pkg_version = pm4py_ucm.__version__
+_pkg_release_date = getattr(pm4py_ucm, "__release_date__", None)
 st.caption(
     "Mine a Use Case Map model from an XES or CSV event log, "
     "synthesize executable jUCMNav scenarios with concurrency-aware "
     "variant clustering, and mine attribute-partitioned model "
-    "families with comparative statistics reports. V1 (model-only) "
-    "lives at `web/streamlit_app.py`."
+    "families with comparative statistics reports. "
+    f"Running [pm4py-ucm {_pkg_version}]"
+    f"(https://github.com/ProcessMining-uOttawa/pm4py-ucm/releases/"
+    f"tag/v{_pkg_version})"
+    + (f", released {_pkg_release_date}" if _pkg_release_date else "")
+    + " — by [Daniel Amyot](https://damyot.github.io/), "
+    "University of Ottawa, Canada."
 )
 
 
@@ -1101,8 +1144,11 @@ with st.sidebar:
         options=list(_NODE_METRICS), default=[],
         help=(
             "frequency = executions; case_coverage = cases containing "
-            "the activity; the time metrics are activity service "
-            "times and need an interval log (start_timestamp column)."
+            "the activity; mean/median/total_time are activity service "
+            "times and need an interval log (start_timestamp column); "
+            "the sojourn_* metrics are the time since the case's "
+            "previous event (≈ waiting + service) and work on any "
+            "timestamped log."
         ),
     )[:2])
     overlay_edges = tuple(st.multiselect(
@@ -1314,16 +1360,19 @@ with model_tab:
     )
     st.caption(
         f"Mined model ({notation}, decomposition={decomposition_preset}) — "
-        "open in a new tab or zoom in for a closer look."
+        "open it in its own browser tab to zoom complex models more "
+        "easily."
     )
 
-    d1, d2 = st.columns(2)
-    d1.download_button(
+    d1, d2, d3 = st.columns(3)
+    with d1:
+        _open_image_in_tab_button(_b64)
+    d2.download_button(
         "Download PNG", data=png_bytes,
         file_name=_safe_download_name(Path(log_name).stem, ".png"),
         mime="image/png",
     )
-    d2.download_button(
+    d3.download_button(
         "Download .jucm (no scenarios)", data=mined["jucm"],
         file_name=_safe_download_name(Path(log_name).stem, ".jucm"),
         mime="application/xml",

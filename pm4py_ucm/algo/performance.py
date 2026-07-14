@@ -16,9 +16,14 @@ Activities (:data:`NODE_METRICS`):
 * ``mean_time`` / ``median_time`` / ``total_time`` — activity service
   time. Only derivable from *interval* logs (a ``start_timestamp``
   column alongside the completion timestamp); silently omitted for
-  single-timestamp logs. (:class:`PerformanceStats` additionally
-  carries min/max and per-activity *sojourn* times for the family
-  statistics reports — those extra entries are not overlay metrics.)
+  single-timestamp logs;
+* ``sojourn_mean_time`` / ``sojourn_median_time`` /
+  ``sojourn_total_time`` — time since the case's *previous* event
+  (≈ waiting + service attributed to the activity). Derivable from
+  any timestamped log, so single-timestamp logs get activity-level
+  time overlays too. (:class:`PerformanceStats` additionally carries
+  min/max entries for the family statistics reports — those are not
+  overlay metrics.)
 
 Edges (:data:`EDGE_METRICS`):
 
@@ -52,6 +57,7 @@ PERF_KEY = "_perf"
 NODE_METRICS = (
     "frequency", "case_coverage",
     "mean_time", "median_time", "total_time",
+    "sojourn_mean_time", "sojourn_median_time", "sojourn_total_time",
 )
 EDGE_METRICS = (
     "frequency", "percentage",
@@ -197,7 +203,10 @@ def _format_duration(seconds: Optional[float]) -> Optional[str]:
 
 
 _TIME_PREFIX = {"mean_time": "avg", "median_time": "med",
-                "total_time": "sum"}
+                "total_time": "sum",
+                "sojourn_mean_time": "soj avg",
+                "sojourn_median_time": "soj med",
+                "sojourn_total_time": "soj sum"}
 
 
 def _node_text(entry: Dict[str, float],
