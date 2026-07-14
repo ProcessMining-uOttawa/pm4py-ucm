@@ -154,6 +154,56 @@ def test_partial_order_expression_renders_human_readable():
     assert "||" in expr or "->" in expr  # at least one operator surfaces
 
 
+def _expr(tree, trace):
+    node_ids = cs.assign_node_ids(tree)
+    sig = cs.replay(tree, trace, node_ids=node_ids)
+    return cs.partial_order_expression(sig, tree, node_ids)
+
+
+class TestExpressionAesthetics:
+    """Display-only rendering of the partial-order expression (no effect
+    on clustering / signatures)."""
+
+    def test_loop_once_uses_caret_one_without_parens(self):
+        tree = _seq(_leaf("X"), _loop(_leaf("A"), _leaf("R")))
+        expr = _expr(tree, ["X", "A"])          # one iteration
+        assert "A^1" in expr
+        assert "(A)" not in expr
+
+    def test_loop_two_or_more_uses_caret_ge2_without_parens(self):
+        tree = _seq(_leaf("X"), _loop(_leaf("A"), _leaf("R")))
+        expr = _expr(tree, ["X", "A", "R", "A"])  # two iterations
+        assert "A^>=2" in expr
+        assert "(A)" not in expr
+
+    def test_single_activity_parallel_drops_parens(self):
+        # +(A, tau) with only A executed -> just "A" (A || tau ≡ A).
+        tree = _seq(_leaf("X"), _par(_leaf("A"), _tau()))
+        expr = _expr(tree, ["X", "A"])
+        assert expr == "X -> A"
+
+    def test_multi_branch_parallel_keeps_parens(self):
+        tree = _seq(_leaf("X"), _par(_leaf("Y"), _leaf("Z")))
+        expr = _expr(tree, ["X", "Y", "Z"])
+        assert "(Y || Z)" in expr
+
+    def test_single_compound_parallel_keeps_wrapper(self):
+        # A skipped-optional parallel whose surviving branch is a
+        # SEQUENCE keeps its parens so -> / || precedence stays clear.
+        tree = _seq(
+            _leaf("X"),
+            _par(_seq(_leaf("A"), _leaf("B")), _tau()),
+        )
+        expr = _expr(tree, ["X", "A", "B"])
+        assert "(A -> B)" in expr
+
+    def test_taken_choice_keeps_brackets(self):
+        # [A] still marks the taken XOR branch.
+        tree = _seq(_leaf("X"), _xor(_leaf("A"), _leaf("B")))
+        expr = _expr(tree, ["X", "A"])
+        assert "[A]" in expr
+
+
 # ---------------------------------------------------------------------------
 # Collect XOR choices — the bridge to OR-fork condition emission
 # ---------------------------------------------------------------------------
