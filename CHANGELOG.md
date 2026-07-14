@@ -5,6 +5,46 @@ All notable changes to **pm4py-ucm** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-07-13
+
+### Fixed (performance — resource mining on DataFrames)
+
+- **Resource mining is no longer the hidden cost of "converting" a
+  large log.** The DataFrame path of the performer miner iterated the
+  log **per row** (`iterrows`); on a 617k-event log that took ~84
+  seconds — twice per mine (performer binding + component
+  vocabulary), several minutes on Streamlit Cloud — *even when the
+  log had no performer attribute at all*, and it ran under the web
+  app's "Converting process tree to UCM" label (the actual tree→UCM
+  conversion takes milliseconds). The DataFrame path is now fully
+  vectorized with an O(1) short-circuit when no priority attribute
+  exists as a column: the same 617k-event mine dropped from ~84 s to
+  under a second. Semantics are equivalence-tested against the
+  per-event path (strategies, priority fall-through, empty/NaN
+  handling, bucket ordering — which drives exported component IDs).
+  The family pipeline benefits everywhere it mines resources per
+  cell.
+
+### Added (progress reporting)
+
+- **`progress_callback(stage, done, total)`** — every genuinely long
+  pipeline loop now accepts an optional callback (see
+  `pm4py_ucm.util.progress`): variant replay
+  (`discover_scenarios` / `clustering.cluster`), per-cell family
+  mining (`discover_ucm_family`), umbrella assembly (plug-in
+  materialisation and per-cell path-scenario replay,
+  `assemble_ucm_family`), and family statistics
+  (`compute_family_stats`). Callbacks fire at stage start, completion,
+  and throttled intervals (~200/stage), so a repainting UI cannot slow
+  the work down; the default `None` costs nothing and output is
+  unchanged.
+- **Web app: real progress bars.** The Model, Scenarios, and Family
+  mining runs now show a progress bar with counts and a
+  remaining-time estimate ("Replaying cases — 41,200/84,187 · about
+  40s left") inside the status box, driven by the callbacks above.
+  Phase labels were made honest: the label that read "Converting
+  process tree to UCM" while resource mining ran now says so.
+
 ## [0.5.0] — 2026-07-12
 
 Web tool generation **V3** (V2 was the app before the family

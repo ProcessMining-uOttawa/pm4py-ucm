@@ -676,6 +676,7 @@ def assemble_umbrella(
     max_loop_iterations: int = 2,
     node_metrics: Sequence[str] = (),
     edge_metrics: Sequence[str] = (),
+    progress_callback=None,
 ) -> UCM:
     """Assemble the family into one overarching model whose root map is
     the **shared skeleton** of the cell processes, with a dynamic stub
@@ -733,6 +734,11 @@ def assemble_umbrella(
         skeleton (root map) from the **whole** family log, each
         variant plug-in from its **covering cells'** sub-log. See
         :func:`pm4py_ucm.annotate_performance` for the metric names.
+    progress_callback
+        Optional ``callback(stage, done, total)`` — fired per
+        materialised plug-in and, with ``path_scenarios``, per
+        replayed cell (the dominant cost). See
+        :mod:`pm4py_ucm.util.progress`.
     """
     import warnings
 
@@ -805,6 +811,12 @@ def assemble_umbrella(
     # overlay pass at the end.
     group_maps: List[Tuple[List[FamilyCell], List["UCM.UCMmap"]]] = []
 
+    from ....util.progress import Ticker
+    plugin_ticker = Ticker(
+        progress_callback, "Materialising umbrella plug-ins",
+        sum(len(vp.groups) for _, vp in stubs_to_bind), report_every=1,
+    )
+
     for vp_stub, vp in stubs_to_bind:
         in_arcs = vp_stub.pred_connections
         out_arcs = vp_stub.succ_connections
@@ -844,6 +856,8 @@ def assemble_umbrella(
                 expression=_group_expression(family, cells),
             )
             vp_stub.bindings.append(binding)
+            plugin_ticker.tick()
+    plugin_ticker.finish()
 
     # Strategies. With ``path_scenarios`` (default), replay each cell's
     # sub-log on its configured tree and emit one executable scenario
@@ -861,6 +875,7 @@ def assemble_umbrella(
             group_name=group_name,
             max_loop_iterations=max_loop_iterations,
             max_variants_per_cell=max_variants_per_cell,
+            progress_callback=progress_callback,
         )
     elif strategies:
         sg = container.add_scenario_group(

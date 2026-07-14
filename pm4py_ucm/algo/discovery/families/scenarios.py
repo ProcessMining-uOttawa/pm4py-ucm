@@ -103,9 +103,12 @@ def synthesize_family_scenarios(
     max_loop_iterations: int = 2,
     max_variants_per_cell: int = 5,
     case_id_col: str = "case:concept:name",
+    progress_callback=None,
 ) -> "UCM.ScenarioGroup":
     """Emit per-(cell × variant) executable scenarios on the umbrella.
 
+    ``progress_callback(stage, done, total)`` (optional) fires per
+    replayed cell — the per-cell sub-log replay dominates this pass.
     Returns the created :class:`UCM.ScenarioGroup`."""
     # ------------------------------------------------------------------
     # 1. Loop scaffolding — once per conversion unit (not idempotent).
@@ -173,6 +176,11 @@ def synthesize_family_scenarios(
 
     case_series = family.log_df[case_id_col].astype(str)
     from .assembly import _VariationPoint  # local: avoid import cycle
+    from ....util.progress import Ticker
+    replay_ticker = Ticker(
+        progress_callback, "Replaying cells for path scenarios",
+        len(family.cells), report_every=1,
+    )
 
     for cell, variables_values in (
             (c, [v.token for v in c.values]) for c in family.cells):
@@ -287,6 +295,8 @@ def synthesize_family_scenarios(
             group.set_description(
                 group.description + " " + scenario_note + "."
             )
+        replay_ticker.tick()
+    replay_ticker.finish()
 
     # ------------------------------------------------------------------
     # 3. Branch conditions. Outside-loop OR-forks get family_variant

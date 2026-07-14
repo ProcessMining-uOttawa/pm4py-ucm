@@ -164,6 +164,7 @@ def _mine(
     overlay_edges: Tuple[str, ...],
     _file_hash: str,
     _status=None,
+    _progress=None,
 ) -> Dict[str, Any]:
     """Read the event log and mine a UCM. Returns .jucm bytes + metadata.
 
@@ -243,7 +244,7 @@ def _mine(
         )
         params["process_tree"] = tree
 
-        _phase("Converting process tree to UCM...")
+        _phase("Mining performers & converting tree to UCM...")
         ucm = pm4py_ucm.discover_ucm_inductive(
             log, parameters=params, decomposition=decomp_arg,
         )
@@ -376,6 +377,7 @@ def _synthesize(
     min_support: float,
     _file_hash: str,
     _status=None,
+    _progress=None,
 ) -> Dict[str, Any]:
     """Run the full concurrency-aware variant + scenario pipeline.
 
@@ -425,13 +427,15 @@ def _synthesize(
     else:
         decomp_arg = dict(decomposition_spec)
 
-    _phase("Converting process tree to UCM...")
+    _phase("Mining performers & converting tree to UCM...")
     ucm = pm4py_ucm.discover_ucm_inductive(
         log, parameters=params, decomposition=decomp_arg,
     )
 
-    _phase("Clustering variants...")
-    clustering = _clustering_mod.cluster(log, tree)
+    _phase("Clustering variants (concurrency-aware replay)...")
+    clustering = _clustering_mod.cluster(
+        log, tree, progress_callback=_progress,
+    )
 
     _phase(f"Synthesizing {condition_strategy} scenarios...")
     synth_kwargs: Dict[str, Any] = dict(
@@ -606,6 +610,7 @@ def _mine_family(
     overlay_edges: Tuple[str, ...],
     _file_hash: str,
     _status=None,
+    _progress=None,
 ) -> Dict[str, Any]:
     """Mine the family and produce the notation-independent
     deliverables in one pass: the per-cell zip, the combined .jucm,
@@ -653,6 +658,7 @@ def _mine_family(
             if include_values else None
         ),
         parameters=params,
+        progress_callback=_progress,
     )
 
     if overlay_nodes or overlay_edges:
@@ -694,6 +700,7 @@ def _mine_family(
             family, mode="umbrella", dedup=bool(dedup),
             node_metrics=list(overlay_nodes),
             edge_metrics=list(overlay_edges),
+            progress_callback=_progress,
         )
         umbrella_bytes = serialize_to_string(umbrella).encode("utf-8")
         dynamic_stubs = [
@@ -710,7 +717,9 @@ def _mine_family(
     # MUST be computed here, while family.log_df still exists (the
     # FamilyStats object itself carries no DataFrames and stays small).
     _phase("Computing family statistics...")
-    family_stats = pm4py_ucm.compute_family_stats(family)
+    family_stats = pm4py_ucm.compute_family_stats(
+        family, progress_callback=_progress,
+    )
 
     # The statistics above were the last consumer of the full log —
     # drop it before this result is pickled into the cache so the
@@ -859,6 +868,50 @@ def _heat_styler(df, formats=None):
         return styler
     except Exception:  # pragma: no cover - Styler needs jinja2
         return df
+
+
+class _ProgressUI:
+    """A ``progress_callback(stage, done, total)`` that renders a
+    progress bar with a remaining-time estimate inside an
+    ``st.status`` container.
+
+    The long pipeline loops (case replay, per-cell family mining,
+    umbrella replay, family statistics) accept this callback and fire
+    it with known totals, so the bar shows genuine fractions rather
+    than a spinner. Repaints are throttled to ~3/second — every
+    update is a websocket message, and unthrottled per-item updates
+    would slow down the very work being measured. Pass instances into
+    the cached miners under a leading-underscore parameter so they
+    stay out of the cache keys (same convention as ``_status``)."""
+
+    def __init__(self, container) -> None:
+        self._container = container
+        self._bar = None
+        self._stage: Optional[str] = None
+        self._t0 = 0.0
+        self._last_paint = 0.0
+
+    def __call__(self, stage: str, done: int, total: int) -> None:
+        import time as _time
+        now = _time.time()
+        if stage != self._stage:
+            self._stage, self._t0 = stage, now
+            self._last_paint = 0.0
+        if done < total and now - self._last_paint < 0.35:
+            return
+        self._last_paint = now
+        frac = (done / total) if total else 1.0
+        text = f"{stage} — {done:,}/{total:,}"
+        if 0 < done < total:
+            elapsed = now - self._t0
+            remaining = elapsed * (total - done) / done
+            text += f" · about {_fmt_duration_s(remaining)} left"
+        if self._bar is None:
+            self._bar = self._container.progress(
+                min(1.0, frac), text=text,
+            )
+        else:
+            self._bar.progress(min(1.0, frac), text=text)
 
 
 def _fmt_duration_s(seconds) -> str:
@@ -1209,13 +1262,14 @@ decomposition_spec = st.session_state["applied_decomp"]
 
 # ---- Mine UCM (for Model tab) ----------------------------------------------
 try:
-    with st.status("Mining UCM...", expanded=False) as status:
+    with st.status("Mining UCM...", expanded=True) as status:
         mined = _mine(
             log_bytes, log_kind, csv_columns,
             decomposition_spec, resource_attribute,
             effective_min_support, noise_threshold,
             overlay_nodes, overlay_edges,
             file_hash, _status=status,
+            _progress=_ProgressUI(status),
         )
         status.update(label="Done.", state="complete")
 except Exception as exc:
@@ -1376,7 +1430,7 @@ with scenarios_tab:
     if run:
         try:
             with st.status("Synthesizing scenarios...",
-                           expanded=False) as status:
+                           expanded=True) as status:
                 synth = _synthesize(
                     log_bytes, log_kind, csv_columns,
                     noise_threshold, condition_strategy,
@@ -1384,6 +1438,7 @@ with scenarios_tab:
                     group_name, decomposition_spec,
                     resource_attribute, effective_min_support,
                     file_hash, _status=status,
+                    _progress=_ProgressUI(status),
                 )
                 status.update(label="Done.", state="complete")
             st.session_state["synth_fp"] = _synth_fp
@@ -1673,7 +1728,7 @@ with family_tab:
             if run_family:
                 try:
                     with st.status("Mining model family...",
-                                   expanded=False) as status:
+                                   expanded=True) as status:
                         fam = _mine_family(
                             log_bytes, log_kind, csv_columns,
                             selected_attrs, int(family_min_cases),
@@ -1683,6 +1738,7 @@ with family_tab:
                             resource_attribute, effective_min_support,
                             family_dedup, overlay_nodes, overlay_edges,
                             file_hash, _status=status,
+                            _progress=_ProgressUI(status),
                         )
                         status.update(label="Done.", state="complete")
                     st.session_state["family_fp"] = _family_fp

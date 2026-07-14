@@ -251,6 +251,7 @@ def discover_scenarios(
     max_loop_iterations: Optional[int] = 2,
     condition_strategy: str = "variant",
     decision_tree_max_depth: int = 3,
+    progress_callback=None,
 ):
     """End-to-end discovery of an executable UCM with scenarios from a log.
 
@@ -350,7 +351,10 @@ synthesize_scenarios` for details.
     )
 
     # 3. Cluster the log on the tree.
-    clustering = _clustering.cluster(log, tree, coarsen_loops=coarsen_loops)
+    clustering = _clustering.cluster(
+        log, tree, coarsen_loops=coarsen_loops,
+        progress_callback=progress_callback,
+    )
 
     # 4. Synthesize scenarios on the UCM.
     _scenarios.synthesize_scenarios(
@@ -472,6 +476,7 @@ def discover_ucm_family(
     ignore_value_case: bool = True,
     case_id_col: str = "case:concept:name",
     parameters: Optional[Dict[str, Any]] = None,
+    progress_callback=None,
 ):
     """Mine a *family* of UCM models: partition ``log`` by the values
     of 1–2 case-level attributes (e.g. cancer type × age group) and
@@ -514,6 +519,7 @@ def discover_ucm_family(
         ignore_value_case=ignore_value_case,
         case_id_col=case_id_col,
         parameters=parameters,
+        progress_callback=progress_callback,
     )
 
 
@@ -619,7 +625,8 @@ def view_ucm_family(
     return tmp
 
 
-def compute_family_stats(family, parameters: Optional[Dict[str, Any]] = None):
+def compute_family_stats(family, parameters: Optional[Dict[str, Any]] = None,
+                         progress_callback=None):
     """Comparative statistics for every cell of a mined family — the
     data layer behind :func:`write_family_report` and the web app's
     Compare tab.
@@ -650,6 +657,7 @@ def compute_family_stats(family, parameters: Optional[Dict[str, Any]] = None):
         timestamp_col=params.get("timestamp_col", "time:timestamp"),
         start_timestamp_col=params.get(
             "start_timestamp_col", "start_timestamp"),
+        progress_callback=progress_callback,
     )
 
 

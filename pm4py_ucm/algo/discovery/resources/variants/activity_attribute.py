@@ -66,15 +66,19 @@ def apply(log: Any, parameters: Optional[dict] = None) -> Dict[str, str]:
     activity_key: str = p.get("activity_key", "concept:name")
     case_id_key: str = p.get("case_id_key", "case:concept:name")
 
-    # Bucket performer values per activity. Insertion order is preserved
-    # so the "first" strategy is meaningful and ties are broken
-    # deterministically.
-    buckets: Dict[str, List[str]] = defaultdict(list)
-    for activity, value in _iter_events(log, attr_priority, activity_key,
-                                        case_id_key):
-        if value is None:
-            continue
-        buckets[activity].append(value)
+    # Bucket performer values per activity. Bucket order is first
+    # occurrence in the log so the "first" strategy is meaningful,
+    # ties break deterministically, and downstream component-creation
+    # order (hence exported IDs) stays stable.
+    if _is_dataframe(log, case_id_key):
+        buckets = _dataframe_buckets(log, attr_priority, activity_key)
+    else:
+        buckets = defaultdict(list)
+        for activity, value in _iter_events(log, attr_priority,
+                                            activity_key, case_id_key):
+            if value is None:
+                continue
+            buckets[activity].append(value)
 
     # Aggregate
     out: Dict[str, str] = {}
@@ -100,6 +104,12 @@ def distinct_components(
     attr_priority: List[str] = p.get("attribute_priority", [primary_attr])
     activity_key: str = p.get("activity_key", "concept:name")
     case_id_key: str = p.get("case_id_key", "case:concept:name")
+
+    if _is_dataframe(log, case_id_key):
+        _, resolved = _dataframe_values(log, attr_priority, activity_key)
+        if resolved is None:
+            return []
+        return sorted(set(resolved))
 
     seen: set = set()
     for _, value in _iter_events(log, attr_priority, activity_key, case_id_key):
@@ -138,7 +148,7 @@ def _aggregate(values: List[str], strategy: str, min_support: float) -> Optional
 
 
 # ---------------------------------------------------------------------------
-# Event iteration — works on PM4Py EventLog or pandas DataFrame
+# Event iteration — PM4Py EventLog path
 # ---------------------------------------------------------------------------
 
 def _iter_events(
@@ -147,27 +157,82 @@ def _iter_events(
     activity_key: str,
     case_id_key: str,
 ) -> Iterable[Tuple[str, Optional[str]]]:
-    """Yield ``(activity, performer)`` pairs over every event of ``log``,
-    abstracting over the PM4Py EventLog / pandas DataFrame distinction.
+    """Yield ``(activity, performer)`` pairs over every event of ``log``
+    — the EventLog (iterable-of-traces) path. DataFrames go through the
+    vectorized helpers below instead: per-row iteration
+    (``iterrows``) took *minutes* on logs with a few hundred thousand
+    events, even when no performer attribute existed at all.
     """
     attrs = list(attr_priority)
-
-    # pandas DataFrame? Detect duck-typed via "iterrows".
-    if hasattr(log, "iterrows") and case_id_key in getattr(log, "columns", []):
-        for _, row in log.iterrows():
-            activity = row.get(activity_key)
-            if activity is None:
-                continue
-            yield str(activity), _first_set(row, attrs)
-        return
-
-    # Otherwise: an EventLog (or any iterable of traces).
     for trace in log:
         for ev in trace:
             activity = ev.get(activity_key) if hasattr(ev, "get") else None
             if activity is None:
                 continue
             yield str(activity), _first_set(ev, attrs)
+
+
+# ---------------------------------------------------------------------------
+# Vectorized DataFrame path
+# ---------------------------------------------------------------------------
+
+def _is_dataframe(log: Any, case_id_key: str) -> bool:
+    """Same duck-typed detection the per-event iterator used."""
+    return (hasattr(log, "iterrows")
+            and case_id_key in getattr(log, "columns", []))
+
+
+def _dataframe_values(log, attr_priority: Iterable[str], activity_key: str):
+    """Vectorized equivalent of the per-event walk: ``(activities,
+    performers)`` as two aligned pandas Series, restricted to events
+    whose performer is set. ``performers`` is ``None`` when no priority
+    attribute exists as a column (O(1) — no scan), mirroring the
+    per-event yield of ``None`` for every row.
+
+    Semantics mirror :func:`_first_set` exactly: ``None``/NaN and
+    empty-string values do not count as "set"; the first *set*
+    attribute in priority order wins; values are stringified. Events
+    with a missing activity are dropped.
+    """
+    import pandas as pd
+
+    if activity_key not in log.columns:
+        return None, None
+    present = [a for a in attr_priority if a in log.columns]
+    if not present:
+        return None, None
+
+    # Priority fall-through: first set (non-null, non-empty) value.
+    resolved = pd.Series(None, index=log.index, dtype=object)
+    unset = pd.Series(True, index=log.index)
+    for col in present:
+        s = log[col]
+        is_set = unset & s.notna() & (s.astype(str) != "")
+        resolved[is_set] = s[is_set]
+        unset &= ~is_set
+
+    keep = resolved.notna() & log[activity_key].notna()
+    activities = log.loc[keep, activity_key].astype(str)
+    performers = resolved[keep].map(str)
+    return activities, performers
+
+
+def _dataframe_buckets(
+    log, attr_priority: Iterable[str], activity_key: str,
+) -> Dict[str, List[str]]:
+    """``{activity: [performer, ...]}`` in first-occurrence order —
+    identical to the per-event bucket construction, built vectorized."""
+    activities, performers = _dataframe_values(
+        log, attr_priority, activity_key,
+    )
+    if performers is None:
+        return {}
+    import pandas as pd
+
+    frame = pd.DataFrame({"a": activities, "v": performers})
+    # groupby(sort=False) preserves the order in which activities first
+    # appear — the same order the defaultdict insertion produced.
+    return {a: g["v"].tolist() for a, g in frame.groupby("a", sort=False)}
 
 
 def _first_set(ev: Any, attrs: Iterable[str]) -> Optional[str]:
