@@ -34,9 +34,9 @@ missing).
 
 ## The V3 app
 
-One app — **`streamlit_app_v3.py`** — serves every deployment
-(https://pm4py-ucm.streamlit.app/ and the mirror
-https://pm4py-ucm-scenarios.streamlit.app/). Four tabs:
+**`streamlit_app_v3.py`** — served at
+https://pm4py-ucm.streamlit.app/ (via the `streamlit_app.py` shim,
+that deployment's main file). Four tabs:
 
 - **Model** — mine a UCM from a log, preview in UCM or BPMN notation,
   open the image in its own browser tab (button or double-click),
@@ -56,11 +56,12 @@ https://pm4py-ucm-scenarios.streamlit.app/). Four tabs:
   by side: models, per-activity/edge deltas, aligned OR-fork branch
   shares.
 
-Version history: **V1** (`streamlit_app.py`) was the original
-model-only app, retired at v0.5.1; **V2** (`streamlit_app_v2.py`) was
-the app before the model-family features. Both paths remain as shims
-that run V3, so deployments whose main-file setting predates the
-renames keep working — and always serve the latest code.
+**`streamlit_app_v2.py` is the FROZEN V2 app** (model + scenarios,
+the state before the model-family features) — served at
+https://pm4py-ucm-scenarios.streamlit.app/ for a paper under review;
+do not modernise it. **V1** (the model-only app that
+`streamlit_app.py` used to contain) was retired at v0.5.1 and lives
+in git history; its path is now a shim that runs V3.
 
 ## Using the app
 
@@ -180,12 +181,12 @@ Once mining completes, the page shows:
 
 1. Push this repo to GitHub.
 2. At <https://share.streamlit.io>, "New app" → pick the repo and branch.
-3. Set **Main file path** to `web/streamlit_app_v3.py`. Streamlit
-   Cloud picks up `web/requirements.txt` automatically (sits next to
-   the main file). (The existing deployments point at
-   `web/streamlit_app.py` and `web/streamlit_app_v2.py` — both are
-   shims that run V3, so they keep working; update the setting at
-   leisure.)
+3. Set **Main file path** to `web/streamlit_app_v3.py` for the latest
+   app (or `web/streamlit_app_v2.py` for the frozen V2 scenarios
+   app). Streamlit Cloud picks up `web/requirements.txt`
+   automatically (sits next to the main file). The existing primary
+   deployment points at `web/streamlit_app.py` — a shim that runs V3,
+   so it keeps working without a settings change.
 4. **`packages.txt` (apt packages) MUST be at the repo root** — Streamlit
    Cloud's apt-install phase only reads from the root, not from the main
    file's directory. The root `packages.txt` in this repo installs the

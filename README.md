@@ -3,8 +3,8 @@
 [![tests](https://github.com/ProcessMining-uOttawa/pm4py-ucm/actions/workflows/tests.yml/badge.svg)](https://github.com/ProcessMining-uOttawa/pm4py-ucm/actions/workflows/tests.yml)
 [![Python](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-blue)](https://www.python.org/)
 [![License: GPL v3+](https://img.shields.io/badge/license-GPLv3%2B-blue.svg)](LICENSE)
-[![Streamlit](https://img.shields.io/badge/Streamlit-V3%20app-FF4B4B?logo=streamlit&logoColor=white)](https://pm4py-ucm.streamlit.app/)
-[![Streamlit mirror](https://img.shields.io/badge/Streamlit-V3%20mirror-FF4B4B?logo=streamlit&logoColor=white)](https://pm4py-ucm-scenarios.streamlit.app/)
+[![Streamlit V3](https://img.shields.io/badge/Streamlit-V3%20families-FF4B4B?logo=streamlit&logoColor=white)](https://pm4py-ucm.streamlit.app/)
+[![Streamlit V2](https://img.shields.io/badge/Streamlit-V2%20scenarios-FF4B4B?logo=streamlit&logoColor=white)](https://pm4py-ucm-scenarios.streamlit.app/)
 
 **Use Case Map (UCM) extension for [PM4Py](https://github.com/process-intelligence-solutions/pm4py).**
 
@@ -33,7 +33,7 @@ pm4py_ucm.write_ucm(ucm, "running-example.jucm")  # opens in jUCMNav
 - [`demo/pm4py_ucm_tutorial.ipynb`](demo/pm4py_ucm_tutorial.ipynb) — end-to-end Jupyter walkthrough on a real claims-payment log (discovery, BPMN/UCM rendering, performer mining, hierarchical decomposition, `.jucm` round-trips).
 - [`demo/scenario_synthesis_tutorial.ipynb`](demo/scenario_synthesis_tutorial.ipynb) — pedagogical tutorial for the **scenario-synthesis** layer: concurrency-aware variants, per-loop counters + `LoopEntryGuard`, variant-driven vs data-driven OR-fork conditions, transparent support for decomposed UCMs. Empirical companion in [`demo/scenario_synthesis.ipynb`](demo/scenario_synthesis.ipynb).
 - [`demo/model_families_tutorial.ipynb`](demo/model_families_tutorial.ipynb) — the **model-family** pipeline on the claims log: attribute detection, partition preview, per-cell mining, stack/matrix rendering, combined export, the dynamic-stub **umbrella** (skeleton, resource variation, path scenarios), **performance overlays** on activities and edges, and the **family statistics report** (FamilyStats + the self-contained interactive HTML file).
-- [`web/streamlit_app_v3.py`](web/streamlit_app_v3.py) — the **V3 web app** (model + scenarios + model families + statistics reports), hosted at https://pm4py-ucm.streamlit.app/ (mirror: https://pm4py-ucm-scenarios.streamlit.app/) — click, don't code: upload an XES/CSV, tune the miner, download the result.
+- [`web/streamlit_app_v3.py`](web/streamlit_app_v3.py) — the **V3 web app** (model + scenarios + model families + statistics reports), hosted at https://pm4py-ucm.streamlit.app/ — click, don't code: upload an XES/CSV, tune the miner, download the result. (The **V2** scenarios app stays at https://pm4py-ucm-scenarios.streamlit.app/.)
 - The rest of this README — reference docs for the public API.
 
 [ucm-wiki]: https://en.wikipedia.org/wiki/Use_Case_Maps
@@ -71,11 +71,15 @@ activities and edges, applied to every tab's outputs). See
 [`docs/model_families.md`](docs/model_families.md).
 
 Deployed on Streamlit Community Cloud at
-**https://pm4py-ucm.streamlit.app/** (mirror:
-https://pm4py-ucm-scenarios.streamlit.app/). The historical
-`streamlit_app.py` (V1, model-only — retired at v0.5.1) and
-`streamlit_app_v2.py` (pre-family V2) paths remain as shims that run
-V3, so both deployments track the latest code.
+**https://pm4py-ucm.streamlit.app/** (`streamlit_app.py`, the
+deployment's main file, is a shim that runs V3, so that URL always
+tracks the latest code; the V1 model-only app it used to serve was
+retired at v0.5.1 and lives in git history).
+
+**https://pm4py-ucm-scenarios.streamlit.app/** deliberately keeps
+serving the **frozen V2 app** ([`web/streamlit_app_v2.py`](web/streamlit_app_v2.py),
+model + scenarios) — it is referenced by a paper under review and
+must stay as published.
 
 ![Overview of the PM4Py-UCM web interface](web/WebInterfaceOverview.png)
 
@@ -83,7 +87,8 @@ Run locally with:
 
 ```bash
 pip install -r web/requirements.txt
-streamlit run web/streamlit_app_v3.py
+streamlit run web/streamlit_app_v3.py    # V3 (latest)
+streamlit run web/streamlit_app_v2.py    # V2 (frozen scenarios app)
 ```
 
 See [`web/README.md`](web/README.md) for the full feature walkthrough and

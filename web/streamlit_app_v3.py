@@ -16,11 +16,14 @@ Run locally:
 
     streamlit run web/streamlit_app_v3.py
 
-History: V1 was the model-only app (retired at v0.5.1, in git
-history); V2 was this app before the family features. Both old paths
-— ``streamlit_app.py`` and ``streamlit_app_v2.py`` — remain as shims
-that run this file, so the two Streamlit Cloud deployments keep
-working without touching their main-file settings.
+Deployment layout: ``streamlit_app.py`` (the
+https://pm4py-ucm.streamlit.app/ main file) is a shim that runs THIS
+file, so the primary deployment always serves the latest app. V1
+(model-only) was retired at v0.5.1 and lives in git history.
+``streamlit_app_v2.py`` is deliberately NOT a shim: it is the frozen
+V2 (model + scenarios) app that
+https://pm4py-ucm-scenarios.streamlit.app/ must keep serving while a
+paper referencing it is under review — do not fold it into V3.
 """
 from __future__ import annotations
 
