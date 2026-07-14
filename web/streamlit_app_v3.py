@@ -1021,58 +1021,24 @@ st.set_page_config(page_title="PM4Py-UCM (V3 · Families)", layout="wide")
 st.title("PM4Py-UCM")
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def _latest_release() -> Optional[Dict[str, str]]:
-    """The repository's latest published GitHub release —
-    ``{"tag", "date", "url"}`` — or ``None`` when the API is
-    unreachable (offline, rate-limited). Cached for an hour. The
-    deployed code may be ahead of or behind the latest release, so
-    the header quotes the RELEASE, not the package version — the
-    version constant may never have been published under that tag."""
-    import json
-    import urllib.request
-    try:
-        req = urllib.request.Request(
-            "https://api.github.com/repos/ProcessMining-uOttawa/"
-            "pm4py-ucm/releases/latest",
-            headers={"Accept": "application/vnd.github+json",
-                     "User-Agent": "pm4py-ucm-streamlit"},
-        )
-        with urllib.request.urlopen(req, timeout=4) as resp:
-            data = json.load(resp)
-        if not data.get("tag_name"):
-            return None
-        return {
-            "tag": str(data["tag_name"]),
-            "date": str(data.get("published_at") or "")[:10],
-            "url": str(
-                data.get("html_url")
-                or "https://github.com/ProcessMining-uOttawa/pm4py-ucm/"
-                   "releases/latest"
-            ),
-        }
-    except Exception:
-        return None
-
-
-_release = _latest_release()
-if _release is not None:
-    _release_text = (
-        f"Latest release: [pm4py-ucm {_release['tag']}]({_release['url']})"
-        + (f", {_release['date']}" if _release["date"] else "")
-    )
-else:  # offline / rate-limited: a link that always resolves
-    _release_text = (
-        "Releases: [github.com/ProcessMining-uOttawa/pm4py-ucm]"
-        "(https://github.com/ProcessMining-uOttawa/pm4py-ucm/"
-        "releases/latest)"
-    )
+# Show the ACTUAL running package version (not the latest GitHub
+# release): the deployment imports the checkout's ``pm4py_ucm``, so this
+# reflects exactly what is executing — and surfaces immediately if the
+# environment ever serves a stale build. Links to that version's release
+# notes (the version constant is bumped in the release commit, so the
+# ``v<version>`` tag exists for any published version).
+_version = getattr(pm4py_ucm, "__version__", "unknown")
+_version_text = (
+    f"Running [pm4py-ucm {_version}]"
+    "(https://github.com/ProcessMining-uOttawa/pm4py-ucm/releases/tag/"
+    f"v{_version})"
+)
 st.caption(
     "Mine a Use Case Map model from an XES or CSV event log, "
     "synthesize executable jUCMNav scenarios with concurrency-aware "
     "variant clustering, and mine attribute-partitioned model "
     "families with comparative statistics reports. "
-    f"{_release_text} — by [Daniel Amyot](https://damyot.github.io/), "
+    f"{_version_text} — by [Daniel Amyot](https://damyot.github.io/), "
     "University of Ottawa, Canada."
 )
 
