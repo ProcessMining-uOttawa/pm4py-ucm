@@ -1947,20 +1947,32 @@ with family_tab:
                     )
                 if grid_preview is not None:
                     _fb64 = base64.b64encode(grid_preview).decode("ascii")
+                    # data-opentab="1" opts the image into the delegated
+                    # double-click-to-open-in-new-tab handler (installed
+                    # by the Model tab's _open_image_in_tab_button, which
+                    # runs earlier in the same script pass).
                     st.markdown(
                         f'<img src="data:image/png;base64,{_fb64}" '
                         f'width="{_DISPLAY_WIDTH_PX}" '
-                        f'style="max-width:100%; height:auto;" '
+                        f'style="max-width:100%; height:auto; '
+                        f'cursor: zoom-in;" '
+                        f'data-opentab="1" '
+                        f'title="Double-click to open in a new browser tab" '
                         f'alt="Model family grid" />',
                         unsafe_allow_html=True,
                     )
                     st.caption(
                         "One panel per combination — captions show "
                         "each cell's case count and share of the log. "
-                        "This inline view is a downscaled preview; "
-                        "the **Grid PNG** download below is full "
+                        "Double-click the grid to open it in its own "
+                        "browser tab. This inline view is a downscaled "
+                        "preview; the **Grid PNG** download below is full "
                         "resolution (text-readable)."
                     )
+                    # Guarantee the double-click listener exists even if
+                    # the Model tab didn't render an image this run.
+                    _open_image_in_tab_button(
+                        _fb64, label="Open grid in new tab ⧉")
                 elif grid_error:
                     st.warning(
                         f"Grid rendering unavailable: {grid_error}"
@@ -2135,6 +2147,8 @@ with compare_tab:
             )
 
         # ---- models side by side ----------------------------------------
+        st.caption("Double-click either model to open it full-size in a "
+                   "new browser tab.")
         _imc = st.columns(2)
         for _col, _tag, _idx, _cell in (
                 (_imc[0], "A", _ia, _A), (_imc[1], "B", _ib, _B)):
@@ -2147,8 +2161,21 @@ with compare_tab:
                     f"({_cell.coverage * 100:.1f}% of the log)"
                 )
                 if _png is not None:
-                    st.image(_png, caption=_cap,
-                             use_container_width=True)
+                    # data-opentab="1" opts into the shared double-click
+                    # handler (installed by the Model tab, which always
+                    # renders before this tab) so the model opens in a
+                    # new tab — the same behaviour as the Model tab.
+                    _cb64 = base64.b64encode(_png).decode("ascii")
+                    st.markdown(
+                        f'<img src="data:image/png;base64,{_cb64}" '
+                        f'style="max-width:100%; height:auto; '
+                        f'cursor: zoom-in;" '
+                        f'data-opentab="1" '
+                        f'title="Double-click to open in a new browser tab" '
+                        f'alt="Compare {_tag} model" />',
+                        unsafe_allow_html=True,
+                    )
+                    st.caption(_cap)
                 else:
                     st.caption(_cap + " — rendering unavailable")
 

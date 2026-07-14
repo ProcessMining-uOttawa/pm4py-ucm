@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (web app)
+
+- **Double-click a family model to open it in a new browser tab** — the
+  same zoom-in behaviour the Model tab already offers, now on the
+  Family tab's grid *and* the Compare tab's two side-by-side cell
+  models (an atomic `data-opentab` opt-in plus the shared delegated
+  double-click handler; the Family grid also gets an "Open grid in new
+  tab" button as a fallback).
+
 ### Added (metrics — validation + new statistics)
 
 - **Metric-validation suite** (`tests/test_metric_validation.py`) and a
