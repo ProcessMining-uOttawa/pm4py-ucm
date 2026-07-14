@@ -3,8 +3,8 @@
 [![tests](https://github.com/ProcessMining-uOttawa/pm4py-ucm/actions/workflows/tests.yml/badge.svg)](https://github.com/ProcessMining-uOttawa/pm4py-ucm/actions/workflows/tests.yml)
 [![Python](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-blue)](https://www.python.org/)
 [![License: GPL v3+](https://img.shields.io/badge/license-GPLv3%2B-blue.svg)](LICENSE)
-[![Streamlit V1](https://img.shields.io/badge/Streamlit-V1%20model-FF4B4B?logo=streamlit&logoColor=white)](https://pm4py-ucm.streamlit.app/)
-[![Streamlit V3](https://img.shields.io/badge/Streamlit-V3%20families-FF4B4B?logo=streamlit&logoColor=white)](https://pm4py-ucm-scenarios.streamlit.app/)
+[![Streamlit](https://img.shields.io/badge/Streamlit-V3%20app-FF4B4B?logo=streamlit&logoColor=white)](https://pm4py-ucm.streamlit.app/)
+[![Streamlit mirror](https://img.shields.io/badge/Streamlit-V3%20mirror-FF4B4B?logo=streamlit&logoColor=white)](https://pm4py-ucm-scenarios.streamlit.app/)
 
 **Use Case Map (UCM) extension for [PM4Py](https://github.com/process-intelligence-solutions/pm4py).**
 
@@ -33,7 +33,7 @@ pm4py_ucm.write_ucm(ucm, "running-example.jucm")  # opens in jUCMNav
 - [`demo/pm4py_ucm_tutorial.ipynb`](demo/pm4py_ucm_tutorial.ipynb) — end-to-end Jupyter walkthrough on a real claims-payment log (discovery, BPMN/UCM rendering, performer mining, hierarchical decomposition, `.jucm` round-trips).
 - [`demo/scenario_synthesis_tutorial.ipynb`](demo/scenario_synthesis_tutorial.ipynb) — pedagogical tutorial for the **scenario-synthesis** layer: concurrency-aware variants, per-loop counters + `LoopEntryGuard`, variant-driven vs data-driven OR-fork conditions, transparent support for decomposed UCMs. Empirical companion in [`demo/scenario_synthesis.ipynb`](demo/scenario_synthesis.ipynb).
 - [`demo/model_families_tutorial.ipynb`](demo/model_families_tutorial.ipynb) — the **model-family** pipeline on the claims log: attribute detection, partition preview, per-cell mining, stack/matrix rendering, combined export, the dynamic-stub **umbrella** (skeleton, resource variation, path scenarios), **performance overlays** on activities and edges, and the **family statistics report** (FamilyStats + the self-contained interactive HTML file).
-- [`web/streamlit_app.py`](web/streamlit_app.py) (V1, model-only, hosted at https://pm4py-ucm.streamlit.app/) and [`web/streamlit_app_v3.py`](web/streamlit_app_v3.py) (V3, model + scenarios + model families + statistics reports, hosted at https://pm4py-ucm-scenarios.streamlit.app/) — click, don't code: upload an XES/CSV, tune the miner, download the result.
+- [`web/streamlit_app_v3.py`](web/streamlit_app_v3.py) — the **V3 web app** (model + scenarios + model families + statistics reports), hosted at https://pm4py-ucm.streamlit.app/ (mirror: https://pm4py-ucm-scenarios.streamlit.app/) — click, don't code: upload an XES/CSV, tune the miner, download the result.
 - The rest of this README — reference docs for the public API.
 
 [ucm-wiki]: https://en.wikipedia.org/wiki/Use_Case_Maps
@@ -41,48 +41,49 @@ pm4py_ucm.write_ucm(ucm, "running-example.jucm")  # opens in jUCMNav
 
 ## Web front-end
 
-Two [Streamlit](https://streamlit.io) front-ends ship in the
-[`web/`](web/) directory:
+One [Streamlit](https://streamlit.io) front-end —
+[`web/streamlit_app_v3.py`](web/streamlit_app_v3.py) (**V3**) — serves
+every deployment. Four tabs:
 
-- **`streamlit_app.py` (V1)** — the original model-only flow. Upload an
-  event log (XES or CSV), tune the inductive miner / decomposition /
-  performer settings interactively, preview the diagram in UCM or BPMN
-  notation, and download the rendered PNG plus the `.jucm` file.
-- **`streamlit_app_v3.py` (V3)** — superset of V1. (V2 was this app
-  before the model-family features; `streamlit_app_v2.py` remains as
-  a shim for existing deployments.) Adds a **Scenarios
-  tab** that runs concurrency-aware variant clustering and synthesizes
-  one executable jUCMNav `ScenarioDef` per variant. Both variant-driven
+- **Model** — upload an event log (XES or CSV), tune the inductive
+  miner / decomposition / performer settings interactively, preview
+  the diagram in UCM or BPMN notation, and download the rendered PNG
+  plus the `.jucm` file.
+- **Scenarios** — concurrency-aware variant clustering + one
+  executable jUCMNav `ScenarioDef` per variant. Both variant-driven
   and data-driven OR-fork encodings are exposed; the tab surfaces
   headline metrics (variant count, sequence variants, compression
   ratio, fitness %, per-fork condition-mining accuracies) and offers
   four downloads: the `.jucm` with the synthesized scenario group,
   `variants.csv`, `case_variant_map.csv`, and (data-driven mode)
   `condition_mining.csv`. Runs on flat and decomposed UCMs alike.
-  Also adds a **Family tab** — pick 1–2 case attributes (with
-  per-value filters and a pre-mining coverage heatmap), mine one model
-  per combination, and download the per-cell zip, the combined
-  `.jucm`, the dynamic-stub umbrella `.jucm`, the grid PNG, and the
-  interactive HTML statistics report — a **Compare tab** — rank the
-  family members on a heat-mapped statistics table and compare any
-  two side by side (models, activity deltas, aligned choice shares) —
-  and a **Performance overlay** sidebar section (frequencies/times on
-  activities and edges, applied to every tab's outputs). See
-  [`docs/model_families.md`](docs/model_families.md).
+- **Family** — pick 1–2 case attributes (with per-value filters and a
+  pre-mining coverage heatmap), mine one model per combination, and
+  download the per-cell zip, the combined `.jucm`, the dynamic-stub
+  umbrella `.jucm`, the grid PNG, and the interactive HTML statistics
+  report.
+- **Compare** — rank the family members on a heat-mapped statistics
+  table and compare any two side by side (models, activity/edge
+  deltas, aligned choice shares).
 
-Both are deployed on Streamlit Community Cloud:
+Plus a **Performance overlay** sidebar section (frequencies/times on
+activities and edges, applied to every tab's outputs). See
+[`docs/model_families.md`](docs/model_families.md).
 
-- V1 (model only): https://pm4py-ucm.streamlit.app/
-- V3 (model + scenarios + families + reports): https://pm4py-ucm-scenarios.streamlit.app/
+Deployed on Streamlit Community Cloud at
+**https://pm4py-ucm.streamlit.app/** (mirror:
+https://pm4py-ucm-scenarios.streamlit.app/). The historical
+`streamlit_app.py` (V1, model-only — retired at v0.5.1) and
+`streamlit_app_v2.py` (pre-family V2) paths remain as shims that run
+V3, so both deployments track the latest code.
 
 ![Overview of the PM4Py-UCM web interface](web/WebInterfaceOverview.png)
 
-Run either locally with:
+Run locally with:
 
 ```bash
 pip install -r web/requirements.txt
-streamlit run web/streamlit_app.py       # V1 (model only)
-streamlit run web/streamlit_app_v3.py    # V3 (scenarios + families)
+streamlit run web/streamlit_app_v3.py
 ```
 
 See [`web/README.md`](web/README.md) for the full feature walkthrough and

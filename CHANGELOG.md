@@ -5,6 +5,18 @@ All notable changes to **pm4py-ucm** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed (web deployments unified on V3)
+
+- The original model-only **V1 app is retired**: `web/streamlit_app.py`
+  is now a shim that runs `streamlit_app_v3.py` (same mechanism as the
+  `streamlit_app_v2.py` shim), so the first Streamlit Cloud deployment
+  (https://pm4py-ucm.streamlit.app/) serves the full V3 app — Model,
+  Scenarios, Family, and Compare tabs — without touching its main-file
+  setting. Both deployments now track the same code; V1's last version
+  remains in git history (up to v0.5.1). READMEs updated accordingly.
+
 ## [0.5.1] — 2026-07-14
 
 ### Fixed (performance — resource mining on DataFrames)

@@ -1,27 +1,26 @@
-"""PM4Py-UCM web front-end — V3 (scenarios + families + reports).
+"""PM4Py-UCM web front-end — V3 (model + scenarios + families +
+reports). THE app: every deployment path serves this file.
 
-V3 is a superset of V1: same log-source / inductive-miner / performer /
-decomposition controls, same UCM/BPMN preview tab, plus a Scenarios
-tab that runs the concurrency-aware variant clustering + scenario
-synthesis pipeline and exposes every artifact (the executable .jucm,
-variants.csv, case_variant_map.csv, and for data-driven runs
-condition_mining.csv) as a download, plus a Family tab that partitions
-the log by 1–2 case attributes and mines a model per combination
-(grid rendering, per-cell zip, combined .jucm, a dynamic-stub
-umbrella .jucm with per-combination strategies, and the self-contained
-interactive HTML statistics report), plus a Compare tab that ranks the
-family members and compares any two side by side. (V2 was this app
-before the family features; the ``streamlit_app_v2.py`` path remains
-as a shim for existing deployments.)
+Tabs: **Model** (inductive-mine a UCM, preview in UCM or BPMN
+notation, download PNG/.jucm), **Scenarios** (concurrency-aware
+variant clustering + scenario synthesis, with every artifact — the
+executable .jucm, variants.csv, case_variant_map.csv, and for
+data-driven runs condition_mining.csv — as a download), **Family**
+(partition the log by 1–2 case attributes and mine a model per
+combination: grid rendering, per-cell zip, combined .jucm, a
+dynamic-stub umbrella .jucm with per-combination strategies, and the
+self-contained interactive HTML statistics report), and **Compare**
+(rank the family members and compare any two side by side).
 
-V1 remains untouched at ``web/streamlit_app.py``. Run either:
+Run locally:
 
-    streamlit run web/streamlit_app.py       # V1 (model only)
-    streamlit run web/streamlit_app_v3.py    # V3 (scenarios + families)
+    streamlit run web/streamlit_app_v3.py
 
-Helper code is intentionally inlined rather than shared with V1 — keeps
-V1 a self-contained one-file app and avoids a refactor that could
-regress its existing Streamlit Cloud deployment.
+History: V1 was the model-only app (retired at v0.5.1, in git
+history); V2 was this app before the family features. Both old paths
+— ``streamlit_app.py`` and ``streamlit_app_v2.py`` — remain as shims
+that run this file, so the two Streamlit Cloud deployments keep
+working without touching their main-file settings.
 """
 from __future__ import annotations
 
@@ -47,8 +46,9 @@ from pm4py_ucm.algo.discovery.variants import clustering as _clustering_mod
 from pm4py_ucm.visualization.ucm import visualizer as _visualizer
 from pm4py_ucm.visualization.ucm import stacked as _stacked
 
-# Pillow's default decompression-bomb guard rejects very large composites.
-# See V1 for the rationale; same 1B-pixel cap here.
+# Pillow's default decompression-bomb guard (~178M px) rejects very
+# large composites (family grids, decomposed stacks); raise it to a
+# still-sane 1B-pixel cap.
 from PIL import Image as _PILImage
 _PILImage.MAX_IMAGE_PIXELS = 1_000_000_000
 
@@ -58,7 +58,7 @@ _DISPLAY_WIDTH_PX = 1100
 _NONE_OPT = "(none)"
 
 # (session key, candidate names, include_none flag). Used by the CSV
-# column auto-detection — same set as V1.
+# column auto-detection.
 _CSV_AUTOPICK = [
     ("csv_case",      ("case:concept:name", "case_id", "case", "caseid"),            False),
     ("csv_activity",  ("concept:name", "activity", "activityname", "event", "task"), False),
@@ -146,9 +146,9 @@ def _arg_fingerprint(*args) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Mining (UCM only, no scenarios) — same cache surface as V1 plus a
-# returned process-tree fingerprint so the scenario step can detect
-# whether its inputs changed.
+# Mining (UCM only, no scenarios) — cached on the log + miner
+# settings, plus a returned process-tree fingerprint so the scenario
+# step can detect whether its inputs changed.
 # ---------------------------------------------------------------------------
 
 @st.cache_data(show_spinner=False)
