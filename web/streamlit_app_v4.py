@@ -417,9 +417,13 @@ def _stack_svgs(panels: List[Tuple[str, str]]) -> str:
         )
         y += title_strip
         x_off = (total_w - w) / 2  # centre a narrower panel, like the PNG
+        # ``id`` is the anchor a stub's ``#pm-map-N`` hyperlink lands on;
+        # a group above the panel gives the viewer a clean scroll target.
         out.append(
+            f'<g id="pm-map-{i}">'
             f'<svg x="{x_off:.2f}" y="{y:.2f}" width="{w:.2f}" '
             f'height="{h:.2f}" viewBox="0 0 {w:.2f} {h:.2f}">{inner}</svg>'
+            f'</g>'
         )
         y += h
         if i != len(dims) - 1:
@@ -454,11 +458,34 @@ def _render_svg_cached(jucm_bytes: bytes, style: str) -> str:
             return _svg_body(gviz.pipe(format="svg").decode("utf-8"))
 
         from pm4py_ucm.visualization.ucm.variants import classic as _classic
+
+        # Hyperlink each stub / sub-process to its plug-in map's panel, so
+        # the stacked SVG is navigable: click a stub to jump to its
+        # sub-model. Only STATIC single-binding stubs get a direct link;
+        # a DYNAMIC (multi-binding) stub selects among several plug-ins by
+        # precondition and can't be one href — those are left unlinked for
+        # now (a picker is future work).
+        _map_index = {id(m): i for i, m in enumerate(ucm.maps)}
+        stub_links: Dict[int, Any] = {}
+        for _m in ucm.maps:
+            for _node in _m.nodes:
+                if not isinstance(_node, pm4py_ucm.UCM.Stub):
+                    continue
+                if getattr(_node, "dynamic", False) or len(_node.bindings) != 1:
+                    continue
+                _plugin = _node.bindings[0].plugin
+                _pi = _map_index.get(id(_plugin))
+                if _pi is not None:
+                    stub_links[id(_node)] = (
+                        f"#pm-map-{_pi}",
+                        f"Go to sub-map: {_plugin.name or f'Map{_pi}'}",
+                    )
+
         panels = []
         for idx, ucm_map in enumerate(ucm.maps):
             gviz = _classic.apply(
                 ucm, parameters={"style": style, "map_index": idx,
-                                 "format": "svg"})
+                                 "format": "svg", "stub_links": stub_links})
             name = ucm_map.name or f"Map{idx}"
             panels.append(
                 (name, _svg_body(gviz.pipe(format="svg").decode("utf-8"))))
@@ -1212,7 +1239,7 @@ def _svg_viewer(svg: str, *, height: int = 620, key: str = "svgview") -> None:
   stage.innerHTML = new TextDecoder("utf-8").decode(bytes);
   const svg = stage.querySelector("svg");
   if (!svg) return;
-  let scale = 1, tx = 0, ty = 0, drag = false, px = 0, py = 0;
+  let scale = 1, tx = 0, ty = 0, drag = false, px = 0, py = 0, moved = 0;
   const apply = () => svg.style.transform =
     `translate(${{tx}}px,${{ty}}px) scale(${{scale}})`;
   stage.addEventListener("wheel", (e) => {{
@@ -1222,17 +1249,36 @@ def _svg_viewer(svg: str, *, height: int = 620, key: str = "svgview") -> None:
     apply();
   }}, {{ passive: false }});
   stage.addEventListener("pointerdown", (e) => {{
-    drag = true; px = e.clientX; py = e.clientY;
+    drag = true; moved = 0; px = e.clientX; py = e.clientY;
     stage.setPointerCapture(e.pointerId); stage.style.cursor = "grabbing";
   }});
   stage.addEventListener("pointermove", (e) => {{
     if (!drag) return;
-    tx += e.clientX - px; ty += e.clientY - py; px = e.clientX; py = e.clientY;
+    const dx = e.clientX - px, dy = e.clientY - py;
+    moved += Math.abs(dx) + Math.abs(dy);
+    tx += dx; ty += dy; px = e.clientX; py = e.clientY;
     apply();
   }});
   const stop = () => {{ drag = false; stage.style.cursor = "grab"; }};
   stage.addEventListener("pointerup", stop);
   stage.addEventListener("pointerleave", stop);
+  // Click a stub / sub-process to jump to its plug-in map. graphviz
+  // emits <a xlink:href="#pm-map-N">; pan so that panel's top meets the
+  // viewport. Suppressed after a drag so panning never triggers a jump.
+  stage.addEventListener("click", (e) => {{
+    if (moved > 6) return;
+    const a = e.target.closest && e.target.closest("a");
+    if (!a) return;
+    const href = a.getAttribute("xlink:href") || a.getAttribute("href") || "";
+    if (!href.startsWith("#pm-map-")) return;
+    e.preventDefault();
+    const target = svg.querySelector(href);
+    if (!target) return;
+    const tr = target.getBoundingClientRect();
+    const sr = stage.getBoundingClientRect();
+    ty += (sr.top - tr.top) + 10;   // bring the panel's top into view
+    apply();
+  }});
 }})();
 </script>""",
         height=height + 6,
