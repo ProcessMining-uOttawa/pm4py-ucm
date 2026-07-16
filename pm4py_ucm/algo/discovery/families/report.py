@@ -81,9 +81,10 @@ def _render_cell_images(
     text is selectable, and the report is a fraction of the size — no
     raster DPI, width cap or Pillow palette-quantisation needed, since a
     vector has no resolution to trade off. A decomposed cell's maps are
-    stacked exactly as the PNG path composited them. The images are
-    embedded (``<img src>``), so stub links are omitted (``navigable=False``)
-    — they cannot be followed from an image anyway."""
+    stacked exactly as the PNG path composited them. Stub links are kept
+    (``navigable=True``): the gallery thumbnails are ``<img>`` (inert), but
+    the lightbox inlines the SVG so clicking a stub scrolls to its plug-in
+    panel."""
     try:
         from ....visualization.ucm import svg as _svg
     except ImportError:  # pragma: no cover - visualization always ships
@@ -92,7 +93,7 @@ def _render_cell_images(
     uris: List[Optional[str]] = []
     for cell in family.cells:
         try:
-            svg = _svg.model_to_svg(cell.ucm, style, navigable=False)
+            svg = _svg.model_to_svg(cell.ucm, style, navigable=True)
             uris.append(
                 "data:image/svg+xml;base64,"
                 + base64.b64encode(svg.encode("utf-8")).decode("ascii")
@@ -328,6 +329,9 @@ td.na { color: #b3bfca; }
   padding: 24px; text-align: center;
 }
 #lightbox img { max-width: none; background: #fff; border-radius: 6px; }
+#lightbox .lbsvg { display: inline-block; background: #fff;
+  border-radius: 6px; cursor: default; }
+#lightbox .lbsvg svg { display: block; }
 #lightbox .lbcap { color: #fff; margin-bottom: 10px; font-size: 14px; }
 .choice { margin-bottom: 22px; }
 .choice h3 { margin: 0 0 2px; font-size: 14px; }
@@ -1024,14 +1028,42 @@ function openTab(src) {
 }
 function lightbox(src, cap) {
   const lb = document.getElementById("lightbox");
+  const isSvg = src.indexOf("data:image/svg+xml") === 0;
+  const body = isSvg ? '<div class="lbsvg" id="lb-svg"></div>'
+                     : '<img src="' + src + '">';
   lb.innerHTML = '<div class="lbcap">' + esc(cap || "") +
-    ' — click anywhere to close · <button class="small" id="lb-open">' +
-    "open in new tab ⧉</button></div><img src=\"" + src + '">';
+    ' — click the backdrop or press Esc to close · ' +
+    '<button class="small" id="lb-open">open in new tab ⧉</button></div>' +
+    body;
   lb.style.display = "block";
   document.getElementById("lb-open").onclick = e => {
     e.stopPropagation();
     openTab(src);
   };
+  if (!isSvg) return;
+  // Inline the SVG so a decomposed cell's stub links work: clicking a
+  // stub scrolls the lightbox to that plug-in's panel (the stack is one
+  // SVG) instead of closing the lightbox. Decode the base64 data URI as
+  // UTF-8 so accented labels survive.
+  const host = document.getElementById("lb-svg");
+  const bytes = Uint8Array.from(atob(src.split(",")[1]), c => c.charCodeAt(0));
+  host.innerHTML = new TextDecoder("utf-8").decode(bytes);
+  host.addEventListener("click", e => {
+    const a = e.target.closest && e.target.closest("a");
+    if (!a) return;   // empty area: let the click bubble up and close
+    e.stopPropagation();
+    const href = a.getAttribute("xlink:href") || a.getAttribute("href") || "";
+    if (!href.startsWith("#pm-map-")) { e.preventDefault(); return; }
+    e.preventDefault();
+    const t = host.querySelector(href);
+    if (!t) return;
+    // Scroll the lightbox (the overflow:auto container) so the panel's
+    // top meets the viewport. Set scrollTop directly — scrollIntoView is
+    // unreliable on an SVG sub-element and smooth scrollTo is a no-op on
+    // this fixed container in some engines.
+    const tr = t.getBoundingClientRect(), lr = lb.getBoundingClientRect();
+    lb.scrollTop = lb.scrollTop + (tr.top - lr.top) - 14;
+  });
 }
 document.addEventListener("keydown", e => {
   if (e.key === "Escape")
