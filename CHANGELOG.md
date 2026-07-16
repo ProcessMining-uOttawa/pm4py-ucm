@@ -7,6 +7,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-07-16
+
+The dashboards release: user-defined interactive dashboards over a log,
+first-class SVG model rendering with navigable stubs, and the redesigned
+**V4** workspace app — now the deployed default.
+
+### Added — Dashboards
+
+- **User-defined dashboards** (`pm4py_ucm.algo.dashboards`): a per-case
+  **fact table** (`build_fact_table`), a **metric catalog**, and
+  `compute_widget` — KPIs, one-axis bars, and two-axis tables — with
+  dashboard- and widget-level **filters**, **segmentation** axes,
+  **targets**, and a **scorecard**. The compute engine exists twice
+  (Python here, JS in `assets/dash-engine.js`) and is held byte-for-byte
+  in step by a parity test.
+- **The ƒ custom-formula language** (`compile_formula`) — a tiny, closed,
+  no-`eval` per-case expression grammar (`duration()`, `contains(act)`,
+  `count(act)`, `time_between(a, b)`, `timestamp(act)`, `attr(name)`,
+  arithmetic / comparison / `and`/`or`/`not`, optional `where` clause)
+  for metrics the catalog does not name.
+- **Self-contained interactive HTML export** (`dashboard_html` /
+  `write_dashboard`) — the same artifact the app's Dashboards view
+  renders, so app and export cannot drift. Includes a multi-section
+  **session report** (scorecard + dashboards + the process model as SVG +
+  a **Family** section embedding the family statistics report), a reader
+  filter bar that recomputes everything, and a "Pin to dashboard" path
+  from the Model view.
+- **Dashboards tutorial** (`demo/dashboards_tutorial.ipynb`) and the
+  semantic contract [`docs/dashboards.md`](docs/dashboards.md).
+
+### Added — SVG rendering
+
+- **First-class SVG export**: `save_vis_ucm(ucm, "x.svg")` and
+  `save_vis_ucm_family(family, "grid.svg")` now render vector SVG
+  (single-map or the full stacked / 2-D-grid composite), not just PNG.
+- **Navigable stub hyperlinks**: a stub / decomposed sub-process links to
+  its plug-in map — a single-plug-in stub jumps straight there, a dynamic
+  (multi-binding) stub opens a **picker** listing each plug-in with its
+  precondition. Panel/menu ids are namespaced per member, so a link never
+  jumps across a family.
+- SVG is the default on-screen render in the V4 app (Model, Compare,
+  Family); the family **grid** and the family **HTML report** cell models
+  are SVG (crisp, selectable, smaller).
+
+### Added — Web app (V4) and deployment
+
+- **`streamlit_app_v4.py`** — a left-rail workspace shell over the full
+  V3 capability, theme-aware (light/dark), plus the new **Dashboards**
+  view. **`web/streamlit_app.py` (the deployment's main-file shim) now
+  runs V4**, so https://pm4py-ucm.streamlit.app/ serves it. V3 and V1
+  remain in git history; the frozen **V2** scenarios app is untouched.
+- Pinned `streamlit>=1.32,<2` so a Cloud rebuild cannot pull a release
+  that removes the (deprecated) `st.components.v1.html` the islands use
+  before the `st.iframe` migration lands (tracked in #19).
+
+### Added — tutorials
+
+- The discovery tutorial gains an **SVG** section (render, navigate,
+  export); the families tutorial gains **pairwise comparison** and the
+  interactive HTML report; the scenario tutorial now covers both OR-fork
+  encodings in depth — **variant-driven** and **data-driven /
+  decision-mining** with the per-fork accuracy report — plus a real-log
+  capstone (absorbing and replacing the former empirical companion).
+
+### Changed
+
+- **Discrete integer columns get one bin per value.** When an integer
+  attribute has at most the requested number of distinct whole-number
+  values (e.g. priority levels 1–5), each value is its own bin instead of
+  quantile ranges that merged or split them. Fixed in both the family
+  partitioner and the dashboards contract.
+- **Adaptive time units**: dashboard widgets and the session report show a
+  short duration in the largest legible unit (`2.4 h`, `43 m`, `9 s`)
+  rather than `0.0 d`.
+- Dashboard activity-time metrics are **case-weighted** (documented
+  decision; the model performance overlays stay event-weighted).
+
+### Fixed
+
+- **Stub-click navigation** in the SVG viewers actually navigates —
+  `setPointerCapture` was retargeting the click off the anchor; resolved
+  by hit-testing the click coordinates. Applies to the Model / Compare /
+  Family viewers, the session-report model section, and the family
+  report's lightbox.
+- V4 lost the app name and the Model view's explanation; both restored
+  (rail brand → repo, version → release, author byline), and the dead
+  top band of the main area reclaimed.
+
 ### Security
 
 - **The `.jucm` importer refuses DTDs / `<!DOCTYPE>` before parsing**
@@ -30,22 +118,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `sys.path[0]` was the `web/` directory, so `import pm4py_ucm`
   resolved to a site-packages copy — which on Streamlit Cloud lags the
   git checkout (the app code is pulled on every push, but the venv is
-  only rebuilt when `requirements.txt` changes). That mismatch showed
-  up as the old performance-overlay metric list and
-  `discover_ucm_family() got an unexpected keyword argument
-  'progress_callback'`. The app now prepends the repo root to
-  `sys.path` before importing, so it uses the checkout's package code.
-
-- **The deployed app now always imports the current checkout's
-  `pm4py_ucm`.** Launched via its main-file shim, the app's
-  `sys.path[0]` was the `web/` directory, so `import pm4py_ucm`
-  resolved to a site-packages copy — which on Streamlit Cloud lags the
-  git checkout (the app code is pulled on every push, but the venv is
-  only rebuilt when `requirements.txt` changes). That mismatch showed
-  up as the old performance-overlay metric list and
-  `discover_ucm_family() got an unexpected keyword argument
-  'progress_callback'`. The app now prepends the repo root to
-  `sys.path` before importing, so it uses the checkout's package code.
+  only rebuilt when `requirements.txt` changes). The app now prepends the
+  repo root to `sys.path` before importing, so it uses the checkout's
+  package code.
 
 ## [0.5.2] — 2026-07-14
 
