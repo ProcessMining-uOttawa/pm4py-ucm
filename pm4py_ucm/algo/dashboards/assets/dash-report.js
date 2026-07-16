@@ -36,6 +36,11 @@ export class Report {
     this.filters = (cfg.filters || []).slice();
     this.modelSvg = cfg.modelSvg || {};
     this.renders = cfg.renders || {};
+    // The full family statistics report (a self-contained HTML document
+    // from families/report.py), embedded as an <iframe> — the browser
+    // cannot compute the family stats, so the backend hands the finished
+    // report over the same way it does the model SVG.
+    this.familyReport = cfg.familyReport || null;
     this.title = cfg.reportTitle || cfg.name || "Session report";
     this.children = [];      // the headless Dashboard per section
 
@@ -71,6 +76,7 @@ export class Report {
     if (Object.keys(this.modelSvg).length || Object.keys(this.renders).length) {
       secs.push({ id: "model", label: "Process model" });
     }
+    if (this.familyReport) secs.push({ id: "family", label: "Family" });
     return secs;
   }
 
@@ -83,7 +89,8 @@ export class Report {
         this._header(),
         this._scorecardSection(),
         ...this.dashboards.map((d, i) => this._dashboardSection(d, i)),
-        this._modelSection()),
+        this._modelSection(),
+        this._familySection()),
     );
   }
 
@@ -230,6 +237,36 @@ export class Report {
     const wrap = h("div", {}, head, stage);
     draw();
     return this._section("model", "Process model", wrap);
+  }
+
+  _familySection() {
+    if (!this.familyReport) return document.createComment("no family");
+    // The family report is a complete, self-contained HTML document with
+    // its own tables, heatmaps, pairwise comparison and per-cell model
+    // SVGs. Rather than re-implement all of that here, embed it whole in a
+    // sandboxed <iframe>: full fidelity, and it stays self-contained in
+    // the downloaded report. allow-scripts runs its sorting / lightbox;
+    // allow-popups keeps "open image in a new tab" working.
+    const frame = h("iframe", {
+      class: "pm-family__frame",
+      // First-party content (our own generated report). allow-same-origin
+      // lets its sorting / lightbox work fully; allow-popups keeps "open
+      // image in a new tab" working.
+      sandbox: "allow-scripts allow-same-origin allow-popups "
+        + "allow-downloads allow-popups-to-escape-sandbox",
+      title: "Model-family statistics report",
+    });
+    frame.style.cssText = "width:100%;height:82vh;border:1px solid "
+      + "var(--line,#d9d4ca);border-radius:8px;background:#fff;display:block";
+    // Set as a property, not an attribute, so the whole HTML document does
+    // not have to be attribute-escaped.
+    frame.srcdoc = this.familyReport;
+    const wrap = h("div", {},
+      h("div", { class: "pm-model__hint", style: "margin-bottom:8px" },
+        "The full model-family statistics report — sortable tables, "
+        + "heatmaps, pairwise process comparison, and per-cell models."),
+      frame);
+    return this._section("family", "Family", wrap);
   }
 
   _section(id, label, body) {

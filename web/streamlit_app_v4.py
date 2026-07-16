@@ -648,7 +648,8 @@ def _dashboard_html_cached(_table, specs_json: str, name: str,
                            renders: Tuple[Tuple[str, str], ...],
                            storage_key: str, read_only: bool,
                            theme: str,
-                           model_svg: Tuple[Tuple[str, str], ...]) -> str:
+                           model_svg: Tuple[Tuple[str, str], ...],
+                           family_report: str = "") -> str:
     """The dashboard artifact.
 
     ``_table`` is underscore-prefixed so Streamlit does not try to hash a
@@ -672,6 +673,9 @@ def _dashboard_html_cached(_table, specs_json: str, name: str,
         # Both notations as inline SVG, for the session report's model
         # section (which the browser cannot render itself).
         model_svg=dict(model_svg),
+        # The mined family's statistics report (empty when none), embedded
+        # in the session report as a Family section.
+        family_report=family_report or None,
     )
 
 
@@ -3117,11 +3121,27 @@ if _view == "Dashboards":
             # dashboard down; the widget falls back to a placeholder.
             pass
 
+    # Fold the mined family's statistics report into the session report as
+    # a Family section (only when a family has been mined for this log).
+    # The report is a self-contained HTML doc (families/report.py); the
+    # client-built session report embeds it whole in an <iframe>. Cached
+    # per (family, style) via _build_family_report.
+    _family_report_html = ""
+    _fam = st.session_state.get("family_result")
+    if _fam and _fam.get("stats") is not None:
+        _fr_bytes, _fr_err = _build_family_report(
+            st.session_state.get("family_fp", ""), style,
+            _fam["family"], _fam["stats"],
+        )
+        if _fr_bytes is not None:
+            _family_report_html = _fr_bytes.decode("utf-8")
+
     _specs_json = _json.dumps(_DEFAULT_DASHBOARD_SPECS)
     _html = _dashboard_html_cached(
         _ft, _specs_json, "Ops overview",
         tuple(sorted(_renders.items())), file_hash, False, _theme,
         tuple(sorted(_model_svgs.items())),
+        _family_report_html,
     )
 
     # A pin carries a fresh id per click, so it must not reach the cache

@@ -196,6 +196,7 @@ def dashboard_html(
     theme: Optional[str] = None,
     pending_pin: Optional[Dict[str, Any]] = None,
     model_svg: Optional[Dict[str, str]] = None,
+    family_report: Optional[str] = None,
 ) -> str:
     """Build the self-contained dashboard document.
 
@@ -271,6 +272,13 @@ def dashboard_html(
         # section — the one thing the browser cannot render itself, so the
         # backend embeds it here for the client-built report to lift.
         "modelSvg": model_svg or {},
+        # The full family statistics report (a self-contained HTML doc from
+        # families/report.py) for the session report's Family section. Same
+        # transport as modelSvg: the browser cannot compute the family
+        # stats, so the backend embeds the finished report here and the
+        # client-built session report shows it in an <iframe>. ``None`` when
+        # no family has been mined, which suppresses the section.
+        "familyReport": family_report or None,
     }
     return _TEMPLATE % {
         # On <html> rather than set by script: the browser paints the page

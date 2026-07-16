@@ -1172,6 +1172,23 @@ class TestSessionReport:
                          .split("</script>", 1)[0].replace("\\u003c", "<"))
         assert cfg["modelSvg"] == svg
 
+    def test_family_report_travels_into_the_page(self, table):
+        # The family statistics report rides in the config for the session
+        # report's Family section; its <script>/</script> must survive the
+        # \\u003c escaping without breaking the embedding document.
+        report = "<!DOCTYPE html><body><script>var x = 1;</script><p>hi</p></body>"
+        html = dashboard_html(table, family_report=report)
+        # The document is not truncated by the embedded </script>.
+        assert html.count("</script>") == html.count("<script")
+        cfg = json.loads(html.split('id="pm-data">', 1)[1]
+                         .split("</script>", 1)[0].replace("\\u003c", "<"))
+        assert cfg["familyReport"] == report
+
+    def test_family_report_absent_by_default(self, table):
+        cfg = json.loads(dashboard_html(table).split('id="pm-data">', 1)[1]
+                         .split("</script>", 1)[0].replace("\\u003c", "<"))
+        assert cfg["familyReport"] is None
+
     def test_default_page_is_dashboard_mode(self, table):
         cfg = json.loads(dashboard_html(table).split('id="pm-data">', 1)[1]
                          .split("</script>", 1)[0].replace("\\u003c", "<"))
