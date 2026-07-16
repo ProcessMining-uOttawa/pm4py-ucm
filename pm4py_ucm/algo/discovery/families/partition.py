@@ -255,6 +255,38 @@ def _range_value(lo: float, hi: float) -> PartitionValue:
     )
 
 
+def _single_value_bin(v: float) -> PartitionValue:
+    """A degenerate ``[v, v]`` bin — one discrete integer value shown as
+    itself (``"3"``) rather than a ``"3-3"`` range."""
+    label = _fmt_number(v)
+    return PartitionValue(
+        label=label,
+        token=_sanitise_jucmnav_name(label),
+        kind="range",
+        lo=float(v),
+        hi=float(v),
+    )
+
+
+def _discrete_integer_values(numeric, bins: int):
+    """The sorted distinct values if ``numeric`` is a small set of whole
+    numbers worth binning one-per-value, else ``None``.
+
+    Triggers when the column holds at most ``bins`` distinct integral
+    values (e.g. priority levels 1..5 with 5 bins requested): quantile
+    bins would merge or split them into ranges, so a reader loses the
+    original levels. Requires as many requested bins as distinct values,
+    so a smaller bin count still falls through to quantile ranges."""
+    import numpy as np
+
+    uniq = np.unique(numeric.to_numpy())
+    if uniq.size == 0 or uniq.size > max(1, bins):
+        return None
+    if not bool(np.all(uniq == np.round(uniq))):
+        return None
+    return [float(v) for v in uniq]
+
+
 def _assign_enumeration(
     series,
     spec: AttributeSpec,
@@ -383,24 +415,30 @@ def _assign_integer(
     if numeric.empty:
         return [], {cid: None for cid in series.index}
 
-    if edges is not None:
-        cut_edges = [float(e) for e in edges]
+    discrete = None if edges is not None else _discrete_integer_values(
+        numeric, bins)
+    if discrete is not None:
+        # One bin per distinct whole-number value.
+        axis = [_single_value_bin(v) for v in discrete]
     else:
-        # Quantile bins; duplicate edges collapse for skewed data.
-        try:
-            _, cut_edges = pd.qcut(
-                numeric, q=max(1, bins), retbins=True, duplicates="drop",
-            )
-            cut_edges = [float(e) for e in cut_edges]
-        except (ValueError, IndexError):
-            cut_edges = [float(numeric.min()), float(numeric.max())]
-    if len(cut_edges) < 2:
-        cut_edges = [float(numeric.min()), float(numeric.max()) + 1.0]
+        if edges is not None:
+            cut_edges = [float(e) for e in edges]
+        else:
+            # Quantile bins; duplicate edges collapse for skewed data.
+            try:
+                _, cut_edges = pd.qcut(
+                    numeric, q=max(1, bins), retbins=True, duplicates="drop",
+                )
+                cut_edges = [float(e) for e in cut_edges]
+            except (ValueError, IndexError):
+                cut_edges = [float(numeric.min()), float(numeric.max())]
+        if len(cut_edges) < 2:
+            cut_edges = [float(numeric.min()), float(numeric.max()) + 1.0]
 
-    axis = [
-        _range_value(cut_edges[i], cut_edges[i + 1])
-        for i in range(len(cut_edges) - 1)
-    ]
+        axis = [
+            _range_value(cut_edges[i], cut_edges[i + 1])
+            for i in range(len(cut_edges) - 1)
+        ]
 
     def classify(x) -> Optional[PartitionValue]:
         # Bins are [lo, next.lo) with the last bin closed on both ends.

@@ -6,8 +6,6 @@ performer settings interactively, and download the resulting `.jucm` model
 plus a high-quality PNG rendering in either UCM (Z.151 / jUCMNav) or BPMN
 notation.
 
-![Overview of the PM4Py-UCM web interface](WebInterfaceOverview.png)
-
 ## Run locally
 
 Requires Python 3.9+ and the [Graphviz](https://graphviz.org/download/) `dot`
@@ -41,20 +39,31 @@ that deployment's main file). Four tabs:
 - **Model** — mine a UCM from a log, preview in UCM or BPMN notation,
   open the image in its own browser tab (button or double-click),
   download PNG + `.jucm`. Decomposition is honoured across all maps.
+
+  ![Model tab](PM4Py-UCM-Model.png)
+
 - **Scenarios** — concurrency-aware variant clustering + one
   executable jUCMNav `ScenarioDef` per variant, with downloads for the
   `.jucm` (carrying the `<scenarioGroups>`), `variants.csv`,
   `case_variant_map.csv`, and (data-driven mode only)
   `condition_mining.csv`. Both variant-driven and data-driven OR-fork
   encodings are exposed.
+
+  ![Scenarios tab](PM4Py-UCM-Scenarios.png)
+
 - **Family** — partition the log by 1–2 case attributes, mine one
   model per combination, download the per-cell zip / combined `.jucm`
   / dynamic-stub umbrella `.jucm` / grid PNG / interactive HTML
   statistics report.
+
+  ![Family tab](PM4Py-UCM-Family.png)
+
 - **Compare** — rank the family members on heat-mapped statistics
   tables — including total case durations — and compare any two side
   by side: models, per-activity/edge deltas, aligned OR-fork branch
   shares.
+
+  ![Compare tab](PM4Py-UCM-Compare.png)
 
 **`streamlit_app_v2.py` is the FROZEN V2 app** (model + scenarios,
 the state before the model-family features) — served at
@@ -62,6 +71,19 @@ https://pm4py-ucm-scenarios.streamlit.app/ for a paper under review;
 do not modernise it. **V1** (the model-only app that
 `streamlit_app.py` used to contain) was retired at v0.5.1 and lives
 in git history; its path is now a shim that runs V3.
+
+## The V4 app (preview)
+
+**`streamlit_app_v4.py`** reworks the same capability behind a left-rail
+workspace and adds a fifth view — **Dashboards**: build widgets from a
+metric catalog over your log (KPIs, segmented bars and tables), narrow
+them with filters, set targets and a scorecard, write custom metrics in a
+**ƒ formula language**, and export the whole thing as one self-contained
+interactive HTML dashboard (or a multi-section session report). Not yet
+the deployed default; run it locally with
+`streamlit run web/streamlit_app_v4.py`.
+
+![Dashboards view](PM4Py-UCM-Dashboard.png)
 
 ## Using the app
 
@@ -248,7 +270,11 @@ packages.txt                   # apt: graphviz  (Streamlit Cloud reads this at r
 web/
   streamlit_app.py             # entry point
   requirements.txt             # streamlit + pm4py + `-e .` (the package itself)
-  WebInterfaceOverview.png     # screenshot used in this README
+  PM4Py-UCM-Model.png          # per-feature screenshots used in the READMEs
+  PM4Py-UCM-Scenarios.png
+  PM4Py-UCM-Family.png
+  PM4Py-UCM-Compare.png
+  PM4Py-UCM-Dashboard.png
   README.md                    # this file
   samples/
     *.zip / *.xes / *.xes.gz   # bundled sample logs; auto-listed in the UI

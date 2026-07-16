@@ -28,11 +28,12 @@ pm4py_ucm.view_ucm(ucm)
 pm4py_ucm.write_ucm(ucm, "running-example.jucm")  # opens in jUCMNav
 ```
 
-**Five ways to get started:**
+**Ways to get started:**
 
-- [`demo/pm4py_ucm_tutorial.ipynb`](demo/pm4py_ucm_tutorial.ipynb) — end-to-end Jupyter walkthrough on a real claims-payment log (discovery, BPMN/UCM rendering, performer mining, hierarchical decomposition, `.jucm` round-trips).
-- [`demo/scenario_synthesis_tutorial.ipynb`](demo/scenario_synthesis_tutorial.ipynb) — pedagogical tutorial for the **scenario-synthesis** layer: concurrency-aware variants, per-loop counters + `LoopEntryGuard`, variant-driven vs data-driven OR-fork conditions, transparent support for decomposed UCMs. Empirical companion in [`demo/scenario_synthesis.ipynb`](demo/scenario_synthesis.ipynb).
-- [`demo/model_families_tutorial.ipynb`](demo/model_families_tutorial.ipynb) — the **model-family** pipeline on the claims log: attribute detection, partition preview, per-cell mining, stack/matrix rendering, combined export, the dynamic-stub **umbrella** (skeleton, resource variation, path scenarios), **performance overlays** on activities and edges, and the **family statistics report** (FamilyStats + the self-contained interactive HTML file).
+- [`demo/pm4py_ucm_tutorial.ipynb`](demo/pm4py_ucm_tutorial.ipynb) — end-to-end Jupyter walkthrough on a real claims-payment log (discovery, BPMN/UCM rendering, navigable **SVG** + `.jucm`/`.png`/`.svg` export, performer mining, hierarchical decomposition, `.jucm` round-trips).
+- [`demo/scenario_synthesis_tutorial.ipynb`](demo/scenario_synthesis_tutorial.ipynb) — the **scenario-synthesis** layer: concurrency-aware variants, per-loop counters + `LoopEntryGuard`, both OR-fork condition encodings (variant-driven and **data-driven / decision-mining**, with the per-fork accuracy report), decomposed UCMs, and a capstone running both encodings on the claims log.
+- [`demo/model_families_tutorial.ipynb`](demo/model_families_tutorial.ipynb) — the **model-family** pipeline on the claims log: attribute detection, partition preview, per-cell mining, stack/matrix rendering, combined export, the dynamic-stub **umbrella** (skeleton, resource variation, path scenarios), **performance overlays** on activities and edges, pairwise **comparison**, and the **family statistics report** (FamilyStats + the self-contained interactive HTML file).
+- [`demo/dashboards_tutorial.ipynb`](demo/dashboards_tutorial.ipynb) — the **dashboards** layer: the per-case fact table, the metric catalog and computing widgets, filters / targets / scorecard, the **ƒ custom-formula language**, and exporting a self-contained interactive HTML dashboard.
 - [`web/streamlit_app_v3.py`](web/streamlit_app_v3.py) — the **V3 web app** (model + scenarios + model families + statistics reports), hosted at https://pm4py-ucm.streamlit.app/ — click, don't code: upload an XES/CSV, tune the miner, download the result. (The **V2** scenarios app stays at https://pm4py-ucm-scenarios.streamlit.app/.)
 - The rest of this README — reference docs for the public API.
 
@@ -49,6 +50,9 @@ every deployment. Four tabs:
   miner / decomposition / performer settings interactively, preview
   the diagram in UCM or BPMN notation, and download the rendered PNG
   plus the `.jucm` file.
+
+  ![Model view](web/PM4Py-UCM-Model.png)
+
 - **Scenarios** — concurrency-aware variant clustering + one
   executable jUCMNav `ScenarioDef` per variant. Both variant-driven
   and data-driven OR-fork encodings are exposed; the tab surfaces
@@ -57,14 +61,22 @@ every deployment. Four tabs:
   four downloads: the `.jucm` with the synthesized scenario group,
   `variants.csv`, `case_variant_map.csv`, and (data-driven mode)
   `condition_mining.csv`. Runs on flat and decomposed UCMs alike.
+
+  ![Scenarios view](web/PM4Py-UCM-Scenarios.png)
+
 - **Family** — pick 1–2 case attributes (with per-value filters and a
   pre-mining coverage heatmap), mine one model per combination, and
   download the per-cell zip, the combined `.jucm`, the dynamic-stub
   umbrella `.jucm`, the grid PNG, and the interactive HTML statistics
   report.
+
+  ![Family view](web/PM4Py-UCM-Family.png)
+
 - **Compare** — rank the family members on a heat-mapped statistics
   table and compare any two side by side (models, activity/edge
   deltas, aligned choice shares).
+
+  ![Compare view](web/PM4Py-UCM-Compare.png)
 
 Plus a **Performance overlay** sidebar section (frequencies/times on
 activities and edges, applied to every tab's outputs). See
@@ -81,7 +93,13 @@ serving the **frozen V2 app** ([`web/streamlit_app_v2.py`](web/streamlit_app_v2.
 model + scenarios) — it is referenced by a paper under review and
 must stay as published.
 
-![Overview of the PM4Py-UCM web interface](web/WebInterfaceOverview.png)
+A preview **V4 app** ([`web/streamlit_app_v4.py`](web/streamlit_app_v4.py))
+reworks these into a left-rail workspace and adds a **Dashboards** view —
+build widgets from a metric catalog (filters, segmentation, targets, a
+scorecard, and a ƒ custom-formula language) and export a self-contained
+interactive HTML dashboard. Not yet the deployed default.
+
+![Dashboards view (V4)](web/PM4Py-UCM-Dashboard.png)
 
 Run locally with:
 
@@ -505,10 +523,9 @@ correlation survives arbitrary decomposition boundaries.
 ### Learning path
 
 - [`demo/scenario_synthesis_tutorial.ipynb`](demo/scenario_synthesis_tutorial.ipynb)
-  — pedagogical walkthrough with a small synthetic example per section.
-- [`demo/scenario_synthesis.ipynb`](demo/scenario_synthesis.ipynb)
-  — empirical demonstration on `ClaimsPaymentLog` (24 variants,
-  compression 0.146) in both encodings.
+  — a small synthetic example per section, then a capstone on
+  `ClaimsPaymentLog` (24 variants, compression 0.146) in both the
+  variant-driven and data-driven / decision-mining encodings.
 - The Scenarios tab in
   [`web/streamlit_app_v3.py`](web/streamlit_app_v3.py) — no code needed.
 

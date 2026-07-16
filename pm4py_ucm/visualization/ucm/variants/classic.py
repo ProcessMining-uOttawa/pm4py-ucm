@@ -446,6 +446,11 @@ def apply(ucm: UCM, parameters: Optional[Dict[str, Any]] = None) -> Digraph:
         "show_conditions", DEFAULT_SHOW_CONDITIONS,
     ))
     map_index = parameters.get("map_index", 0)
+    # Optional hyperlinks from stub / sub-process nodes to their plug-in
+    # map, for interactive navigation in an SVG render. ``{id(stub_node):
+    # (href, tooltip)}``. Absent by default, so every existing caller
+    # (and the PNG path, where links have no effect) is unchanged.
+    stub_links = parameters.get("stub_links") or {}
     # ``map_name`` (or the public ``map=`` kwarg piped in via parameters)
     # selects a map by name and overrides ``map_index``. Unknown names
     # raise rather than silently falling back to the first map — better
@@ -544,13 +549,14 @@ def apply(ucm: UCM, parameters: Optional[Dict[str, Any]] = None) -> Digraph:
                          fontsize=map_label_size)
                 _emit_map(sub, ucm_map, style_table, style_name,
                           prefix=f"m{i}_",
-                          show_conditions=show_conditions)
+                          show_conditions=show_conditions,
+                          stub_links=stub_links)
     else:
         if not ucm.maps:
             return g
         idx = max(0, min(map_index, len(ucm.maps) - 1))
         _emit_map(g, ucm.maps[idx], style_table, style_name,
-                  show_conditions=show_conditions)
+                  show_conditions=show_conditions, stub_links=stub_links)
 
     return g
 
@@ -561,6 +567,7 @@ def _emit_map(
     style_name: str,
     prefix: str = "",
     show_conditions: bool = DEFAULT_SHOW_CONDITIONS,
+    stub_links: Optional[Dict[int, Any]] = None,
 ) -> None:
     """Render a single :class:`UCM.UCMmap` into the given graphviz graph.
 
@@ -602,6 +609,18 @@ def _emit_map(
                 # UCM, bound to a ComponentRef: the cluster gives the
                 # label space, so we keep it compact inside.
                 attrs["label"] = _html_bold(label)
+            # Hyperlink a stub / sub-process to its plug-in map, so an SVG
+            # render is navigable: graphviz turns ``URL`` into an SVG
+            # ``<a xlink:href>`` around the node. A same-document fragment
+            # (``#pm-map-N``) needs no ``target`` — it navigates within the
+            # SVG when opened standalone, and the embedded viewer
+            # intercepts the click to pan to the panel.
+            link = (stub_links or {}).get(id(node))
+            if link:
+                href, tooltip = link
+                attrs["URL"] = href
+                if tooltip:
+                    attrs["tooltip"] = tooltip
         g_target.node(node_id(node), **attrs)
 
     # Find root ComponentRefs (no parent), and emit clusters top-down.

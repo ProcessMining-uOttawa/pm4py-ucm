@@ -1,7 +1,13 @@
-"""PM4Py-UCM web front-end — V3 (model + scenarios + families +
-reports). THE app: every deployment path serves this file.
+"""PM4Py-UCM web front-end — V4 (workspace shell + user-defined
+dashboards). **Work in progress; V3 is still the deployed app.**
 
-Tabs: **Model** (inductive-mine a UCM, preview in UCM or BPMN
+V4 is V3's capability behind the redesigned workspace shell, plus the
+new Dashboards view. Where V3 puts its views in ``st.tabs``, V4 puts
+them in a left rail — a persistent list of VIEWS beside a persistent
+log card — so the log you loaded and the views over it stay visible
+together.
+
+Views: **Model** (inductive-mine a UCM, preview in UCM or BPMN
 notation, download PNG/.jucm), **Scenarios** (concurrency-aware
 variant clustering + scenario synthesis, with every artifact — the
 executable .jucm, variants.csv, case_variant_map.csv, and for
@@ -9,37 +15,50 @@ data-driven runs condition_mining.csv — as a download), **Family**
 (partition the log by 1–2 case attributes and mine a model per
 combination: grid rendering, per-cell zip, combined .jucm, a
 dynamic-stub umbrella .jucm with per-combination strategies, and the
-self-contained interactive HTML statistics report), and **Compare**
-(rank the family members and compare any two side by side).
+self-contained interactive HTML statistics report), **Compare** (rank
+the family members and compare any two side by side), and
+**Dashboards** (build widgets from a metric catalog over the log:
+filters, segmentation, targets, scorecard — see
+:doc:`docs/dashboards.md </dashboards>`).
+
+The Dashboards view is an HTML/JS island embedded via
+``components.html``. It is the *same artifact* the HTML export writes,
+built by :func:`pm4py_ucm.algo.dashboards.dashboard_html`, so the app
+and the export cannot drift. Its widgets are computed in the browser
+and its state lives there — ``components.html`` is one-way, so widget
+specs persist to the browser's storage rather than to session state.
 
 Run locally:
 
-    streamlit run web/streamlit_app_v3.py
+    streamlit run web/streamlit_app_v4.py
 
 Deployment layout: ``streamlit_app.py`` (the
-https://pm4py-ucm.streamlit.app/ main file) is a shim that runs THIS
-file, so the primary deployment always serves the latest app. V1
-(model-only) was retired at v0.5.1 and lives in git history.
-``streamlit_app_v2.py`` is deliberately NOT a shim: it is the frozen
-V2 (model + scenarios) app that
+https://pm4py-ucm.streamlit.app/ main file) is a shim that runs
+``streamlit_app_v3.py``, so the primary deployment serves V3 until V4
+is ready to take over. V1 (model-only) was retired at v0.5.1 and lives
+in git history. ``streamlit_app_v2.py`` is deliberately NOT a shim: it
+is the frozen V2 (model + scenarios) app that
 https://pm4py-ucm-scenarios.streamlit.app/ must keep serving while a
-paper referencing it is under review — do not fold it into V3.
+paper referencing it is under review — do not fold it into V3 or V4.
 """
 from __future__ import annotations
 
 import base64
 import hashlib
 import io
+import json as _json
 import os
 import re
 import tempfile
 import traceback
+import uuid
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as _components
 
 # Make the in-repo package win over any environment-installed copy.
 # The main-file shim launches this app with ``sys.path[0]`` set to the
@@ -61,12 +80,30 @@ from pm4py_ucm.algo.discovery.scenarios import synthesis as _scenarios
 from pm4py_ucm.algo.discovery.variants import clustering as _clustering_mod
 from pm4py_ucm.visualization.ucm import visualizer as _visualizer
 from pm4py_ucm.visualization.ucm import stacked as _stacked
+from pm4py_ucm.visualization.ucm import svg as _svgmod
 
 # Pillow's default decompression-bomb guard (~178M px) rejects very
 # large composites (family grids, decomposed stacks); raise it to a
 # still-sane 1B-pixel cap.
 from PIL import Image as _PILImage
 _PILImage.MAX_IMAGE_PIXELS = 1_000_000_000
+
+
+def _embed_html(html: str, *, height: int, scrolling: bool = False) -> None:
+    """Embed a self-contained HTML document in a sandboxed iframe.
+
+    THE single seam for ``st.components.v1.html`` — every island (the
+    Dashboards view, the SVG model viewer, the open-image-in-tab button)
+    goes through here. ``st.components.v1.html`` is deprecated in favour
+    of ``st.iframe`` (see the tracking issue): ``st.iframe`` takes a
+    URL/Path rather than an HTML string, so migrating means serving each
+    artifact from a file — a change confined to THIS function instead of
+    scattered across the app. ``st.html`` is not an option for these:
+    they need the iframe's isolated JS realm (and, for the open-in-tab
+    button, its sandboxed popup escape), which inline ``st.html`` does
+    not give.
+    """
+    _components.html(html, height=height, scrolling=scrolling)
 
 
 _SAMPLES_DIR = Path(__file__).resolve().parent / "samples"
@@ -155,6 +192,17 @@ def _csv_columns(csv_bytes: bytes, _file_hash: str) -> List[str]:
             return []
         reader = _csv.reader(text[:1])
         return next(reader, [])
+
+
+def _html_escape_min(text: str) -> str:
+    """Escape text bound for the rail's raw-HTML markup.
+
+    Log names and attribute names are user-supplied — an uploaded file
+    called ``<img onerror=...>.xes`` would otherwise be injected straight
+    into the page by ``unsafe_allow_html``.
+    """
+    return (str(text).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
 
 
 def _arg_fingerprint(*args) -> str:
@@ -314,6 +362,29 @@ def _render_cached(jucm_bytes: bytes, style: str) -> bytes:
         png_path = td / "model.png"
         _render_png(ucm, style, str(png_path))
         return png_path.read_bytes()
+
+
+# Inline-SVG model rendering (single/stacked, navigable stub links, the
+# dynamic-stub picker markup) lives in the PACKAGE
+# (pm4py_ucm.visualization.ucm.svg), so the app, the family grid, and the
+# HTML reports share one implementation and it carries unit tests. This
+# app keeps only the Streamlit-specific viewer (_svg_viewer) and the
+# cached wrappers below.
+
+
+@st.cache_data(show_spinner=False)
+def _render_svg_cached(jucm_bytes: bytes, style: str) -> str:
+    """The model as one inline SVG string (cached per ``jucm`` + notation).
+
+    SVG zooms and pans crisply where a raster does not, and its text is
+    selectable. Decomposed models stack their maps and hyperlink each
+    stub to its sub-map — see :func:`pm4py_ucm.visualization.ucm.svg`.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        jucm_path = Path(td) / "model.jucm"
+        jucm_path.write_bytes(jucm_bytes)
+        ucm = pm4py_ucm.read_ucm(str(jucm_path))
+        return _svgmod.model_to_svg(ucm, style)
 
 
 def _render_png(ucm, style: str, out_path: str) -> str:
@@ -525,6 +596,87 @@ def _load_log_df(log_bytes: bytes, log_kind: str, csv_columns,
     if isinstance(log, pd.DataFrame):
         return log
     return pm4py.convert_to_dataframe(log)
+
+
+# ---------------------------------------------------------------------------
+# Dashboards (cached)
+# ---------------------------------------------------------------------------
+
+#: The dashboard a log opens with, before the user builds their own.
+#: Deliberately log-agnostic: every metric here needs no activity
+#: parameter, so this works on any log rather than naming activities that
+#: exist in one sample and not another. The composer's own defaults pick
+#: sensible activities when the user adds a parameterised widget.
+_DEFAULT_DASHBOARD_SPECS: List[Dict[str, Any]] = [
+    {"id": "d-dur", "title": "Case duration", "metric": "duration",
+     "agg": "avg", "viz": "kpi"},
+    {"id": "d-med", "title": "median case duration", "metric": "duration",
+     "agg": "median", "viz": "kpi"},
+    {"id": "d-rework", "title": "Rework rate", "metric": "rework",
+     "viz": "kpi"},
+    {"id": "d-events", "title": "avg events per case",
+     "metric": "eventCount", "agg": "avg", "viz": "kpi"},
+    {"id": "d-wip", "title": "Work in progress over time", "metric": "wip",
+     "agg": "avg", "viz": "bar"},
+    # Weekday, not variant: a real log has hundreds of variants (164 on
+    # ClaimsPaymentLog), and a starter widget should be legible on any
+    # log rather than render a wall of two-pixel bars.
+    {"id": "d-dur-weekday", "title": "avg duration by weekday",
+     "metric": "duration", "agg": "avg", "viz": "bar",
+     "segment": {"rows": "weekday"}},
+]
+
+
+@st.cache_data(show_spinner="Preparing dashboard data...")
+def _fact_table(log_bytes: bytes, log_kind: str, csv_columns,
+                log_name: str, _file_hash: str):
+    """The per-case fact table the Dashboards view computes over.
+
+    Cached on the log, not on any widget: the browser recomputes every
+    widget itself, so this runs once per log rather than once per
+    interaction. Sub-second on the logs the app ships (see
+    docs/dashboards.md).
+    """
+    from pm4py_ucm.algo.dashboards import build_fact_table
+
+    df = _load_log_df(log_bytes, log_kind, csv_columns, _file_hash)
+    return build_fact_table(df, log_name=log_name)
+
+
+@st.cache_data(show_spinner=False)
+def _dashboard_html_cached(_table, specs_json: str, name: str,
+                           renders: Tuple[Tuple[str, str], ...],
+                           storage_key: str, read_only: bool,
+                           theme: str,
+                           model_svg: Tuple[Tuple[str, str], ...],
+                           family_report: str = "") -> str:
+    """The dashboard artifact.
+
+    ``_table`` is underscore-prefixed so Streamlit does not try to hash a
+    FactTable of numpy buffers; ``storage_key`` already identifies the
+    log, and the remaining arguments are hashable, so the key is sound.
+    """
+    from pm4py_ucm.algo.dashboards import dashboard_html
+    import json as _json
+
+    return dashboard_html(
+        _table,
+        specs=_json.loads(specs_json),
+        name=name,
+        renders=dict(renders),
+        storage_key=storage_key,
+        read_only=read_only,
+        # The island is inside an iframe: it can read the OS preference
+        # but not Streamlit's own theme setting, so it has to be told
+        # which one is actually on screen around it.
+        theme=theme,
+        # Both notations as inline SVG, for the session report's model
+        # section (which the browser cannot render itself).
+        model_svg=dict(model_svg),
+        # The mined family's statistics report (empty when none), embedded
+        # in the session report as a Family section.
+        family_report=family_report or None,
+    )
 
 
 @st.cache_data(show_spinner="Detecting case attributes...")
@@ -849,6 +1001,50 @@ def _render_family_cell(
         return None
 
 
+@st.cache_data(show_spinner=False)
+def _render_family_cell_svg(
+    mine_fingerprint: str,
+    style: str,
+    cell_index: int,
+    _family,
+) -> Optional[str]:
+    """One cell's model as a navigable inline SVG for the Compare tab.
+
+    Cached on ``(mining run, notation, cell)`` — ``_family`` excluded
+    from the key (underscore), same convention as
+    :func:`_render_family_cell`. A decomposed cell keeps its stub links
+    inside itself. ``None`` when rendering is unavailable."""
+    try:
+        return _svgmod.model_to_svg(_family.cells[cell_index].ucm, style)
+    except Exception:  # pragma: no cover - depends on env
+        return None
+
+
+@st.cache_data(show_spinner=False)
+def _render_family_grid_svg(
+    mine_fingerprint: str,
+    style: str,
+    _family,
+) -> Tuple[Optional[str], Optional[str]]:
+    """The whole family as one navigable 2-D vector SVG — the same matrix
+    the PNG grid composites (rows × columns, headers, captions), but as
+    vectors: it zooms, pans and downloads crisply and its text stays
+    selectable.
+
+    Each member is rendered with a per-cell id prefix, so a decomposed
+    member's stub links only ever resolve within that member — no
+    cross-family jumps. Cached on ``(mine_fingerprint, style)`` like
+    :func:`_render_family_grid`. Returns ``(svg_str, None)`` or
+    ``(None, error_text)``."""
+    try:
+        from pm4py_ucm.visualization.ucm.family_grid import render_svg
+        if not getattr(_family, "cells", None):
+            return None, "no cells to render"
+        return render_svg(_family, style), None
+    except Exception as exc:  # pragma: no cover - depends on env
+        return None, f"{type(exc).__name__}: {exc}"
+
+
 def _heat_styler(df, formats=None):
     """Column-wise sequential heatmap for ``st.dataframe`` without a
     matplotlib dependency (same blue ramp as the HTML report). Falls
@@ -905,8 +1101,7 @@ def _open_image_in_tab_button(png_b64: str, label: str = "Open image "
     *current* ``src`` at click time, so re-rendered models never open
     stale; a delegated document-level listener survives Streamlit
     re-rendering the ``st.markdown`` image element on every rerun."""
-    import streamlit.components.v1 as _components
-    _components.html(
+    _embed_html(
         f"""
 <a id="ot" target="_blank" rel="noopener"
   style="font-family: 'Source Sans Pro', sans-serif; font-size: 0.9rem;
@@ -948,6 +1143,166 @@ def _open_image_in_tab_button(png_b64: str, label: str = "Open image "
 }})();
 </script>""",
         height=height,
+    )
+
+
+def _svg_viewer(svg: str, *, height: int = 620, key: str = "svgview") -> None:
+    """Show an SVG model inline with wheel-zoom and drag-to-pan.
+
+    SVG is the on-screen default: it stays crisp at any zoom and its text
+    is selectable. It is embedded through ``components.html`` (Streamlit's
+    markdown sanitiser strips raw ``<svg>``) and carried base64-encoded so
+    nothing in the diagram — a stray ``</script>`` in a label, a non-ASCII
+    map name — can break the surrounding HTML. The SVG fits the width on
+    load; the wheel zooms and dragging pans, so a tall decomposed stack is
+    navigable without leaving the page.
+    """
+    b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    _embed_html(
+        f"""
+<style>
+  html, body {{ margin: 0; height: 100%; }}
+  #stage {{
+    position: relative;
+    width: 100%; height: {height}px; overflow: hidden;
+    border: 1px solid #e2dfd8; border-radius: 8px; background: #fff;
+    touch-action: none; cursor: grab;
+  }}
+  #stage svg {{ width: 100%; height: auto; display: block;
+    transform-origin: 0 0; user-select: none; }}
+  /* Dynamic-stub picker: a plug-in chooser shown at the click. */
+  .pm-menu {{ position: absolute; z-index: 20; min-width: 180px;
+    max-width: 320px; background: #fff; border: 1px solid #cfc9bf;
+    border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.18);
+    overflow: hidden; font-family: Arial, sans-serif; }}
+  .pm-menu-head {{ padding: 6px 10px; font-size: 11px; font-weight: 700;
+    color: #6b6459; background: #f4f1ea; border-bottom: 1px solid #e2dfd8;
+    text-transform: uppercase; letter-spacing: .03em; }}
+  .pm-menu-item {{ padding: 7px 10px; cursor: pointer;
+    border-bottom: 1px solid #f0ede6; }}
+  .pm-menu-item:last-child {{ border-bottom: none; }}
+  .pm-menu-item:hover {{ background: #f7f4ee; }}
+  .pm-menu-label {{ font-size: 13px; color: #202020; font-weight: 600; }}
+  .pm-menu-cond {{ font-size: 11px; color: #8a8478; margin-top: 2px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    white-space: pre-wrap; word-break: break-word; }}
+</style>
+<div id="stage"></div>
+<script>
+(() => {{
+  const stage = document.getElementById("stage");
+  // Decode as UTF-8 so accented map names survive.
+  const bytes = Uint8Array.from(atob("{b64}"), c => c.charCodeAt(0));
+  stage.innerHTML = new TextDecoder("utf-8").decode(bytes);
+  const svg = stage.querySelector("svg");
+  if (!svg) return;
+  let scale = 1, tx = 0, ty = 0, drag = false, px = 0, py = 0, moved = 0;
+  let menuEl = null;
+  const apply = () => svg.style.transform =
+    `translate(${{tx}}px,${{ty}}px) scale(${{scale}})`;
+  const closeMenu = () => {{ if (menuEl) {{ menuEl.remove(); menuEl = null; }} }};
+  // Pan so the target panel's top meets the viewport.
+  const panTo = (href) => {{
+    const target = svg.querySelector(href);
+    if (!target) return;
+    const tr = target.getBoundingClientRect();
+    const sr = stage.getBoundingClientRect();
+    ty += (sr.top - tr.top) + 10;
+    apply();
+  }};
+  // A dynamic stub links to a hidden <g id="pm-stub-menu-…"> carrying one
+  // <g class="pm-binding" data-target/label/cond> per plug-in. Show them
+  // as a picker at the click; choosing one pans to that plug-in's panel.
+  const showMenu = (menuHref, cx, cy) => {{
+    closeMenu();
+    const menu = svg.querySelector(menuHref);
+    if (!menu) return;
+    const rows = menu.querySelectorAll(".pm-binding");
+    if (!rows.length) return;
+    const el = document.createElement("div");
+    el.className = "pm-menu";
+    const sr = stage.getBoundingClientRect();
+    el.style.left = Math.min(Math.max(4, cx - sr.left), sr.width - 190) + "px";
+    el.style.top = Math.max(4, cy - sr.top) + "px";
+    const head = document.createElement("div");
+    head.className = "pm-menu-head";
+    const stub = menu.getAttribute("data-stub") || "";
+    head.textContent = "Go to plug-in" + (stub ? ": " + stub : "");
+    el.appendChild(head);
+    rows.forEach((r) => {{
+      const item = document.createElement("div");
+      item.className = "pm-menu-item";
+      const lab = document.createElement("div");
+      lab.className = "pm-menu-label";
+      lab.textContent = r.getAttribute("data-label") || "plug-in";
+      item.appendChild(lab);
+      const cond = r.getAttribute("data-cond");
+      if (cond) {{
+        const c = document.createElement("div");
+        c.className = "pm-menu-cond";
+        c.textContent = "[" + cond + "]";
+        item.appendChild(c);
+      }}
+      item.addEventListener("click", (ev) => {{
+        ev.stopPropagation();
+        const t = r.getAttribute("data-target");
+        closeMenu();
+        if (t) panTo(t);
+      }});
+      el.appendChild(item);
+    }});
+    stage.appendChild(el);
+    menuEl = el;
+  }};
+  stage.addEventListener("wheel", (e) => {{
+    e.preventDefault();
+    closeMenu();
+    const f = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+    scale = Math.min(12, Math.max(0.2, scale * f));
+    apply();
+  }}, {{ passive: false }});
+  stage.addEventListener("pointerdown", (e) => {{
+    if (e.target.closest && e.target.closest(".pm-menu")) return;
+    closeMenu();
+    drag = true; moved = 0; px = e.clientX; py = e.clientY;
+    stage.setPointerCapture(e.pointerId); stage.style.cursor = "grabbing";
+  }});
+  stage.addEventListener("pointermove", (e) => {{
+    if (!drag) return;
+    const dx = e.clientX - px, dy = e.clientY - py;
+    moved += Math.abs(dx) + Math.abs(dy);
+    tx += dx; ty += dy; px = e.clientX; py = e.clientY;
+    apply();
+  }});
+  const stop = () => {{ drag = false; stage.style.cursor = "grab"; }};
+  stage.addEventListener("pointerup", stop);
+  stage.addEventListener("pointerleave", stop);
+  // Click a stub / sub-process to navigate. graphviz emits an SVG anchor;
+  // a static stub links #pm-map-N (pan to that panel), a dynamic stub
+  // links #pm-stub-menu-N (open the plug-in picker). Suppressed after a
+  // drag so panning never triggers a jump.
+  stage.addEventListener("click", (e) => {{
+    if (moved > 6) return;
+    // Drag-start calls setPointerCapture(#stage), which retargets the
+    // click event to #stage — so e.target is NOT the node under the
+    // cursor and closest("a") would miss every stub. Resolve the real
+    // element by coordinates instead.
+    const hit = document.elementFromPoint(e.clientX, e.clientY) || e.target;
+    if (hit && hit.closest && hit.closest(".pm-menu")) return;
+    const a = hit && hit.closest ? hit.closest("a") : null;
+    if (!a) return;
+    const href = a.getAttribute("xlink:href") || a.getAttribute("href") || "";
+    if (href.startsWith("#pm-stub-menu-")) {{
+      e.preventDefault();
+      showMenu(href, e.clientX, e.clientY);
+    }} else if (href.startsWith("#pm-map-")) {{
+      e.preventDefault();
+      panTo(href);
+    }}
+  }});
+}})();
+</script>""",
+        height=height + 6,
     )
 
 
@@ -1017,9 +1372,143 @@ def _fmt_duration_s(seconds) -> str:
 # UI
 # ---------------------------------------------------------------------------
 
-st.set_page_config(page_title="PM4Py-UCM (V3 · Families)", layout="wide")
-st.title("PM4Py-UCM")
+# The rail is this app's primary navigation, not an optional settings
+# drawer — it must never open collapsed, whatever the viewport.
+st.set_page_config(
+    page_title="PM4Py-UCM", layout="wide", initial_sidebar_state="expanded",
+)
 
+# Which theme Streamlit is actually rendering. Asking Streamlit beats
+# reading the OS preference: the app can be set to dark on a light
+# machine (or pinned in config.toml), and then the OS is the wrong
+# answer. Guarded because st.context.theme is young API surface — a
+# missing attribute must not take the app down, and light is what the
+# design specifies.
+def _active_theme() -> str:
+    try:
+        t = getattr(st.context, "theme", None)
+        if t is not None and getattr(t, "type", None) in ("light", "dark"):
+            return t.type
+    except Exception:
+        pass
+    return "light"
+
+
+_theme = _active_theme()
+_dark = _theme == "dark"
+
+# The workspace shell's paper/garnet surface, applied to Streamlit's own
+# chrome. Only tokens and spacing — no structural overrides, which are
+# what break on a Streamlit upgrade. The rail is the real sidebar; the
+# view list below is the rail's VIEWS section.
+#
+# The tokens FOLLOW the active theme rather than forcing the light ones.
+# Forcing them is not a cosmetic slip: Streamlit keeps its near-white
+# text in dark mode, so a hard-coded paper background renders white text
+# on white — 1.01:1, invisible. Every surface set here has to move with
+# the theme that owns the text on top of it.
+_TOKENS_LIGHT = """
+        --pm-paper:#faf9f7; --pm-rail:#f1efeb; --pm-border:#e2dfd8;
+        --pm-ink:#1c1b1a; --pm-muted:#8a857c; --pm-faint:#a09b91;
+        --pm-garnet:#8f001a; --pm-garnet-hover:#6e0014;
+        --pm-card:#ffffff; --pm-chip-bg:#f3e6e8; --pm-chip-fg:#8f001a;
+        --pm-chip-n-bg:#efece7; --pm-chip-n-fg:#57534b;
+        --pm-hover:#e9e6e0;
+"""
+# Garnet lifts to #ff6b81 on dark for the same reason it does in the
+# island: #8f001a on a dark surface is 1.6:1.
+_TOKENS_DARK = """
+        --pm-paper:#14161b; --pm-rail:#1b1e24; --pm-border:#333842;
+        --pm-ink:#f0eee9; --pm-muted:#a5a099; --pm-faint:#837e77;
+        --pm-garnet:#ff6b81; --pm-garnet-hover:#ff8a9c;
+        --pm-card:#1f232b; --pm-chip-bg:#3a1f26; --pm-chip-fg:#ff8095;
+        --pm-chip-n-bg:#2a2f39; --pm-chip-n-fg:#c9c4bb;
+        --pm-hover:#2a2f39;
+"""
+
+st.markdown(
+    """
+    <style>
+      :root {"""
+    + (_TOKENS_DARK if _dark else _TOKENS_LIGHT)
+    + """
+      }
+      .stApp { background: var(--pm-paper); }
+      section[data-testid="stSidebar"] {
+        background: var(--pm-rail);
+        border-right: 1px solid var(--pm-border);
+      }
+      section[data-testid="stSidebar"] h1,
+      section[data-testid="stSidebar"] h2,
+      section[data-testid="stSidebar"] h3 {
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 14px !important; font-weight: 600;
+      }
+      .pm-brand {
+        font-family: Georgia, "Times New Roman", serif;
+        font-weight: 700; font-size: 14px; color: var(--pm-ink);
+      }
+      .pm-brand a { color: inherit; text-decoration: none; }
+      .pm-brand a:hover { text-decoration: underline; }
+      .pm-brand span {
+        font-family: ui-monospace, Menlo, Consolas, monospace;
+        font-size: 10px; color: var(--pm-muted); margin-left: 6px;
+      }
+      .pm-brand span a { color: var(--pm-muted); }
+      .pm-byline {
+        font-size: 10.5px; color: var(--pm-muted); margin: 3px 0 2px;
+      }
+      .pm-byline a { color: var(--pm-muted); text-decoration: none; }
+      .pm-byline a:hover {
+        text-decoration: underline; color: var(--pm-ink);
+      }
+      /* Log card — the rail's persistent "what am I looking at". */
+      .pm-log {
+        background:var(--pm-card); border:1px solid var(--pm-border);
+        border-radius:8px; padding:11px 12px; margin:8px 0 14px;
+      }
+      .pm-log__name { font-weight:600; font-size:12px; color:var(--pm-ink);
+        word-break:break-all; }
+      .pm-log__meta { font-family: ui-monospace, Menlo, Consolas, monospace;
+        font-size:10.5px; color:var(--pm-muted); margin-top:2px; }
+      .pm-log__chips { margin-top:6px; display:flex; gap:4px; flex-wrap:wrap; }
+      .pm-log__chip {
+        font-family: ui-monospace, Menlo, Consolas, monospace;
+        font-size:9.5px; border-radius:12px; padding:1px 7px;
+        background:var(--pm-chip-bg); color:var(--pm-chip-fg);
+      }
+      .pm-log__chip--n {
+        background:var(--pm-chip-n-bg); color:var(--pm-chip-n-fg);
+      }
+      .pm-viewhead {
+        font-family: Georgia, "Times New Roman", serif;
+        font-weight:600; font-size:14px; color:var(--pm-ink);
+        border-bottom:1px solid var(--pm-border);
+        padding-bottom:8px; margin-bottom:12px;
+      }
+      /* The rail's view list: radio rendered as the design's rows. */
+      section[data-testid="stSidebar"] div[role="radiogroup"] > label {
+        border-radius:7px; padding:3px 8px; margin-bottom:1px;
+      }
+      section[data-testid="stSidebar"] div[role="radiogroup"] > label:hover {
+        background:var(--pm-hover);
+      }
+      section[data-testid="stSidebar"] div[role="radiogroup"] input:checked
+        + div { font-weight:600; }
+      div[data-testid="stSidebarUserContent"] { padding-top: 10px; }
+      /* Reclaim the dead band at the top of the main area: the brand and
+         identity live in the rail, so there is no main-area title and
+         Streamlit's default top padding leaves a big gap below the header.
+         Lift the content to sit just under the (fixed, 60px) header —
+         which is left intact so its menu / Deploy / sidebar toggle stay
+         reachable. */
+      [data-testid="stMainBlockContainer"], .block-container {
+        padding-top: 4rem !important;
+      }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # Show the ACTUAL running package version (not the latest GitHub
 # release): the deployment imports the checkout's ``pm4py_ucm``, so this
@@ -1032,14 +1521,6 @@ _version_text = (
     f"Running [pm4py-ucm {_version}]"
     "(https://github.com/ProcessMining-uOttawa/pm4py-ucm/releases/tag/"
     f"v{_version})"
-)
-st.caption(
-    "Mine a Use Case Map model from an XES or CSV event log, "
-    "synthesize executable jUCMNav scenarios with concurrency-aware "
-    "variant clustering, and mine attribute-partitioned model "
-    "families with comparative statistics reports. "
-    f"{_version_text} — by [Daniel Amyot](https://damyot.github.io/), "
-    "University of Ottawa, Canada."
 )
 
 
@@ -1074,6 +1555,21 @@ def _accept_log_bytes(name: str, payload: bytes) -> None:
 # Sidebar — miner config (decomposition affects the Model tab only; the
 # Scenarios tab always runs flat).
 with st.sidebar:
+    # Brand at the top of the rail — the app's name (→ repo), the version
+    # actually running (→ that release's notes), and the attribution. The
+    # design carries the identity here rather than in a main-area title.
+    _repo_url = "https://github.com/ProcessMining-uOttawa/pm4py-ucm"
+    _release_url = f"{_repo_url}/releases/tag/v{_version}"
+    st.markdown(
+        f'<div class="pm-brand">'
+        f'<a href="{_repo_url}" target="_blank" rel="noopener">PM4Py-UCM</a>'
+        f'<span><a href="{_release_url}" target="_blank" rel="noopener">'
+        f'{_html_escape_min(_version)}</a></span></div>'
+        f'<div class="pm-byline">'
+        f'<a href="https://damyot.github.io/" target="_blank" '
+        f'rel="noopener">D. Amyot</a>, uOttawa, 2026</div>',
+        unsafe_allow_html=True,
+    )
     st.header("Inductive miner")
     noise_threshold = st.slider(
         "Noise threshold", min_value=0.0, max_value=1.0,
@@ -1395,64 +1891,214 @@ except Exception as exc:
         st.code(traceback.format_exc(), language="text")
     st.stop()
 
-c1, c2, c3, c4, c5, c6, c7, c8 = st.columns(8)
-c1.metric("File", log_name)
-c2.metric("Cases", f"{mined['n_cases']:,}")
-c3.metric("Events", f"{mined['n_events']:,}")
-c4.metric("Activities", f"{mined['n_activities']:,}")
-c5.metric("Notation", notation)
-c6.metric("Decomposition", decomposition_preset)
-c7.metric("Maps", mined["n_maps"])
-c8.metric("Nodes", mined["n_nodes"])
-
-# ---- Tabs -----------------------------------------------------------------
-model_tab, scenarios_tab, family_tab, compare_tab = st.tabs(
-    ["Model", "Scenarios", "Family", "Compare"]
+# ---- Family staleness, hoisted out of the Family view ----------------------
+# V3 rendered every tab body on every rerun, so the Family tab's
+# staleness check ran even while you were looking at Compare. V4 renders
+# one view at a time, so the half of that check which depends on
+# always-rendered sidebar settings has to run out here — otherwise
+# changing the noise threshold while on Compare would leave it showing a
+# family mined with the old one.
+#
+# Only that half: the family-specific settings (attributes, min cases,
+# bins) live inside the Family view and cannot change while you are
+# elsewhere, so the Family view keeps its own full-fingerprint check.
+# ``family_fp`` is deliberately left in place — the Family view compares
+# against it to tell "settings changed, re-mine" apart from "nothing
+# mined yet".
+_family_base_fp = _arg_fingerprint(
+    file_hash, log_kind, csv_columns, noise_threshold, decomposition_spec,
+    resource_attribute, effective_min_support, overlay_nodes, overlay_edges,
 )
+if st.session_state.get("family_base_fp") not in (None, _family_base_fp):
+    st.session_state.pop("family_result", None)
+st.session_state["family_base_fp"] = _family_base_fp
 
-# ===== Model tab ===========================================================
-with model_tab:
+# ---- Rail: the log card and the VIEWS list ---------------------------------
+_VIEWS = ["Model", "Scenarios", "Family", "Compare", "Dashboards"]
+
+with st.sidebar:
+    st.markdown("---")
+    _n_attrs = 0
     try:
-        with st.spinner(f"Rendering {notation} diagram..."):
-            png_bytes = _render_cached(mined["jucm"], style)
-    except Exception as exc:
-        st.error(f"Render failed: {type(exc).__name__}: {exc}")
-        with st.expander("Show technical details"):
-            st.code(traceback.format_exc(), language="text")
-        st.stop()
-
-    _b64 = base64.b64encode(png_bytes).decode("ascii")
+        _n_attrs = len(_detect_family_attributes(
+            log_bytes, log_kind, csv_columns, file_hash))
+    except Exception:
+        # Attribute detection is best-effort context for the log card;
+        # a log without usable case attributes is normal, and a failure
+        # here must never stop the app from rendering.
+        pass
+    _chips = ""
+    if resource_attribute:
+        _chips += (f'<span class="pm-log__chip">{_html_escape_min(resource_attribute)}'
+                   f' ✓</span>')
+    _chips += (f'<span class="pm-log__chip pm-log__chip--n">{_n_attrs} case '
+               f'attr{"s" if _n_attrs != 1 else ""}</span>')
     st.markdown(
-        f'<img src="data:image/png;base64,{_b64}" '
-        f'width="{_DISPLAY_WIDTH_PX}" '
-        f'style="max-width:100%; height:auto; cursor: zoom-in;" '
-        f'data-opentab="1" '
-        f'title="Double-click to open in a new browser tab" '
-        f'alt="Mined {notation} model" />',
+        f'<div class="pm-log">'
+        f'<div class="pm-log__name">{_html_escape_min(log_name)}</div>'
+        f'<div class="pm-log__meta">{mined["n_cases"]:,} cases &nbsp;·&nbsp; '
+        f'{mined["n_events"]:,} events</div>'
+        f'<div class="pm-log__chips">{_chips}</div>'
+        f'</div>',
         unsafe_allow_html=True,
     )
-    st.caption(
-        f"Mined model ({notation}, decomposition={decomposition_preset}) — "
-        "double-click the image (or use the button below) to open it "
-        "in its own browser tab and zoom complex models more easily."
+    st.markdown(
+        '<div style="font-weight:700;font-size:10px;letter-spacing:.08em;'
+        'color:var(--pm-faint);text-transform:uppercase;margin-bottom:2px">'
+        'Views</div>',
+        unsafe_allow_html=True,
+    )
+    # A view switch requested from elsewhere in the page (Pin to
+    # dashboard) arrives as `goto_view` and is consumed HERE, before the
+    # radio exists. Streamlit forbids writing a widget's own key once the
+    # widget has been instantiated, and every such request comes from a
+    # control rendered *below* this one — so the request cannot be the
+    # key itself, and it cannot be applied any later than this.
+    if "goto_view" in st.session_state:
+        _requested = st.session_state.pop("goto_view")
+        if _requested in _VIEWS:
+            st.session_state["view"] = _requested
+    _view = st.radio(
+        "Views", _VIEWS, label_visibility="collapsed", key="view",
     )
 
-    d1, d2, d3 = st.columns(3)
-    with d1:
-        _open_image_in_tab_button(_b64)
-    d2.download_button(
-        "Download PNG", data=png_bytes,
-        file_name=_safe_download_name(Path(log_name).stem, ".png"),
-        mime="image/png",
+# ---- Views -----------------------------------------------------------------
+st.markdown(
+    f'<div class="pm-viewhead">{_view}</div>', unsafe_allow_html=True,
+)
+
+# ===== Model view ==========================================================
+if _view == "Model":
+    st.subheader("Mine a Use Case Map model")
+    st.caption(
+        "Inductive-mine a Use Case Map (UCM) from the loaded event log, "
+        "preview it in UCM or BPMN notation (click a stub to navigate its "
+        "sub-maps), and download the vector SVG, a raster PNG, or the "
+        "jUCMNav `.jucm`. Synthesize executable scenarios and mine "
+        "attribute-partitioned model families in the other views. "
+        f"{_version_text} — by [Daniel Amyot](https://damyot.github.io/), "
+        "University of Ottawa, Canada."
     )
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Activities", f"{mined['n_activities']:,}")
+    m2.metric("Notation", notation)
+    m3.metric("Decomposition", decomposition_preset)
+    m4.metric("Maps", mined["n_maps"])
+    m5.metric("Nodes", mined["n_nodes"])
+
+    # SVG is the default on-screen render: vector, crisp at any zoom, with
+    # selectable text, and cheap (0.1–0.4 s even for a decomposed stack).
+    # PNG is no longer rendered proactively — it is a download prepared on
+    # demand below.
+    try:
+        with st.spinner(f"Rendering {notation} diagram..."):
+            _svg = _render_svg_cached(mined["jucm"], style)
+        _svg_err = None
+    except Exception as _exc:
+        _svg = None
+        _svg_err = f"{type(_exc).__name__}: {_exc}"
+
+    if _svg is not None:
+        _svg_viewer(_svg, height=620)
+        st.caption(
+            f"Mined model ({notation}, "
+            f"decomposition={decomposition_preset}) — vector SVG; scroll "
+            "to zoom, drag to pan. Download SVG or a raster PNG below."
+        )
+    else:
+        # SVG failed for some reason — fall back to a PNG so the model is
+        # still visible, and say why.
+        try:
+            _png_fallback = _render_cached(mined["jucm"], style)
+            st.markdown(
+                f'<img src="data:image/png;base64,'
+                f'{base64.b64encode(_png_fallback).decode("ascii")}" '
+                f'width="{_DISPLAY_WIDTH_PX}" '
+                f'style="max-width:100%; height:auto; cursor: zoom-in;" '
+                f'data-opentab="1" alt="Mined {notation} model" />',
+                unsafe_allow_html=True,
+            )
+            st.caption(f"SVG render failed ({_svg_err}); showing PNG.")
+        except Exception as exc:
+            st.error(f"Render failed: {type(exc).__name__}: {exc}")
+            with st.expander("Show technical details"):
+                st.code(traceback.format_exc(), language="text")
+            st.stop()
+
+    _svg_ok = _svg is not None
+    d1, d2, d3, d4 = st.columns(4)
+
+    # Download SVG.
+    d1.download_button(
+        "Download SVG",
+        data=_svg.encode("utf-8") if _svg_ok else b"",
+        file_name=_safe_download_name(Path(log_name).stem, ".svg"),
+        mime="image/svg+xml",
+        disabled=not _svg_ok,
+        key="model_svg_download",
+        help="Vector — crisp at any zoom, with selectable text.",
+    )
+
+    # Download PNG — rendered ONLY when asked, since SVG is the default
+    # display. First press renders (with a spinner) and stashes it; the
+    # button then becomes the actual download. Keyed by model + notation
+    # so switching either re-arms it.
+    _png_key = f"model_png::{file_hash}::{style}"
+    with d2:
+        if _png_key in st.session_state:
+            st.download_button(
+                "Download PNG", data=st.session_state[_png_key],
+                file_name=_safe_download_name(Path(log_name).stem, ".png"),
+                mime="image/png", key="model_png_download",
+            )
+        elif st.button("Prepare PNG…", key="model_png_prepare",
+                       help="Render a raster PNG to download (SVG is the "
+                            "default; PNG is generated only when you ask)."):
+            with st.spinner(f"Rendering {notation} PNG..."):
+                try:
+                    st.session_state[_png_key] = _render_cached(
+                        mined["jucm"], style)
+                except Exception as exc:
+                    st.warning(f"PNG render failed: {exc}")
+            st.rerun()
+
     d3.download_button(
         "Download .jucm (no scenarios)", data=mined["jucm"],
         file_name=_safe_download_name(Path(log_name).stem, ".jucm"),
         mime="application/xml",
     )
+    with d4.popover("Pin to dashboard ▦", use_container_width=True):
+        st.caption(
+            "Adds the model to the Dashboards view as a widget. The pin "
+            "is live: it renders whatever the model currently is, so it "
+            "follows a re-mine rather than freezing today's picture."
+        )
+        _pin_title = st.text_input(
+            "Widget title", value=f"Mined model — {Path(log_name).stem}",
+            key="pin_title",
+        )
+        if st.button("Pin ▦", type="primary", key="pin_go"):
+            # The island cannot be reached directly — components.html is
+            # one-way — so the request travels in its config on the next
+            # rerun. The id must be fresh per click: the config is re-sent
+            # on every rerun, and the island skips ids it has applied.
+            st.session_state["pending_pin"] = {
+                "id": uuid.uuid4().hex,
+                "spec": {
+                    "id": f"pin-{uuid.uuid4().hex[:8]}",
+                    "title": _pin_title or "Mined model",
+                    # A model widget carries no measurement of its own;
+                    # the metric is required by the spec shape, and the
+                    # renderer short-circuits before computing it.
+                    "metric": "duration",
+                    "viz": "model",
+                },
+            }
+            st.session_state["goto_view"] = "Dashboards"
+            st.rerun()
 
-# ===== Scenarios tab =======================================================
-with scenarios_tab:
+# ===== Scenarios view =====================================================
+if _view == "Scenarios":
     st.subheader("Synthesize executable scenarios")
     st.caption(
         "Concurrency-aware variant clustering on the discovered "
@@ -1655,8 +2301,8 @@ with scenarios_tab:
         else:
             d4.caption("_condition_mining.csv is only emitted in data-driven mode._")
 
-# ===== Family tab ==========================================================
-with family_tab:
+# ===== Family view ========================================================
+if _view == "Family":
     st.subheader("Model family by case attributes")
     st.caption(
         "Partition the log by 1–2 case-level attributes (e.g. cancer "
@@ -1916,48 +2562,56 @@ with family_tab:
                 )
                 fm5.metric("Case coverage", f"{fcov:.1f}%")
 
-                # Grid rendering is per-notation and cached
-                # independently of mining — switching UCM ↔ BPMN only
-                # re-renders the already-mined models.
+                # SVG is the default grid view: one 2-D vector matrix,
+                # crisp at any zoom with selectable text, and cheap to
+                # build (per-cell graphviz SVG, no rasterising). The PNG is
+                # a download prepared on demand below. Cached per notation,
+                # independent of mining — switching UCM ↔ BPMN re-renders
+                # but never re-mines.
+                grid_png = None  # rendered lazily (fallback / on-demand)
                 with st.spinner(f"Rendering family grid ({notation})..."):
-                    grid_png, grid_preview, grid_error = (
-                        _render_family_grid(
-                            st.session_state["family_fp"], style,
-                            fam["family"],
-                        )
+                    grid_svg, grid_svg_err = _render_family_grid_svg(
+                        st.session_state["family_fp"], style, fam["family"],
                     )
-                if grid_preview is not None:
-                    _fb64 = base64.b64encode(grid_preview).decode("ascii")
-                    # data-opentab="1" opts the image into the delegated
-                    # double-click-to-open-in-new-tab handler (installed
-                    # by the Model tab's _open_image_in_tab_button, which
-                    # runs earlier in the same script pass).
-                    st.markdown(
-                        f'<img src="data:image/png;base64,{_fb64}" '
-                        f'width="{_DISPLAY_WIDTH_PX}" '
-                        f'style="max-width:100%; height:auto; '
-                        f'cursor: zoom-in;" '
-                        f'data-opentab="1" '
-                        f'title="Double-click to open in a new browser tab" '
-                        f'alt="Model family grid" />',
-                        unsafe_allow_html=True,
-                    )
+                if grid_svg is not None:
+                    _svg_viewer(grid_svg, height=640, key="familysvg")
                     st.caption(
-                        "One panel per combination — captions show "
-                        "each cell's case count and share of the log. "
-                        "Double-click the grid to open it in its own "
-                        "browser tab. This inline view is a downscaled "
-                        "preview; the **Grid PNG** download below is full "
-                        "resolution (text-readable)."
+                        "One panel per combination (rows × columns) — "
+                        "captions show each cell's case count and share of "
+                        "the log. Vector SVG: scroll to zoom, drag to pan; "
+                        "for a decomposed member, click a stub to jump to "
+                        "its sub-map. Download SVG or a raster PNG below."
                     )
-                    # Guarantee the double-click listener exists even if
-                    # the Model tab didn't render an image this run.
-                    _open_image_in_tab_button(
-                        _fb64, label="Open grid in new tab ⧉")
-                elif grid_error:
-                    st.warning(
-                        f"Grid rendering unavailable: {grid_error}"
-                    )
+                else:
+                    # SVG failed — fall back to the raster grid so the
+                    # family stays visible, and say why.
+                    with st.spinner(f"Rendering family grid ({notation})..."):
+                        grid_png, grid_preview, grid_error = (
+                            _render_family_grid(
+                                st.session_state["family_fp"], style,
+                                fam["family"],
+                            )
+                        )
+                    if grid_preview is not None:
+                        _fb64 = base64.b64encode(grid_preview).decode("ascii")
+                        st.markdown(
+                            f'<img src="data:image/png;base64,{_fb64}" '
+                            f'width="{_DISPLAY_WIDTH_PX}" '
+                            f'style="max-width:100%; height:auto; '
+                            f'cursor: zoom-in;" data-opentab="1" '
+                            f'title="Double-click to open in a new browser tab" '
+                            f'alt="Model family grid" />',
+                            unsafe_allow_html=True,
+                        )
+                        st.caption(
+                            f"SVG render failed ({grid_svg_err}); showing "
+                            "the raster grid. Double-click to open it in a "
+                            "new browser tab."
+                        )
+                        _open_image_in_tab_button(
+                            _fb64, label="Open grid in new tab ⧉")
+                    elif grid_error:
+                        st.warning(f"Grid rendering unavailable: {grid_error}")
 
                 st.subheader("Cells")
                 st.dataframe(
@@ -1993,14 +2647,51 @@ with family_tab:
                          "conditioned plug-in per (merged) cell + one "
                          "strategy per combination.",
                 )
+                if grid_svg is not None:
+                    fd4.download_button(
+                        "Grid SVG", data=grid_svg.encode("utf-8"),
+                        file_name=_safe_download_name(
+                            f"{stem}_family_grid_{style}", ".svg",
+                        ),
+                        mime="image/svg+xml",
+                        help="Vector grid — crisp at any zoom, text "
+                             "selectable.",
+                    )
+                elif grid_svg_err:
+                    fd4.caption(f"SVG unavailable: {grid_svg_err}")
+
+                # Grid PNG — a raster download, rendered ONLY when asked
+                # (SVG is the default view). Keyed by family + notation.
+                _grid_png_key = (
+                    f"family_grid_png::{st.session_state['family_fp']}"
+                    f"::{style}"
+                )
+                if grid_png is None and _grid_png_key in st.session_state:
+                    grid_png = st.session_state[_grid_png_key]
                 if grid_png is not None:
                     fd4.download_button(
                         "Grid PNG", data=grid_png,
                         file_name=_safe_download_name(
                             f"{stem}_family_grid_{style}", ".png",
                         ),
-                        mime="image/png",
+                        mime="image/png", key="family_grid_png_download",
                     )
+                elif fd4.button(
+                    "Prepare Grid PNG…", key="family_grid_png_prepare",
+                    help="Render a raster PNG to download (SVG is the "
+                         "default; PNG is generated only when you ask).",
+                ):
+                    with st.spinner(f"Rendering family grid PNG "
+                                    f"({notation})..."):
+                        _gp, _, _ge = _render_family_grid(
+                            st.session_state["family_fp"], style,
+                            fam["family"],
+                        )
+                    if _gp is not None:
+                        st.session_state[_grid_png_key] = _gp
+                        st.rerun()
+                    else:
+                        fd4.caption(f"PNG unavailable: {_ge}")
                 report_bytes, report_error = _build_family_report(
                     st.session_state["family_fp"], style,
                     fam["family"], fam["stats"],
@@ -2021,8 +2712,8 @@ with family_tab:
                 elif report_error:
                     fd5.caption(f"Report unavailable: {report_error}")
 
-# ===== Compare tab =========================================================
-with compare_tab:
+# ===== Compare view =======================================================
+if _view == "Compare":
     st.subheader("Compare the family's processes")
     _cmp_fam = st.session_state.get("family_result")
     if _cmp_fam is None or "stats" not in _cmp_fam:
@@ -2128,24 +2819,51 @@ with compare_tab:
             )
 
         # ---- models side by side ----------------------------------------
-        st.caption("Double-click either model to open it full-size in a "
-                   "new browser tab.")
+        # SVG is the on-screen default (crisp zoom/pan, selectable text);
+        # a decomposed member's stubs are clickable and stay inside that
+        # member. PNG stays available as a download.
+        st.caption("Zoom and drag to pan each model. For a decomposed "
+                   "member, click a stub to jump to its sub-map; a "
+                   "dynamic stub opens a plug-in picker.")
+        _cmp_stem = Path(log_name).stem
         _imc = st.columns(2)
         for _col, _tag, _idx, _cell in (
                 (_imc[0], "A", _ia, _A), (_imc[1], "B", _ib, _B)):
             with _col:
-                _png = _render_family_cell(
-                    _cmp_fp, style, _idx, _cmp_fam["family"],
-                )
                 _cap = (
                     f"{_tag} — {_cell.label} · n={_cell.n_cases} "
                     f"({_cell.coverage * 100:.1f}% of the log)"
                 )
+                _csvg = _render_family_cell_svg(
+                    _cmp_fp, style, _idx, _cmp_fam["family"],
+                )
+                if _csvg is not None:
+                    _svg_viewer(_csvg, height=460, key=f"cmpsvg{_tag}")
+                    st.caption(_cap)
+                    _dlc = st.columns(2)
+                    _dlc[0].download_button(
+                        "SVG", data=_csvg.encode("utf-8"),
+                        file_name=_safe_download_name(
+                            f"{_cmp_stem}_compare_{_tag}_{style}", ".svg"),
+                        mime="image/svg+xml", key=f"cmpsvgdl{_tag}",
+                    )
+                    _png = _render_family_cell(
+                        _cmp_fp, style, _idx, _cmp_fam["family"],
+                    )
+                    if _png is not None:
+                        _dlc[1].download_button(
+                            "PNG", data=_png,
+                            file_name=_safe_download_name(
+                                f"{_cmp_stem}_compare_{_tag}_{style}", ".png"),
+                            mime="image/png", key=f"cmppngdl{_tag}",
+                        )
+                    continue
+                # SVG unavailable — fall back to the PNG image (with the
+                # shared double-click-to-open-in-a-new-tab behaviour).
+                _png = _render_family_cell(
+                    _cmp_fp, style, _idx, _cmp_fam["family"],
+                )
                 if _png is not None:
-                    # data-opentab="1" opts into the shared double-click
-                    # handler (installed by the Model tab, which always
-                    # renders before this tab) so the model opens in a
-                    # new tab — the same behaviour as the Model tab.
                     _cb64 = base64.b64encode(_png).decode("ascii")
                     st.markdown(
                         f'<img src="data:image/png;base64,{_cb64}" '
@@ -2378,3 +3096,123 @@ with compare_tab:
             )
         elif _rep_err:
             st.caption(f"Report unavailable: {_rep_err}")
+
+# ===== Dashboards view =====================================================
+if _view == "Dashboards":
+    st.caption(
+        "Build widgets from a metric catalog over this log — filter, "
+        "segment by resource / time / case attribute, set targets, and "
+        "drill into any cell. Everything below is computed **in your "
+        "browser** from a compact snapshot of the log, which is why the "
+        "exported HTML stays interactive offline: the export is this "
+        "same view."
+    )
+
+    try:
+        _ft = _fact_table(log_bytes, log_kind, csv_columns, log_name,
+                          file_hash)
+    except Exception as exc:
+        st.error(
+            f"Could not prepare dashboard data: {type(exc).__name__}: {exc}"
+        )
+        with st.expander("Show technical details"):
+            st.code(traceback.format_exc(), language="text")
+        st.stop()
+
+    if _ft.sampled:
+        st.warning(
+            f"This log is too large to send to the browser whole, so the "
+            f"dashboard is computed from a random sample of "
+            f"{_ft.n_cases:,} of {_ft.sampled_from:,} cases. Every value "
+            f"below is an estimate."
+        )
+    if _ft.dropped_events:
+        st.warning(
+            f"{_ft.dropped_events:,} events were excluded because their "
+            f"timestamp could not be parsed."
+        )
+
+    # Model widgets and the report's model section both render from SVG
+    # now — no PNG is produced here. One SVG per notation serves both: a
+    # data URI for a model widget's <img>, and the raw SVG for the
+    # report's zoom/pan viewer. The render is cached per style, so both
+    # notations cost one render each rather than one per rerun.
+    _renders: Dict[str, str] = {}
+    _model_svgs: Dict[str, str] = {}
+    for _style, _label in (("ucm", "ucm"), ("bpmn", "bpmn")):
+        try:
+            _svg = _render_svg_cached(mined["jucm"], _style)
+            _model_svgs[_label] = _svg
+            _renders[_label] = (
+                "data:image/svg+xml;base64,"
+                + base64.b64encode(_svg.encode("utf-8")).decode("ascii")
+            )
+        except Exception:
+            # A notation that will not render must not take the whole
+            # dashboard down; the widget falls back to a placeholder.
+            pass
+
+    # Fold the mined family's statistics report into the session report as
+    # a Family section (only when a family has been mined for this log).
+    # The report is a self-contained HTML doc (families/report.py); the
+    # client-built session report embeds it whole in an <iframe>. Cached
+    # per (family, style) via _build_family_report.
+    _family_report_html = ""
+    _fam = st.session_state.get("family_result")
+    if _fam and _fam.get("stats") is not None:
+        _fr_bytes, _fr_err = _build_family_report(
+            st.session_state.get("family_fp", ""), style,
+            _fam["family"], _fam["stats"],
+        )
+        if _fr_bytes is not None:
+            _family_report_html = _fr_bytes.decode("utf-8")
+
+    _specs_json = _json.dumps(_DEFAULT_DASHBOARD_SPECS)
+    _html = _dashboard_html_cached(
+        _ft, _specs_json, "Ops overview",
+        tuple(sorted(_renders.items())), file_hash, False, _theme,
+        tuple(sorted(_model_svgs.items())),
+        _family_report_html,
+    )
+
+    # A pin carries a fresh id per click, so it must not reach the cache
+    # key — it would miss every time and rebuild a 1 MB document for
+    # nothing. Splice it into the cached config instead. The island skips
+    # ids it has already applied, so re-sending the same one across
+    # reruns is harmless; it stays until the log or the theme changes.
+    _pin = st.session_state.get("pending_pin")
+    if _pin:
+        _html = _html.replace(
+            '"pendingPin":null',
+            '"pendingPin":' + _json.dumps(_pin, separators=(",", ":"))
+                              .replace("</", "<\\/"),
+            1,
+        )
+
+    # The island owns its own scrolling; a fixed height keeps the page
+    # from growing an outer scrollbar around an inner one.
+    _embed_html(_html, height=760, scrolling=True)
+
+    with st.expander("About these numbers"):
+        st.markdown(
+            f"""
+**Data.** {_ft.n_cases:,} cases · {_ft.n_events:,} events ·
+{len(_ft.activities)} activities ·
+{"interval log (service and waiting times available)"
+ if _ft.interval_log else
+ "single-timestamp log (service/waiting times need a `start_timestamp` "
+ "column; sojourn times work on any log)"}.
+
+**Where the widgets live.** Widgets you add are saved **in this
+browser**, not on the server — the view is an embedded page and cannot
+write back to Streamlit. They survive a reload and a re-mine, and are
+kept per log. Clearing site data clears them.
+
+**Semantics.** Missing values leave the denominator rather than counting
+as zero, percentiles interpolate linearly (matching the model overlays
+and family reports), and activity time metrics are case-weighted — see
+[docs/metrics.md](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/metrics.md)
+and
+[docs/dashboards.md](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/dashboards.md).
+            """
+        )

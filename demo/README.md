@@ -5,11 +5,11 @@ Contents:
 | File                                    | What it is                                                       |
 |-----------------------------------------|------------------------------------------------------------------|
 | `pm4py_ucm_tutorial.ipynb`              | **Main tutorial notebook** — guided tour of the full model-discovery feature surface against a realistic claims-payment log. Recommended starting point for the discovery / rendering / decomposition side of the package. |
-| `scenario_synthesis_tutorial.ipynb`     | **Scenario-synthesis tutorial** — pedagogical walkthrough of the scenario layer: concurrency-aware variants, the `LoopEntryGuard`, variant-driven vs data-driven OR-fork conditions, transparent support for decomposed UCMs. Small synthetic examples per section. |
-| `scenario_synthesis.ipynb`              | Empirical companion to the scenario tutorial — runs the full pipeline on `ClaimsPaymentLog` in both encodings side-by-side, with the numbers from the paper. |
-| `model_families_tutorial.ipynb`         | **Model-families + performance-overlays tutorial** — partitions `ClaimsPaymentLog` by case attributes, mines one model per combination, renders the stack/matrix grid, exports per-cell / combined / dynamic-stub-umbrella `.jucm` files, and overlays frequencies and times on activities and edges. |
+| `scenario_synthesis_tutorial.ipynb`     | **Scenario-synthesis tutorial** — the scenario layer end to end: concurrency-aware variants, the `LoopEntryGuard`, both OR-fork condition encodings (variant-driven and **data-driven / decision-mining**, with the per-fork accuracy report), decomposed UCMs, and a capstone running both encodings on `ClaimsPaymentLog`. |
+| `model_families_tutorial.ipynb`         | **Model-families + performance-overlays tutorial** — partitions `ClaimsPaymentLog` by case attributes, mines one model per combination, renders the stack/matrix grid, exports per-cell / combined / dynamic-stub-umbrella `.jucm` files, overlays frequencies and times on activities and edges, and compares members via the family statistics + interactive HTML report. |
+| `dashboards_tutorial.ipynb`             | **Dashboards tutorial** — builds the per-case fact table, computes widgets (KPIs, segmented breakdowns, tables) from the metric catalog, adds filters / targets / a scorecard, writes custom metrics in the **ƒ formula language**, and exports a self-contained interactive HTML dashboard (plus an embedded mined model). |
 | `IssueTracker.zip`                      | Small, readable event log (~100 K events / 11 K cases, 9 distinct activities, 5 roles). Drives sections 0-5 of the main notebook. |
-| `ClaimsPaymentLog.zip`                  | Heavier, denser event log (~90 K events, more activities and actor types). Drives the second half of the main notebook and both scenario notebooks. |
+| `ClaimsPaymentLog.zip`                  | Heavier, denser event log (~90 K events, more activities and actor types). Drives the second half of the main notebook, the scenario capstone, and the families / dashboards tutorials. |
 | `mine_and_export.py`                    | Minimal command-line script that mines a UCM, exports a `.jucm`, and renders a PNG. |
 
 ## Main tutorial notebook
@@ -17,7 +17,9 @@ Contents:
 Open `pm4py_ucm_tutorial.ipynb` in JupyterLab, VS Code, or any
 notebook-aware editor. It covers, with runnable cells:
 
-1. Discovering a UCM from an event log (PNG + `.jucm` outputs).
+1. Discovering a UCM from an event log and rendering it as **PNG or
+   navigable SVG** (click a stub to reach its plug-in map); exporting
+   `.jucm` / `.png` / `.svg`.
 2. Switching to the BPMN-flavoured rendering.
 3. Mining performers giving priority to roles vs individual
    resources, with both visualisations.
@@ -37,31 +39,29 @@ Each section writes its outputs to a local `output/` directory so
 you can open them in jUCMNav, peek at the XML, or include in a
 report.
 
-## Scenario-synthesis notebooks
+## Scenario-synthesis notebook
 
-Two complementary notebooks focus on the scenario-synthesis layer:
+**`scenario_synthesis_tutorial.ipynb`** teaches the scenario layer one
+concept per section on small synthetic examples, then finishes on a
+real log:
 
-- **`scenario_synthesis_tutorial.ipynb`** — pedagogical, one concept
-  per section on small synthetic examples. Start here if you're new
-  to scenario synthesis.
-  1. Why sequence-variant clustering over-counts and how the choice
-     signature fixes it.
-  2. Your first `discover_scenarios` call and what it populates
-     (variables, initializations, arc conditions).
-  3. Loop counters and the `LoopEntryGuard` — why 0-iteration
-     scenarios need special treatment.
-  4. Variant-driven vs data-driven condition encodings side-by-side.
-  5. Decomposition is orthogonal: flat and multi-map UCMs get the
-     same scenario coverage.
-  6. What the three CSV reports contain and how to audit a run.
-- **`scenario_synthesis.ipynb`** — empirical demonstration on
-  `ClaimsPaymentLog`. Runs the full pipeline in both encodings,
-  reports fitness / compression / per-fork accuracy, and drops both
-  `.jucm` files into `scenario_output/` so you can open them
-  side-by-side in jUCMNav.
+1. Why sequence-variant clustering over-counts and how the choice
+   signature fixes it.
+2. Your first `discover_scenarios` call and what it populates
+   (variables, initializations, arc conditions).
+3. Loop counters and the `LoopEntryGuard` — why 0-iteration scenarios
+   need special treatment.
+4. The two OR-fork condition encodings — **variant-driven** (lossless)
+   and **data-driven / decision-mining** — including how the decision
+   tree selects features and how to read the per-fork accuracy report.
+5. Decomposition is orthogonal: flat and multi-map UCMs get the same
+   scenario coverage.
+6. What the three CSV reports contain and how to audit a run.
+7. A capstone running **both encodings on `ClaimsPaymentLog`** with
+   real numbers, written side by side for jUCMNav.
 
-Both notebooks require `pm4py` (for reading XES). The data-driven
-sections additionally require `scikit-learn`.
+Requires `pm4py` (for reading XES). The data-driven sections and the
+capstone additionally require `scikit-learn`.
 
 ## Model-families notebook
 
@@ -86,6 +86,31 @@ end-to-end on `ClaimsPaymentLog`:
 Outputs land in `output/families/`; every `.jucm` opens in jUCMNav.
 See [`docs/model_families.md`](../docs/model_families.md) for the full
 reference.
+
+## Dashboards notebook
+
+**`dashboards_tutorial.ipynb`** covers the dashboards layer on
+`ClaimsPaymentLog`:
+
+1. building the per-case **fact table** (`build_fact_table`) — the compact
+   snapshot every widget reads;
+2. the **metric catalog** and computing individual **widgets**
+   (`compute_widget`) — KPIs, one-axis bars, two-axis tables;
+3. **filters**, **targets**, and the **scorecard**;
+4. the **ƒ custom-formula language** (`compile_formula`) — per-case
+   expressions with a `where` clause, for metrics the catalog does not
+   name;
+5. assembling a dashboard and **exporting** it as one self-contained
+   interactive HTML file (`write_dashboard`) — the same artifact the web
+   app's Dashboards view shows;
+6. related exports — embedding a mined model as inline SVG, and the
+   multi-section session report.
+
+Outputs land in `output/dashboards/`. See
+[`docs/dashboards.md`](../docs/dashboards.md) for the semantic contract
+(every metric's exact definition, the ƒ grammar, and the engine's
+rounding / weighting decisions). Everything is also point-and-click in the
+V4 web app (`web/streamlit_app_v4.py`, **Dashboards** view).
 
 ## Mine-and-export script
 

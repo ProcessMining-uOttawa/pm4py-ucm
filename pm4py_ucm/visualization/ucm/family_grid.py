@@ -491,3 +491,178 @@ def render(
         return output_path
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _hex(rgb: Tuple[int, int, int]) -> str:
+    return "#%02x%02x%02x" % rgb
+
+
+def render_svg(family, style: str = "ucm") -> str:
+    """Render ``family`` as a single **2-D vector SVG** — the same matrix
+    the PNG :func:`render` composites (rows = first attribute's values,
+    columns = the second's; a stack for one attribute), but as vectors:
+    it zooms and pans crisply, its text stays selectable, and it needs no
+    DPI / pixel-budget machinery.
+
+    Each member is rendered with a per-cell id prefix, so a decomposed
+    member's stub links only ever resolve inside that member — a click can
+    never jump across the grid. Skipped / never-observed combinations
+    render as the same grayed placeholders as the PNG.
+
+    Layout units are points; there is no rasterisation, so a panel is
+    sized directly from its graphviz ``<svg>`` extents.
+    """
+    from xml.sax.saxutils import escape
+
+    from . import svg as _svg
+
+    style = (style or "ucm").lower()
+    rows = family.row_values
+    cols = family.col_values  # empty list for a 1-attribute family
+    two_d = bool(cols)
+    n_rows = len(rows)
+    n_cols = len(cols) if two_d else 1
+
+    pad = float(_PAD)
+    header_fs = float(_HEADER_FONT_SIZE)
+    label_fs = float(_LABEL_FONT_SIZE)
+    caption_fs = float(_CAPTION_FONT_SIZE)
+    title_fs = float(_TITLE_FONT_SIZE)
+    caption_h = caption_fs + 10.0
+    min_w, min_h = float(_MIN_PANEL_W), float(_MIN_PANEL_H)
+
+    grid = family.grid()
+    skipped = {
+        tuple(v.label for v in values): n
+        for values, n in family.skipped_cells
+    }
+
+    # Render every mined cell once; remember its extents.
+    panels: Dict[Tuple[int, int], Tuple[float, float, str]] = {}
+    captions: Dict[Tuple[int, int], str] = {}
+    placeholders: Dict[Tuple[int, int], str] = {}
+    for r, rv in enumerate(rows):
+        for c in range(n_cols):
+            labels = (rv.label, cols[c].label) if two_d else (rv.label,)
+            cell = grid.get(labels)
+            if cell is not None:
+                cell_svg = _svg.model_to_svg(
+                    cell.ucm, style, id_prefix=f"r{r}c{c}-")
+                w, h = _svg.svg_dimensions(cell_svg)
+                panels[(r, c)] = (w, h, _svg.svg_inner(cell_svg))
+                captions[(r, c)] = cell.caption
+            elif labels in skipped:
+                placeholders[(r, c)] = f"n={skipped[labels]} (below min_cases)"
+            else:
+                placeholders[(r, c)] = "no cases"
+
+    # Slot sizes: per-column max width, per-row max height (panel + caption).
+    col_w = [min_w] * n_cols
+    row_h = [min_h + caption_h] * n_rows
+    for (r, c), (w, h, _) in panels.items():
+        col_w[c] = max(col_w[c], w + 2 * pad)
+        row_h[r] = max(row_h[r], h + caption_h + 2 * pad)
+
+    gutter_w = label_fs + 2 * pad          # rotated single-line row label
+    header_h = (header_fs + 20.0) if two_d else 0.0
+    title_h = title_fs + 24.0
+    total_w = gutter_w + sum(col_w)
+    total_h = title_h + header_h + sum(row_h)
+
+    if two_d:
+        title = (f"{family.attributes[0].display_name} × "
+                 f"{family.attributes[1].display_name}")
+    else:
+        title = f"by {family.attributes[0].display_name}"
+
+    out = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" '
+        f'xmlns:xlink="http://www.w3.org/1999/xlink" '
+        f'width="{total_w:.0f}pt" height="{total_h:.0f}pt" '
+        f'viewBox="0 0 {total_w:.2f} {total_h:.2f}">',
+        f'<rect x="0" y="0" width="{total_w:.2f}" height="{total_h:.2f}" '
+        f'fill="{_hex(_BG)}"/>',
+        f'<text x="{total_w / 2:.2f}" y="{12 + title_fs * 0.8:.2f}" '
+        f'text-anchor="middle" font-family="Arial, sans-serif" '
+        f'font-weight="bold" font-size="{title_fs:.0f}" '
+        f'fill="{_hex(_HEADER_COLOR)}">{escape(title)}</text>',
+    ]
+
+    # Column x offsets.
+    col_x = [gutter_w]
+    for c in range(n_cols):
+        col_x.append(col_x[-1] + col_w[c])
+    y0 = title_h + header_h
+
+    if two_d:
+        for c, cv in enumerate(cols):
+            out.append(
+                f'<text x="{col_x[c] + col_w[c] / 2:.2f}" '
+                f'y="{title_h + header_fs * 0.9 + 6:.2f}" '
+                f'text-anchor="middle" font-family="Arial, sans-serif" '
+                f'font-weight="bold" font-size="{header_fs:.0f}" '
+                f'fill="{_hex(_HEADER_COLOR)}">{escape(cv.label)}</text>')
+
+    y = y0
+    for r in range(n_rows):
+        cy = y + row_h[r] / 2
+        cx = gutter_w / 2
+        # Row (member) label — rotated so it reads bottom-to-top.
+        out.append(
+            f'<text x="{cx:.2f}" y="{cy:.2f}" '
+            f'transform="rotate(-90 {cx:.2f} {cy:.2f})" '
+            f'text-anchor="middle" dominant-baseline="central" '
+            f'font-family="Arial, sans-serif" font-weight="bold" '
+            f'font-size="{label_fs:.0f}" fill="{_hex(_HEADER_COLOR)}">'
+            f'{escape(rows[r].label)}</text>')
+        for c in range(n_cols):
+            slot_x = col_x[c]
+            panel = panels.get((r, c))
+            if panel is not None:
+                w, h, inner = panel
+                x_off = slot_x + (col_w[c] - w) / 2
+                py = y + pad
+                out.append(
+                    f'<svg x="{x_off:.2f}" y="{py:.2f}" width="{w:.2f}" '
+                    f'height="{h:.2f}" viewBox="0 0 {w:.2f} {h:.2f}">'
+                    f'{inner}</svg>')
+                out.append(
+                    f'<text x="{slot_x + col_w[c] / 2:.2f}" '
+                    f'y="{py + h + caption_fs + 2:.2f}" text-anchor="middle" '
+                    f'font-family="Arial, sans-serif" '
+                    f'font-size="{caption_fs:.0f}" '
+                    f'fill="{_hex(_CAPTION_COLOR)}">'
+                    f'{escape(captions[(r, c)])}</text>')
+            else:
+                bx, by = slot_x + pad, y + pad
+                bw, bh = col_w[c] - 2 * pad, row_h[r] - 2 * pad
+                out.append(
+                    f'<rect x="{bx:.2f}" y="{by:.2f}" width="{bw:.2f}" '
+                    f'height="{bh:.2f}" fill="{_hex(_PLACEHOLDER_BG)}" '
+                    f'stroke="{_hex(_GRID_LINE)}"/>')
+                out.append(
+                    f'<text x="{slot_x + col_w[c] / 2:.2f}" '
+                    f'y="{y + row_h[r] / 2:.2f}" text-anchor="middle" '
+                    f'dominant-baseline="central" '
+                    f'font-family="Arial, sans-serif" '
+                    f'font-size="{caption_fs:.0f}" '
+                    f'fill="{_hex(_PLACEHOLDER_FG)}">'
+                    f'{escape(placeholders[(r, c)])}</text>')
+        if r != n_rows - 1:  # member separator under the row
+            yy = y + row_h[r]
+            out.append(
+                f'<line x1="0" y1="{yy:.2f}" x2="{total_w:.2f}" y2="{yy:.2f}" '
+                f'stroke="{_hex(_MEMBER_LINE)}" '
+                f'stroke-width="{_MEMBER_LINE_W}"/>')
+        y += row_h[r]
+
+    if two_d:  # vertical member separators between columns
+        for c in range(n_cols - 1):
+            xx = col_x[c + 1]
+            out.append(
+                f'<line x1="{xx:.2f}" y1="{y0:.2f}" x2="{xx:.2f}" '
+                f'y2="{total_h:.2f}" stroke="{_hex(_MEMBER_LINE)}" '
+                f'stroke-width="{_MEMBER_LINE_W}"/>')
+
+    out.append("</svg>")
+    return "\n".join(out)

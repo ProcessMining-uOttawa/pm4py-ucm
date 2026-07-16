@@ -465,8 +465,9 @@ class TestReport:
         family = _discover(_make_log())
         html = family_report_html(family, images=True)
         data = _report_data(html)
+        # Embedded model images are vector SVG (crisp, selectable text).
         assert all(
-            c["image"].startswith("data:image/png;base64,")
+            c["image"].startswith("data:image/svg+xml;base64,")
             for c in data["cells"]
         )
 
