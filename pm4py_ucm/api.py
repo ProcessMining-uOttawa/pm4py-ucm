@@ -17,6 +17,7 @@ one-word change in user code::
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
 from .objects.ucm.obj import UCM
@@ -602,10 +603,21 @@ def save_vis_ucm_family(
     toward 96 dpi only when the projected composite would exceed
     ``parameters["max_total_pixels"]`` (default 150M). Pass
     ``parameters={"dpi": …}`` to pin an exact resolution instead.
-    See :func:`pm4py_ucm.visualization.ucm.family_grid.render`."""
+
+    An **``.svg``** target (by extension or ``parameters["format"]``)
+    writes the same rows × columns matrix as a single vector document
+    instead — crisp at any zoom, its text selectable, and needing none of
+    the DPI machinery. See
+    :func:`pm4py_ucm.visualization.ucm.family_grid.render`."""
     from .visualization.ucm import family_grid as _grid
     params = dict(parameters or {})
     params.setdefault("style", style)
+    fmt = (params.get("format")
+           or Path(file_path).suffix.lstrip(".")).lower()
+    if fmt == "svg":
+        Path(file_path).write_text(
+            _grid.render_svg(family, style), encoding="utf-8")
+        return file_path
     return _grid.render(family, file_path, parameters=params)
 
 
@@ -702,12 +714,31 @@ def save_vis_ucm(
 
     See :func:`view_ucm` for the ``style`` and ``map`` parameters. When
     the UCM has multiple maps and ``map`` is left as ``None``, all maps
-    are composed vertically into a single PNG (root map at the top,
+    are composed vertically into a single image (root map at the top,
     plug-in maps below in pre-order); each panel carries a title strip
     with the map's name, and adjacent panels are separated by a thin
-    horizontal rule."""
+    horizontal rule.
+
+    The output format is taken from ``file_path``'s extension (or an
+    explicit ``parameters["format"]``). An **``.svg``** target produces a
+    single self-contained vector document — crisp at any zoom, its text
+    selectable — in which each stub is hyperlinked to its plug-in map's
+    panel (a single plug-in links directly; a dynamic multi-binding stub
+    carries a small picker), so a decomposed model is navigable when the
+    SVG is opened in a browser or the web viewer. Any other extension
+    (``.png``, ``.pdf`` …) goes through graphviz as before."""
     params = dict(parameters or {})
     params.setdefault("style", style)
+    fmt = (params.get("format")
+           or Path(file_path).suffix.lstrip(".")).lower()
+    if fmt == "svg" and map is None:
+        # One navigable vector document for the whole model (single map or
+        # a stacked, stub-linked decomposition) — the same renderer the
+        # web app and the HTML reports use.
+        from .visualization.ucm import svg as _svg
+        Path(file_path).write_text(
+            _svg.model_to_svg(ucm, style), encoding="utf-8")
+        return file_path
     if len(ucm.maps) > 1 and map is None:
         from .visualization.ucm import stacked as _stacked
         return _stacked.render(ucm, file_path, parameters=params)

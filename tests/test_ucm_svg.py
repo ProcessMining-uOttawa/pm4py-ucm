@@ -8,12 +8,14 @@ without graphviz on PATH."""
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 from xml.dom import minidom
 
 import pytest
 
 pd = pytest.importorskip("pandas")
 
+import pm4py_ucm
 from pm4py_ucm import UCM, convert_to_ucm
 from pm4py_ucm.visualization.ucm import svg as _svg
 
@@ -175,6 +177,37 @@ class TestDynamicStubPicker:
                 assert href.startswith("#pm-map-2-")
             if href.startswith("#pm-stub-menu-"):
                 assert href.startswith("#pm-stub-menu-2-")
+
+
+class TestPublicSvgExport:
+    """``save_vis_ucm`` / ``save_vis_ucm_family`` write a valid SVG when
+    the target has an ``.svg`` extension."""
+
+    def test_save_vis_ucm_single_map_svg(self, tmp_path):
+        out = tmp_path / "m.svg"
+        ret = pm4py_ucm.save_vis_ucm(_single_map_ucm(), str(out))
+        assert Path(ret) == out and out.exists()
+        _wellformed(out.read_text(encoding="utf-8"))
+
+    def test_save_vis_ucm_decomposed_svg_is_navigable(self, tmp_path):
+        out = tmp_path / "d.svg"
+        pm4py_ucm.save_vis_ucm(_decomposed_ucm(), str(out))
+        doc = _wellformed(out.read_text(encoding="utf-8"))
+        # Stacked + stub-linked (the navigable form, not a flat graphviz svg).
+        assert [a.getAttribute("xlink:href")
+                for a in doc.getElementsByTagName("a")]
+
+    def test_save_vis_ucm_format_param(self, tmp_path):
+        # Explicit format overrides a non-.svg extension.
+        out = tmp_path / "model.out"
+        pm4py_ucm.save_vis_ucm(_single_map_ucm(), str(out),
+                               parameters={"format": "svg"})
+        _wellformed(out.read_text(encoding="utf-8"))
+
+    def test_save_vis_ucm_family_svg(self, tmp_path):
+        out = tmp_path / "grid.svg"
+        pm4py_ucm.save_vis_ucm_family(_family(["kind"]), str(out))
+        _wellformed(out.read_text(encoding="utf-8"))
 
 
 class TestFamilyGridSvg:
