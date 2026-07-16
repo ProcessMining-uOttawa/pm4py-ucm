@@ -714,14 +714,25 @@ export function roundHalfAway(value, digits = 0) {
 
 const withSeparators = (v) => roundHalfAway(v).toLocaleString("en-US");
 
-export function fmt(value, unit) {
-  if (value == null || !Number.isFinite(value)) return "—";
-  if (unit === "%") return roundHalfAway(value, 1).toFixed(1) + "%";
-  if (unit === "d") {
-    return Math.abs(value) >= 100
+// A duration given in DAYS, shown in the largest legible unit (days →
+// hours → minutes → seconds) so a short duration reads "2.4 h" or "43 m",
+// not "0.0 d". Mirrors fmt_days in engine.py.
+export function fmtDays(value) {
+  const a = Math.abs(value);
+  if (a >= 1) {
+    return a >= 100
       ? `${withSeparators(value)} d`
       : `${roundHalfAway(value, 1).toFixed(1)} d`;
   }
+  if (a * 24 >= 1) return `${roundHalfAway(value * 24, 1).toFixed(1)} h`;
+  if (a * 1440 >= 1) return `${roundHalfAway(value * 1440, 1).toFixed(1)} m`;
+  return `${withSeparators(value * 86400)} s`;
+}
+
+export function fmt(value, unit) {
+  if (value == null || !Number.isFinite(value)) return "—";
+  if (unit === "%") return roundHalfAway(value, 1).toFixed(1) + "%";
+  if (unit === "d") return fmtDays(value);
   return withSeparators(value);
 }
 

@@ -859,21 +859,38 @@ def round_half_away(value: float, digits: int = 0) -> float:
     return math.copysign(math.floor(abs(value) * m + 0.5) / m, value)
 
 
+def fmt_days(value: float) -> str:
+    """A duration given in DAYS, shown in the largest unit that keeps it
+    legible: days when ≥ 1 d, else hours, else minutes, else seconds — so
+    a short duration reads "2.4 h" or "43 m", not "0.0 d". Days lose their
+    decimal past 100 (nobody reads "142.3 d"); seconds are whole (the
+    contract stores whole seconds). Mirrored by ``fmtDays`` in
+    ``dash-engine.js`` — see :func:`round_half_away`."""
+    a = abs(value)
+    if a >= 1.0:
+        if a >= 100:
+            return f"{int(round_half_away(value)):,} d"
+        return f"{round_half_away(value, 1):.1f} d"
+    if a * 24.0 >= 1.0:
+        return f"{round_half_away(value * 24.0, 1):.1f} h"
+    if a * 1440.0 >= 1.0:
+        return f"{round_half_away(value * 1440.0, 1):.1f} m"
+    return f"{int(round_half_away(value * 86400.0)):,} s"
+
+
 def fmt(value: Optional[float], unit: str) -> str:
     """Format a value the way the design's KPI and table cells read.
 
-    Durations lose their decimal past 100 days (nobody reads "142.3 d"),
-    percentages keep one, counts get thousands separators. Mirrored by
-    ``fmt`` in ``dash-engine.js`` — see :func:`round_half_away`.
+    Durations adapt their unit (see :func:`fmt_days`), percentages keep
+    one decimal, counts get thousands separators. Mirrored by ``fmt`` in
+    ``dash-engine.js`` — see :func:`round_half_away`.
     """
     if value is None:
         return "—"
     if unit == "%":
         return f"{round_half_away(value, 1):.1f}%"
     if unit == "d":
-        if abs(value) >= 100:
-            return f"{int(round_half_away(value)):,} d"
-        return f"{round_half_away(value, 1):.1f} d"
+        return fmt_days(value)
     return f"{int(round_half_away(value)):,}"
 
 

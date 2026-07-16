@@ -38,6 +38,7 @@ from pm4py_ucm.algo.dashboards import (
     worst_state,
 )
 from pm4py_ucm.algo.dashboards.engine import (
+    fmt_days,
     percentile,
     round_half_away,
     target_goal_value,
@@ -1321,6 +1322,39 @@ class TestTheme:
         host."""
         ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
         assert "if (window.parent === window) return null" in ui
+
+
+class TestDurationFormat:
+    """Time values (in days) adapt their unit so short durations read in
+    hours / minutes / seconds, not "0.0 d"."""
+
+    def test_adaptive_units(self):
+        assert fmt_days(0.0) == "0 s"
+        assert fmt_days(0.1) == "2.4 h"
+        assert fmt_days(0.03) == "43.2 m"
+        assert fmt_days(0.001) == "1.4 m"
+        assert fmt_days(0.0001) == "9 s"
+        assert fmt_days(1.0) == "1.0 d"      # ≥ 1 day keeps days
+        assert fmt_days(5.25) == "5.3 d"
+        assert fmt_days(142.0) == "142 d"    # ≥ 100 loses the decimal
+
+    def test_js_parity(self, tmp_path):
+        node = shutil.which("node")
+        if node is None:
+            pytest.skip("node is not available")
+        vals = [0.0, 0.1, 0.03, 0.001, 0.0001, 1.0, 5.25, 142.0, 2.4,
+                0.5, 99.94, 100.0, 0.04166667]
+        runner = tmp_path / "fmt.mjs"
+        runner.write_text(
+            f"import {{ fmtDays }} from "
+            f"{json.dumps(ENGINE_JS.resolve().as_uri())};\n"
+            f"const vals = {json.dumps(vals)};\n"
+            "process.stdout.write(JSON.stringify(vals.map(fmtDays)));\n",
+            encoding="utf8")
+        proc = subprocess.run([node, str(runner)], capture_output=True,
+                              text=True, encoding="utf8", timeout=60)
+        assert proc.returncode == 0, proc.stderr
+        assert json.loads(proc.stdout) == [fmt_days(v) for v in vals]
 
 
 # ---------------------------------------------------------------------------
