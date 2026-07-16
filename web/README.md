@@ -1,10 +1,14 @@
 # pm4py-ucm web front-end
 
 A [Streamlit](https://streamlit.io) front-end for the `pm4py-ucm` package.
-Upload an event log (XES or CSV), tune the inductive miner / decomposition /
-performer settings interactively, and download the resulting `.jucm` model
-plus a high-quality PNG rendering in either UCM (Z.151 / jUCMNav) or BPMN
-notation.
+Upload an event log (XES or CSV) and, from a left-rail workspace, mine and
+render **UCM models** (UCM or BPMN notation, PNG and navigable **SVG**),
+synthesize executable **scenarios**, mine attribute **model families**,
+**compare** family members, and build interactive **dashboards** —
+downloading `.jucm`, CSV, SVG/PNG, and self-contained HTML at every step.
+
+Since v0.6.0 the deployed app is **V4** (the workspace shell + Dashboards),
+a strict superset of the earlier four-tab V3 app.
 
 ## Run locally
 
@@ -19,7 +23,8 @@ python -m venv .venv
 # source .venv/bin/activate       # macOS/Linux
 
 pip install -r web/requirements.txt
-streamlit run web/streamlit_app_v3.py
+streamlit run web/streamlit_app_v4.py     # V4 — the deployed app
+# streamlit run web/streamlit_app_v3.py   # V3 — the earlier four-tab app
 ```
 
 Streamlit opens `http://localhost:8501`.
@@ -30,60 +35,55 @@ The web-specific deps (`streamlit`, `pm4py`, `scikit-learn`) live in
 data-driven scenario condition mining (the option greys out when it is
 missing).
 
-## The V3 app
+## The app and its views
 
-**`streamlit_app_v3.py`** — served at
-https://pm4py-ucm.streamlit.app/ (via the `streamlit_app.py` shim,
-that deployment's main file). Four tabs:
+**`streamlit_app_v4.py`** (**V4**) is served at
+https://pm4py-ucm.streamlit.app/ via the `streamlit_app.py` shim (that
+deployment's main file). A left rail switches between five views over the
+loaded log:
 
-- **Model** — mine a UCM from a log, preview in UCM or BPMN notation,
-  open the image in its own browser tab (button or double-click),
-  download PNG + `.jucm`. Decomposition is honoured across all maps.
+- **Model** — mine a UCM, preview it in UCM or BPMN notation as a zoom /
+  pan **SVG** (click a stub to jump to its plug-in map), and download the
+  SVG, a raster PNG, or the `.jucm`. Decomposition is honoured across all
+  maps.
 
-  ![Model tab](PM4Py-UCM-Model.png)
+  ![Model view](PM4Py-UCM-Model.png)
 
-- **Scenarios** — concurrency-aware variant clustering + one
-  executable jUCMNav `ScenarioDef` per variant, with downloads for the
-  `.jucm` (carrying the `<scenarioGroups>`), `variants.csv`,
+- **Scenarios** — concurrency-aware variant clustering + one executable
+  jUCMNav `ScenarioDef` per variant, with downloads for the `.jucm`
+  (carrying the `<scenarioGroups>`), `variants.csv`,
   `case_variant_map.csv`, and (data-driven mode only)
   `condition_mining.csv`. Both variant-driven and data-driven OR-fork
   encodings are exposed.
 
-  ![Scenarios tab](PM4Py-UCM-Scenarios.png)
+  ![Scenarios view](PM4Py-UCM-Scenarios.png)
 
-- **Family** — partition the log by 1–2 case attributes, mine one
-  model per combination, download the per-cell zip / combined `.jucm`
-  / dynamic-stub umbrella `.jucm` / grid PNG / interactive HTML
+- **Family** — partition the log by 1–2 case attributes, mine one model
+  per combination, and download the per-cell zip / combined `.jucm` /
+  dynamic-stub umbrella `.jucm` / grid (SVG or PNG) / interactive HTML
   statistics report.
 
-  ![Family tab](PM4Py-UCM-Family.png)
+  ![Family view](PM4Py-UCM-Family.png)
 
-- **Compare** — rank the family members on heat-mapped statistics
-  tables — including total case durations — and compare any two side
-  by side: models, per-activity/edge deltas, aligned OR-fork branch
-  shares.
+- **Compare** — rank the family members on heat-mapped statistics tables
+  (including total case durations) and compare any two side by side:
+  models (SVG), per-activity/edge deltas, aligned OR-fork branch shares.
 
-  ![Compare tab](PM4Py-UCM-Compare.png)
+  ![Compare view](PM4Py-UCM-Compare.png)
 
-**`streamlit_app_v2.py` is the FROZEN V2 app** (model + scenarios,
-the state before the model-family features) — served at
-https://pm4py-ucm-scenarios.streamlit.app/ for a paper under review;
-do not modernise it. **V1** (the model-only app that
-`streamlit_app.py` used to contain) was retired at v0.5.1 and lives
-in git history; its path is now a shim that runs V3.
+- **Dashboards** — build widgets from a metric catalog (KPIs, segmented
+  bars and tables), narrow them with filters, set targets and a
+  scorecard, write custom metrics in the **ƒ formula language**, and
+  export a self-contained interactive HTML dashboard (or a multi-section
+  session report).
 
-## The V4 app (preview)
+  ![Dashboards view](PM4Py-UCM-Dashboard.png)
 
-**`streamlit_app_v4.py`** reworks the same capability behind a left-rail
-workspace and adds a fifth view — **Dashboards**: build widgets from a
-metric catalog over your log (KPIs, segmented bars and tables), narrow
-them with filters, set targets and a scorecard, write custom metrics in a
-**ƒ formula language**, and export the whole thing as one self-contained
-interactive HTML dashboard (or a multi-section session report). Not yet
-the deployed default; run it locally with
-`streamlit run web/streamlit_app_v4.py`.
-
-![Dashboards view](PM4Py-UCM-Dashboard.png)
+The earlier four-tab **V3** app (`streamlit_app_v3.py`) is a strict subset
+of V4 and stays in git history. **`streamlit_app_v2.py` is the FROZEN V2
+app** (model + scenarios) — served at
+https://pm4py-ucm-scenarios.streamlit.app/ for a paper under review; do
+not modernise it. **V1** (model-only) was retired at v0.5.1.
 
 ## Using the app
 
@@ -184,30 +184,80 @@ section for what each key does.
   raise this if you want only majority-owned activities to be bound.
   Disabled when performer mining is off.
 
-### 4 · Results
+The sidebar settings above (notation, miner, decomposition, performers)
+apply to every view. Pick a view in the left rail:
 
-Once mining completes, the page shows:
+### 4 · Model
 
-- A **metrics row** — file name, notation, decomposition mode, number of
-  maps, number of nodes.
-- The **rendered diagram** as an inline `<img>` element. The browser
-  scales the preview to fit the column width; right-click → **Open image
-  in new tab** to see the file at native resolution, or scroll-zoom the
-  page to magnify in place.
-- Two **download buttons**:
-  - **Download PNG** — the rendered image at full resolution.
-  - **Download .jucm** — the model in jUCMNav's native XMI format,
-    ready to open in [jUCMNav](https://github.com/JUCMNAV/projetseg-update).
+Once mining completes, the **Model** view shows a metrics row (file name,
+notation, decomposition mode, maps, nodes) and the diagram as a **vector
+SVG** in a zoom / pan viewer — scroll to zoom, drag to pan, and for a
+decomposed model **click a stub** to jump to its plug-in map (a dynamic
+stub opens a picker of its preconditioned plug-ins). Downloads:
+
+- **Download SVG** — the vector render (crisp at any zoom, text
+  selectable).
+- **Prepare PNG…** → **Download PNG** — a raster render, generated on
+  demand.
+- **Download .jucm** — the model in jUCMNav's native XMI format, ready to
+  open in [jUCMNav](https://github.com/JUCMNAV/jUCMNavPlus).
+- **Pin to dashboard** — adds the live model as a widget in the Dashboards
+  view.
+
+### 5 · Scenarios
+
+Choose a **condition strategy** — *variant-driven* (lossless; every OR-fork
+guarded by `variant_id == v_i`) or *data-driven* (a decision tree per
+outside-loop fork turns case attributes into a business-readable rule;
+needs `scikit-learn`) — and a scenario-group name. The view reports
+headline metrics (variant count, sequence variants, compression, fitness,
+and per-fork condition-mining accuracy in data-driven mode) and offers the
+`.jucm` (with the synthesized `<scenarioGroups>`), `variants.csv`,
+`case_variant_map.csv`, and (data-driven) `condition_mining.csv`. Works on
+flat and decomposed models alike.
+
+### 6 · Family
+
+Pick **1–2 case attributes**; a **coverage heatmap** previews the cell
+sizes *before* mining, with per-value filters, a `min_cases` floor, and
+quantile `bins` for numeric attributes. Mine to get one model per
+combination, shown as a **2-D SVG grid** (rows × columns). Downloads: the
+per-cell `.zip`, the combined `.jucm` (shared definitions), the dynamic-
+stub **umbrella** `.jucm` (one plug-in per variation point, with
+executable strategies), the grid **SVG or PNG**, and the self-contained
+**interactive HTML statistics report**.
+
+### 7 · Compare
+
+Rank the family members on a heat-mapped statistics table (per-cell cases,
+durations incl. **total**, events/case, variants, rework), then pick any
+two and see them **side by side**: SVG models, delta cards, per-activity
+and per-edge Δ tables, and aligned OR-fork branch shares.
+
+### 8 · Dashboards
+
+An embedded, self-contained dashboard island over the log's per-case
+**fact table**. Add **widgets** from the metric catalog (KPIs, one-axis
+bars, two-axis tables), choose an **aggregation**, add per-widget or
+dashboard-level **filters** and **segmentation** axes, set **targets** and
+watch the **scorecard**, and write custom metrics in the **ƒ formula
+language** (`duration() where attr("Claim_Value") > 500`, …). **Export**
+the whole dashboard as one self-contained interactive HTML file, or a
+multi-section **session report** (scorecard + dashboards + the model as
+SVG + a Family section). The exact metric definitions, the ƒ grammar, and
+the engine's rounding / weighting decisions are documented in
+[`docs/dashboards.md`](../docs/dashboards.md); a runnable walkthrough is
+[`demo/dashboards_tutorial.ipynb`](../demo/dashboards_tutorial.ipynb).
 
 ## Deploy to Streamlit Community Cloud
 
 1. Push this repo to GitHub.
 2. At <https://share.streamlit.io>, "New app" → pick the repo and branch.
-3. Set **Main file path** to `web/streamlit_app_v3.py` for the latest
+3. Set **Main file path** to `web/streamlit_app_v4.py` for the latest
    app (or `web/streamlit_app_v2.py` for the frozen V2 scenarios
    app). Streamlit Cloud picks up `web/requirements.txt`
    automatically (sits next to the main file). The existing primary
-   deployment points at `web/streamlit_app.py` — a shim that runs V3,
+   deployment points at `web/streamlit_app.py` — a shim that runs V4,
    so it keeps working without a settings change.
 4. **`packages.txt` (apt packages) MUST be at the repo root** — Streamlit
    Cloud's apt-install phase only reads from the root, not from the main
