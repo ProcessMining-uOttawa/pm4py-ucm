@@ -1,0 +1,712 @@
+/* Dashboard view — the garnet/paper design system.
+ *
+ * Loaded by both the Streamlit island and the self-contained HTML
+ * export, so every token lives here once rather than being duplicated
+ * into the export's template.
+ *
+ * Light values come from the design handoff's token table; do not tune
+ * them piecemeal. The garnet is uOttawa's.
+ *
+ * DARK MODE
+ * ---------
+ * The handoff specifies only a light palette, so the dark one is derived
+ * rather than invented: paper becomes ink, the surfaces keep their same
+ * ordering (rail behind card behind desk), and the garnet lifts to
+ * `--garnet` = #ff6b81 for text and borders. It has to lift: #8f001a on
+ * a dark surface is 1.6:1, unreadable. The garnet stays #8f001a wherever
+ * it is a *fill* behind white text, which works on either theme.
+ *
+ * Every colour is a token, and nothing in this file hard-codes one
+ * outside the two blocks below — that is what makes a theme switch a
+ * change of ~25 values rather than a rewrite.
+ *
+ * The theme resolves in this order:
+ *   1. `[data-theme="light"|"dark"]` on the root — the host telling us,
+ *      and it must win in BOTH directions (a Streamlit app forced to
+ *      dark on a light OS, or vice versa);
+ *   2. `prefers-color-scheme` — the standalone export, which has no host
+ *      to ask.
+ */
+
+.pm-dash {
+  /* -- surfaces ------------------------------------------------------ */
+  --paper: #faf9f7;
+  --rail: #f1efeb;
+  --desk: #e9e6e0;
+  --card: #ffffff;
+
+  /* -- ink ----------------------------------------------------------- */
+  --ink: #1c1b1a;
+  --ink-2: #57534b;
+  --muted: #8a857c;
+  --faint: #a09b91;
+
+  /* -- lines --------------------------------------------------------- */
+  --border: #e2dfd8;
+  --border-ctl: #d4d0c7;
+
+  /* -- accent --------------------------------------------------------
+   * Garnet does two different jobs and they need different values in
+   * dark mode:
+   *   --garnet       accent — text, borders, outline buttons. Must lift
+   *                  on a dark surface (#8f001a there is 1.6:1).
+   *   --garnet-fill  a solid fill behind white text. Stays uOttawa's
+   *                  #8f001a on both themes: it is a background, so the
+   *                  page around it does not affect its contrast.
+   */
+  --garnet: #8f001a;
+  --garnet-hover: #6e0014;
+  --garnet-tint: #f3e6e8;
+  --garnet-fill: #8f001a;
+  --garnet-fill-hover: #6e0014;
+  --on-garnet: #ffffff;
+
+  /* -- inverted surfaces (toast) — flip with the theme, not with --ink */
+  --invert-bg: #1c1b1a;
+  --invert-fg: #faf9f7;
+
+  /* -- table header / placeholder stripes ---------------------------- */
+  --head-bg: #faf9f7;
+  --stripe-a: #f3f1ec;
+  --stripe-b: #faf9f6;
+
+  /* -- target states ------------------------------------------------- */
+  --met-bg: #e6f4ec;   --met-fg: #166b42;
+  --risk-bg: #fdf3d7;  --risk-fg: #8a6d00;  --warn-bar: #e2b93b;
+  --missed-bg: #fbeaec; --missed-fg: #8f001a;
+  --positive: #21a366;
+
+  /* -- type ---------------------------------------------------------- */
+  --f-head: Georgia, "Times New Roman", serif;
+  --f-ui: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* -- geometry ------------------------------------------------------ */
+  --gap: 12px;
+  --row-h: 118px;
+
+  font-family: var(--f-ui);
+  color: var(--ink);
+  background: var(--paper);
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* -- dark -------------------------------------------------------------
+ * Declared twice on purpose: the media query serves the standalone
+ * export (no host to ask), the attribute selector serves an embedded
+ * island whose host knows its own theme. The attribute comes second so
+ * an explicit light request beats a dark OS.
+ */
+@media (prefers-color-scheme: dark) {
+  .pm-dash:not([data-theme="light"]) {
+    --paper: #14161b;
+    --rail: #1b1e24;
+    --desk: #2a2f39;
+    --card: #1f232b;
+
+    --ink: #f0eee9;
+    --ink-2: #c9c4bb;
+    --muted: #a5a099;
+    --faint: #9a948c;
+
+    --border: #333842;
+    --border-ctl: #454b57;
+
+    --garnet: #ff6b81;
+    --garnet-hover: #ff8a9c;
+    --garnet-tint: #3a1f26;
+    /* A fill keeps its own contrast, so the real garnet stays. */
+    --garnet-fill: #8f001a;
+    --garnet-fill-hover: #a8102c;
+    --on-garnet: #ffffff;
+
+    /* Inverted, so a toast is still the opposite of the page. */
+    --invert-bg: #f0eee9;
+    --invert-fg: #14161b;
+
+    --head-bg: #191c22;
+    --stripe-a: #1b1e24;
+    --stripe-b: #202430;
+
+    --met-bg: #14301f;   --met-fg: #6ee7a0;
+    --risk-bg: #33290f;  --risk-fg: #e2b93b;  --warn-bar: #e2b93b;
+    --missed-bg: #3a1a20; --missed-fg: #ff8095;
+    --positive: #35d07f;
+  }
+}
+
+.pm-dash[data-theme="dark"] {
+  --paper: #14161b;
+  --rail: #1b1e24;
+  --desk: #2a2f39;
+  --card: #1f232b;
+
+  --ink: #f0eee9;
+  --ink-2: #c9c4bb;
+  --muted: #a5a099;
+  --faint: #9a948c;
+
+  --border: #333842;
+  --border-ctl: #454b57;
+
+  --garnet: #ff6b81;
+  --garnet-hover: #ff8a9c;
+  --garnet-tint: #3a1f26;
+  --garnet-fill: #8f001a;
+  --garnet-fill-hover: #a8102c;
+  --on-garnet: #ffffff;
+
+  --invert-bg: #f0eee9;
+  --invert-fg: #14161b;
+
+  --head-bg: #191c22;
+  --stripe-a: #1b1e24;
+  --stripe-b: #202430;
+
+  --met-bg: #14301f;   --met-fg: #6ee7a0;
+  --risk-bg: #33290f;  --risk-fg: #e2b93b;  --warn-bar: #e2b93b;
+  --missed-bg: #3a1a20; --missed-fg: #ff8095;
+  --positive: #35d07f;
+}
+
+.pm-dash *, .pm-dash *::before, .pm-dash *::after { box-sizing: border-box; }
+
+/* =====================================================================
+   Header — name, filters, live case count, add widget
+   ===================================================================== */
+
+.pm-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--paper);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.pm-title {
+  font-family: var(--f-head);
+  font-weight: 600;
+  font-size: 14px;
+  margin-right: 4px;
+}
+
+.pm-count {
+  font-family: var(--f-mono);
+  font-size: 10.5px;
+  color: var(--faint);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+/* A sampled table makes every number an estimate — say so, do not let
+   the reader assume the dashboard covers the whole log. */
+.pm-sampled {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  color: var(--risk-fg);
+  background: var(--risk-bg);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+.pm-select, .pm-input {
+  font-family: var(--f-ui);
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--border-ctl);
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+.pm-input:focus, .pm-select:focus {
+  outline: none;
+  border-color: var(--garnet);
+}
+
+/* Active filters read as removable chips, mono because they are data. */
+.pm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--f-mono);
+  font-size: 11px;
+  background: var(--card);
+  border: 1px solid var(--border-ctl);
+  border-radius: 14px;
+  padding: 4px 10px;
+}
+.pm-chip button {
+  border: 0; background: none; cursor: pointer;
+  color: var(--faint); font-size: 12px; line-height: 1; padding: 0;
+}
+.pm-chip button:hover { color: var(--garnet); }
+
+.pm-btn {
+  font-family: var(--f-ui);
+  font-weight: 600;
+  font-size: 12px;
+  border-radius: 7px;
+  padding: 6px 12px;
+  cursor: pointer;
+  border: 1px solid var(--garnet);
+  background: var(--card);
+  color: var(--garnet);
+}
+.pm-btn:hover { background: var(--garnet-tint); }
+.pm-btn--solid {
+  background: var(--garnet-fill); color: var(--on-garnet);
+  border-color: var(--garnet-fill);
+}
+.pm-btn--solid:hover {
+  background: var(--garnet-fill-hover); border-color: var(--garnet-fill-hover);
+}
+.pm-btn--ghost {
+  border-color: var(--border-ctl);
+  color: var(--ink-2);
+}
+.pm-btn--ghost:hover { background: var(--desk); }
+.pm-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+/* =====================================================================
+   Targets strip — only rendered when a widget carries a target
+   ===================================================================== */
+
+.pm-targets {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+.pm-targets__label {
+  font-weight: 600;
+  font-size: 10px;
+  letter-spacing: .08em;
+  color: var(--faint);
+  text-transform: uppercase;
+}
+.pm-pill {
+  border-radius: 13px;
+  padding: 2px 9px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.pm-pill--met { background: var(--met-bg); color: var(--met-fg); }
+.pm-pill--risk { background: var(--risk-bg); color: var(--risk-fg); }
+.pm-pill--missed { background: var(--missed-bg); color: var(--missed-fg); }
+.pm-targets__worst { color: var(--muted); font-size: 11px; }
+.pm-link {
+  margin-left: auto;
+  color: var(--garnet);
+  font-weight: 600;
+  font-size: 11px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.pm-link:hover { text-decoration: underline; }
+
+/* =====================================================================
+   Widget grid
+   ===================================================================== */
+
+.pm-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-rows: var(--row-h);
+  grid-auto-flow: dense;
+  gap: var(--gap);
+  padding: var(--gap) 16px 24px;
+}
+
+/* Spans by visualisation: a KPI is a tile, a chart needs room to be
+   read, a model is the width of the grid. */
+.pm-w--kpi { grid-column: span 1; grid-row: span 1; }
+.pm-w--bar, .pm-w--line, .pm-w--table { grid-column: span 2; grid-row: span 2; }
+.pm-w--model { grid-column: span 4; grid-row: span 2; }
+/* A table wider than five data columns needs the full grid to stay
+   readable rather than scrolling in a 2-column box. */
+.pm-w--table.pm-w--wide { grid-column: span 4; }
+
+@media (max-width: 900px) {
+  .pm-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pm-w--model, .pm-w--table.pm-w--wide { grid-column: span 2; }
+}
+
+.pm-w {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.pm-w__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.pm-w__title {
+  font-weight: 600;
+  font-size: 11.5px;
+  line-height: 1.3;
+  /* Two lines, then ellipsis — a long title must not push the value out
+     of a 118px tile. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-width: 0;
+  flex: 1;
+}
+.pm-w__badge {
+  font-weight: 600;
+  font-size: 9px;
+  border-radius: 13px;
+  padding: 2px 6px;
+  white-space: nowrap;
+  letter-spacing: .02em;
+}
+.pm-w__badge--met { background: var(--met-bg); color: var(--met-fg); }
+.pm-w__badge--risk { background: var(--risk-bg); color: var(--risk-fg); }
+.pm-w__badge--missed { background: var(--missed-bg); color: var(--missed-fg); }
+
+.pm-w__tools { display: flex; align-items: center; gap: 4px; }
+.pm-w__tool {
+  border: 0; background: none; cursor: pointer;
+  color: var(--faint); font-size: 11px; padding: 1px 3px;
+  font-family: var(--f-mono);
+  border-radius: 4px;
+}
+.pm-w__tool:hover { color: var(--garnet); background: var(--garnet-tint); }
+
+.pm-w__body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+/* -- KPI ------------------------------------------------------------- */
+
+.pm-kpi__value {
+  font-family: var(--f-head);
+  font-weight: 700;
+  font-size: 25px;
+  line-height: 1.1;
+  margin-top: auto;
+}
+.pm-kpi__sub {
+  font-family: var(--f-mono);
+  font-size: 9.5px;
+  color: var(--faint);
+  margin-top: 4px;
+}
+
+/* Progress toward an aggregate target. */
+.pm-kpi__bar {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--desk);
+  overflow: hidden;
+  margin-top: 6px;
+}
+.pm-kpi__bar > i { display: block; height: 100%; }
+
+/* met | warn | breach proportions, for per-case target mode. */
+.pm-kpi__dist {
+  display: flex;
+  height: 5px;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 6px;
+  background: var(--desk);
+}
+.pm-kpi__dist > i { display: block; height: 100%; }
+.pm-kpi__dist > i.met { background: var(--positive); }
+.pm-kpi__dist > i.risk { background: var(--warn-bar); }
+.pm-kpi__dist > i.missed { background: var(--garnet); }
+
+/* -- bar / series ---------------------------------------------------- */
+
+.pm-bars {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  min-height: 0;
+  padding-top: 4px;
+}
+.pm-bars > i {
+  flex: 1;
+  min-width: 2px;
+  border-radius: 2px 2px 0 0;
+  display: block;
+  cursor: default;
+}
+.pm-axis {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--f-mono);
+  font-size: 9.5px;
+  color: var(--faint);
+  margin-top: 6px;
+}
+.pm-axis__mid { color: var(--muted); }
+
+/* -- heatmap table --------------------------------------------------- */
+
+.pm-tablewrap { flex: 1; overflow: auto; min-height: 0; margin: 0 -2px; }
+.pm-table {
+  display: grid;
+  gap: 1px;
+  background: var(--border); /* the gutter is the border */
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  width: max-content;
+  min-width: 100%;
+}
+.pm-table__cell {
+  background: var(--card);
+  padding: 6px 9px;
+  font-family: var(--f-mono);
+  font-size: 10.5px;
+  white-space: nowrap;
+  min-width: 62px;
+}
+.pm-table__cell--head {
+  background: var(--head-bg);
+  font-family: var(--f-ui);
+  font-weight: 600;
+  color: var(--ink-2);
+  font-size: 10.5px;
+  cursor: pointer;
+  position: sticky;
+  top: 0;
+}
+.pm-table__cell--head:hover { color: var(--garnet); }
+.pm-table__cell--row {
+  background: var(--head-bg);
+  font-family: var(--f-ui);
+  font-weight: 600;
+  color: var(--ink-2);
+  position: sticky;
+  left: 0;
+}
+.pm-table__cell--data { cursor: pointer; }
+.pm-table__cell--data:hover { outline: 2px solid var(--garnet); outline-offset: -2px; }
+.pm-table__cell--empty { color: var(--faint); }
+
+/* -- model / placeholder --------------------------------------------- */
+
+.pm-model {
+  flex: 1;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* The striped placeholder stands in until the backend's PNG/SVG render
+     is wired in; it must never be mistaken for a real diagram. */
+  background: repeating-linear-gradient(45deg,
+    var(--stripe-a) 0 8px, var(--stripe-b) 8px 16px);
+  border: 1px solid var(--border);
+}
+.pm-model img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.pm-model__cap {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  color: var(--muted);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 8px;
+}
+
+.pm-empty {
+  grid-column: 1 / -1;
+  border: 1px dashed var(--border-ctl);
+  border-radius: 9px;
+  padding: 28px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+  background: var(--card);
+}
+
+/* =====================================================================
+   Composer modal
+   ===================================================================== */
+
+.pm-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(28, 27, 26, .4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 50;
+}
+.pm-modal {
+  background: var(--card);
+  border-radius: 12px;
+  box-shadow: 0 18px 50px rgba(28, 27, 26, .3);
+  width: min(1080px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.pm-modal__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 16px 18px 12px;
+}
+.pm-modal__title { font-family: var(--f-head); font-weight: 700; font-size: 17px; }
+.pm-modal__sub { font-family: var(--f-mono); font-size: 11px; color: var(--muted); }
+.pm-modal__close {
+  margin-left: auto; border: 0; background: none; cursor: pointer;
+  color: var(--faint); font-size: 16px; line-height: 1;
+}
+.pm-modal__close:hover { color: var(--garnet); }
+.pm-modal__body { padding: 0 18px; overflow: auto; flex: 1; }
+.pm-modal__foot {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding: 12px 18px 16px;
+  border-top: 1px solid var(--border);
+}
+
+/* Labelled rows: a 86px label column, controls to its right. */
+.pm-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+}
+.pm-row:last-of-type { border-bottom: 0; }
+.pm-row__label {
+  flex: 0 0 86px;
+  font-weight: 600;
+  font-size: 10.5px;
+  letter-spacing: .06em;
+  color: var(--faint);
+  text-transform: uppercase;
+}
+.pm-row__note {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  color: var(--faint);
+  flex-basis: 100%;
+  margin-left: 94px;
+}
+.pm-row__hint { font-family: var(--f-mono); font-size: 10px; color: var(--faint); }
+
+/* Metric picker: grouped, searchable, result-type tagged. */
+.pm-metric { flex: 1; min-width: 240px; }
+.pm-metric optgroup { font-style: normal; font-weight: 600; }
+.pm-metric option:disabled { color: var(--faint); }
+
+.pm-tag {
+  font-family: var(--f-mono);
+  font-size: 9.5px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.pm-toggle {
+  width: 34px; height: 18px; border-radius: 10px;
+  background: var(--border-ctl); border: 0; cursor: pointer;
+  position: relative; flex: 0 0 auto;
+}
+.pm-toggle::after {
+  content: ""; position: absolute; top: 2px; left: 2px;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: #fff; transition: left .12s;
+}
+.pm-toggle[aria-pressed="true"] { background: var(--garnet); }
+.pm-toggle[aria-pressed="true"]::after { left: 18px; }
+
+.pm-preview {
+  background: var(--paper);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 10px 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 64px;
+}
+.pm-preview__label {
+  font-weight: 600; font-size: 10px; letter-spacing: .06em;
+  color: var(--faint); text-transform: uppercase;
+}
+.pm-preview__value {
+  font-family: var(--f-head); font-weight: 700; font-size: 22px;
+}
+.pm-preview__note { font-size: 11.5px; color: var(--ink-2); }
+.pm-preview__err { font-size: 11.5px; color: var(--garnet); }
+
+/* =====================================================================
+   Scorecard
+   ===================================================================== */
+
+.pm-score { width: 100%; border-collapse: collapse; font-size: 12px; }
+.pm-score th {
+  text-align: left;
+  font-weight: 600; font-size: 10px; letter-spacing: .06em;
+  color: var(--faint); text-transform: uppercase;
+  padding: 6px 8px; border-bottom: 1px solid var(--border);
+}
+.pm-score td {
+  padding: 8px; border-bottom: 1px solid var(--border);
+  font-family: var(--f-mono); font-size: 11.5px;
+}
+.pm-score td:first-child { font-family: var(--f-ui); }
+.pm-score__ach {
+  height: 6px; border-radius: 3px; background: var(--desk);
+  overflow: hidden; min-width: 90px;
+}
+.pm-score__ach > i { display: block; height: 100%; }
+
+/* =====================================================================
+   Toast
+   ===================================================================== */
+
+/* Carries .pm-dash too (it lives on <body>, so it needs the tokens), and
+   the doubled class outranks .pm-dash's own paper/ink regardless of the
+   order rules end up in. */
+.pm-toast, .pm-dash.pm-toast {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--invert-bg);
+  color: var(--invert-fg);
+  font-size: 12px;
+  border-radius: 14px;
+  padding: 7px 14px;
+  z-index: 60;
+  opacity: 0;
+  transition: opacity .18s;
+  pointer-events: none;
+}
+.pm-toast--on { opacity: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .pm-toast, .pm-toggle::after { transition: none; }
+}

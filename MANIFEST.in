@@ -2,5 +2,8 @@ include README.md
 include LICENSE
 include pyproject.toml
 recursive-include pm4py_ucm *.py
+# The dashboard engine/renderer ship with the package: the HTML export is
+# built by pm4py_ucm and must be self-contained wherever it is installed.
+recursive-include pm4py_ucm/algo/dashboards/assets *.js *.css
 recursive-exclude tests *
 recursive-exclude examples *
