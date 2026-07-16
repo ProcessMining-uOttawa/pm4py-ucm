@@ -1527,6 +1527,14 @@ def _accept_log_bytes(name: str, payload: bytes) -> None:
 # Sidebar — miner config (decomposition affects the Model tab only; the
 # Scenarios tab always runs flat).
 with st.sidebar:
+    # Brand at the top of the rail — the app's name and the version that
+    # is actually running (see ``_version`` above). The design carries
+    # the identity here rather than a main-area title.
+    st.markdown(
+        f'<div class="pm-brand">PM4Py-UCM<span>{_html_escape_min(_version)}'
+        f'</span></div>',
+        unsafe_allow_html=True,
+    )
     st.header("Inductive miner")
     noise_threshold = st.slider(
         "Noise threshold", min_value=0.0, max_value=1.0,
@@ -1926,6 +1934,16 @@ st.markdown(
 
 # ===== Model view ==========================================================
 if _view == "Model":
+    st.subheader("Mine a Use Case Map model")
+    st.caption(
+        "Inductive-mine a Use Case Map (UCM) from the loaded event log, "
+        "preview it in UCM or BPMN notation (click a stub to navigate its "
+        "sub-maps), and download the vector SVG, a raster PNG, or the "
+        "jUCMNav `.jucm`. Synthesize executable scenarios and mine "
+        "attribute-partitioned model families in the other views. "
+        f"{_version_text} — by [Daniel Amyot](https://damyot.github.io/), "
+        "University of Ottawa, Canada."
+    )
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Activities", f"{mined['n_activities']:,}")
     m2.metric("Notation", notation)
