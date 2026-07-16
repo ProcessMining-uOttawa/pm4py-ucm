@@ -447,16 +447,57 @@ exactly that word, dumping the engine into the page body. The test that
 pins it counts script tags rather than searching for a substring, because
 the invariant is "the document is not truncated".
 
+### The session report
+
+The single-dashboard export above is one shape; the **session report** is
+the other — a multi-section document with a left table of contents, a
+reader filter bar that recomputes everything, a scorecard landing, the
+dashboard(s), and a process-model section with both notations as inline
+SVG (zoom with the wheel, pan by dragging, offline). One artifact serves
+both shapes: the page bootstrap boots a `Report` when `cfg.mode ===
+"report"` and a `Dashboard` otherwise.
+
+It is built client-side, like the export, so it carries the user's real
+widgets rather than the seed dashboard. The one thing the browser cannot
+produce is the model render, so Python embeds both notations as SVG in
+the page config (`model_svg`) for the report to lift; a multi-map
+(decomposed) model has no single SVG, so it falls back to the PNG the
+model widgets already use.
+
+Each dashboard section is drawn by the very same `Dashboard`, `headless`
+(no per-section header) and read-only, sharing the report's filters — so
+a widget looks identical in the app, the export and the report, because
+there is one renderer. A cell drill-down bubbles up to the report's
+shared filter, narrowing every section at once.
+
 ### Inlining
 
-`dash-ui.js` imports `dash-engine.js`, and nothing can resolve that
-relative specifier in a `file://` or `srcdoc` page. So the two are
-stitched into one module script: the engine is wrapped in an IIFE
-returning its exports as the `E` namespace the UI expects, and the UI's
-import is dropped. The export list is derived from the source rather than
-hand-maintained, and a test checks that every `E.<name>` the UI calls is
-actually exported — a mismatch there is a runtime `TypeError` in the
-browser that no Python test would otherwise see.
+`dash-ui.js` imports `dash-engine.js`, and `dash-report.js` imports both;
+nothing can resolve those relative specifiers in a `file://` or `srcdoc`
+page. So all three are stitched into one module script: the engine is
+wrapped in an IIFE returning its exports as the `E` namespace, and the UI
+and report are concatenated after it with their imports and `export`
+keywords stripped, so the report references `Dashboard` / `h` / `E` as
+bundle-scope names. The export list is derived from the source, and a
+test checks that every `E.<name>` the UI calls is actually exported — a
+mismatch there is a runtime `TypeError` no Python test would otherwise
+see.
+
+Concatenating at one scope has a hazard the single-file checks miss: a
+name declared top-level in two modules (a duplicate `STATE_LABEL` did
+this) is a `SyntaxError` that fails the whole script and renders nothing.
+A test therefore `node --check`s the **assembled** bundle, not just each
+file.
+
+### Escaping JSON into a script
+
+The config is JSON inside a `<script>`, and a graphviz SVG carries a
+`<!-- Generated -->` comment. Escaping `<!--` to `<\!--` (as an early
+version did) breaks `JSON.parse` — `\!` is not a legal JSON escape. The
+config instead escapes every literal `<` to `<`, which neutralises
+both a closing script tag and the comment-open at once and stays valid
+JSON. The client-side exports (`exportHtml`, `buildSessionReport`) apply
+the identical `scriptJson`.
 
 ### Layout
 

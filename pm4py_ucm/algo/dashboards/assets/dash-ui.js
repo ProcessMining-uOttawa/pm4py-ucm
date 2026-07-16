@@ -15,7 +15,19 @@
 
 import * as E from "./dash-engine.js";
 
-const h = (tag, attrs = {}, ...kids) => {
+/**
+ * JSON safe to embed in a script element — mirror of view._script_json.
+ *
+ * Escapes every literal `<` to its `<` form, which neutralises a
+ * closing script tag and the `<!--` comment open at once and stays valid
+ * JSON (a graphviz SVG's `<!--` comment would otherwise make JSON.parse
+ * throw on the way back in).
+ */
+export function scriptJson(value) {
+  return JSON.stringify(value).replace(/</g, "\\u003c");
+}
+
+export const h = (tag, attrs = {}, ...kids) => {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
     if (v == null || v === false) continue;
@@ -31,7 +43,7 @@ const h = (tag, attrs = {}, ...kids) => {
   return el;
 };
 
-const STATE_LABEL = { met: "MET", risk: "AT RISK", missed: "MISSED" };
+export const STATE_LABEL = { met: "MET", risk: "AT RISK", missed: "MISSED" };
 
 //: Most bars a categorical axis draws before the renderer keeps only the
 //: largest and says so. Sized so each bar stays wide enough to hover in
@@ -77,11 +89,18 @@ export class Dashboard {
   constructor(root, opts) {
     this.root = root;
     this.opts = opts;
-    this.table = E.decodePayload(opts.payload);
+    // A shared table may be passed in (the session report decodes the
+    // payload once and hands the same table to every section) rather than
+    // decoding it per dashboard.
+    this.table = opts.table || E.decodePayload(opts.payload);
     this.catalog = Object.fromEntries(opts.catalog.map((m) => [m.id, m]));
     this.catalogList = opts.catalog;
     this.name = opts.name || "Dashboard";
     this.readOnly = !!opts.readOnly;
+    // Headless: no own header. The session report embeds dashboard
+    // sections under one shared reader filter bar, so each section drops
+    // its own header and takes its filters from the report.
+    this.headless = !!opts.headless;
     this.renders = opts.renders || {};
 
     this.specs = this._load(opts.specs);
@@ -91,8 +110,18 @@ export class Dashboard {
     this.notation = Object.keys(this.renders)[0] || "ucm";
 
     root.classList.add("pm-dash");
-    this._initTheme(opts.theme);
+    // A headless section inherits the report's theme rather than resolving
+    // its own; the report owns the one <html> data-theme.
+    if (this.headless) this.dark = !!opts.dark;
+    else this._initTheme(opts.theme);
     this._applyPendingPin(opts.pendingPin);
+    this.render();
+  }
+
+  /** Re-filter and re-render — the report calls this when its shared
+   *  reader filter bar changes. */
+  setFilters(filters) {
+    this.filters = (filters || []).slice();
     this.render();
   }
 
@@ -288,10 +317,7 @@ export class Dashboard {
     // unfiltered log.
     cfg.filters = this.filters;
     const data = doc.querySelector("#pm-data");
-    // Same escape the Python side applies: a `</script>` inside the data
-    // would end the element and truncate the file.
-    data.textContent = JSON.stringify(cfg)
-      .replace(/<\//g, "<\\/").replace(/<!--/g, "<\\!--");
+    data.textContent = scriptJson(cfg);
 
     return "<!DOCTYPE html>\n" + doc.outerHTML;
   }
@@ -304,6 +330,19 @@ export class Dashboard {
     a.click();
     URL.revokeObjectURL(a.href);
     toast("Exported — interactive, offline, no server needed", this._theme());
+  }
+
+  downloadReport() {
+    // buildSessionReport is a bundle-scope function (dash-report.js is
+    // concatenated after this file); it is always present in a rendered
+    // page, which is the only place this runs.
+    const blob = new Blob([buildSessionReport(this)], { type: "text/html" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${(this.name || "session").replace(/[^\w.-]+/g, "_")}-report.html`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast("Session report exported", this._theme());
   }
 
   // -- computation ---------------------------------------------------
@@ -329,7 +368,7 @@ export class Dashboard {
   render() {
     const computed = this.specs.map((s) => this._compute(s));
     this.root.replaceChildren(
-      this._header(),
+      this.headless ? document.createComment("headless") : this._header(),
       this._targets(computed),
       this._grid(computed),
     );
@@ -394,10 +433,16 @@ export class Dashboard {
     if (!this.readOnly) {
       kids.push(h("button", {
         class: "pm-btn pm-btn--ghost",
-        title: "Save this dashboard as a standalone interactive HTML "
-             + "file — it works offline, with no server.",
+        title: "This dashboard alone, as a standalone interactive HTML "
+             + "file — works offline, no server.",
         onclick: () => this.downloadExport(),
       }, "⬇ Export"));
+      kids.push(h("button", {
+        class: "pm-btn pm-btn--ghost",
+        title: "The full session report — scorecard, this dashboard, and "
+             + "the process model in both notations — as one offline file.",
+        onclick: () => this.downloadReport(),
+      }, "⬇ Session report"));
       kids.push(h("button", {
         class: "pm-btn", onclick: () => this._openComposer(),
       }, "+ Add widget"));
@@ -680,6 +725,9 @@ export class Dashboard {
 
   _drill(axis, label, quiet) {
     if (!axis || axis === "none") return;
+    // In a report section the drill bubbles to the report's shared reader
+    // filter, so a cell click narrows every section, not just this one.
+    if (this.opts.onDrill) { this.opts.onDrill(axis, label); return; }
     const exists = this.filters.some((f) =>
       f.field === "segment" && f.value[0] === axis && f.value[1] === label);
     if (!exists) {
@@ -1220,13 +1268,13 @@ function isDarkColor(color) {
   return (0.299 * r + 0.587 * g + 0.114 * b) < 128;
 }
 
-function axisLabel(axis) {
+export function axisLabel(axis) {
   if (!axis) return "";
   if (axis.startsWith("attr:")) return axis.slice(5).replace(/^case:/, "");
   return axis[0].toUpperCase() + axis.slice(1);
 }
 
-function describeFilter(f, table) {
+export function describeFilter(f, table) {
   if (f.field === "segment") return `${axisLabel(f.value[0])} = ${f.value[1]}`;
   if (f.field === "contains") {
     return `${f.op === "not" ? "excludes" : "contains"} ${f.value}`;

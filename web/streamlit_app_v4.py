@@ -346,6 +346,31 @@ def _render_cached(jucm_bytes: bytes, style: str) -> bytes:
         return png_path.read_bytes()
 
 
+@st.cache_data(show_spinner=False)
+def _render_svg_cached(jucm_bytes: bytes, style: str) -> Optional[str]:
+    """The model as one inline SVG string, or ``None`` when it cannot be
+    produced as a single SVG.
+
+    SVG is what the session report's model section wants — it zooms and
+    pans crisply where a raster does not. Only single-map models qualify:
+    a decomposed model is stacked from per-map panels
+    (:func:`~pm4py_ucm.visualization.ucm.stacked`), which composites
+    raster images, so those fall back to the PNG the report already has.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        jucm_path = Path(td) / "model.jucm"
+        jucm_path.write_bytes(jucm_bytes)
+        ucm = pm4py_ucm.read_ucm(str(jucm_path))
+        if len(ucm.maps) != 1:
+            return None
+        gviz = _visualizer.apply(ucm, parameters={"style": style})
+        svg = gviz.pipe(format="svg").decode("utf-8")
+        # graphviz prepends an XML declaration and a DOCTYPE; strip them so
+        # the <svg> can be inlined straight into the report document.
+        i = svg.find("<svg")
+        return svg[i:] if i >= 0 else svg
+
+
 def _render_png(ucm, style: str, out_path: str) -> str:
     params = {"style": style}
     if len(ucm.maps) <= 1:
@@ -606,7 +631,8 @@ def _fact_table(log_bytes: bytes, log_kind: str, csv_columns,
 def _dashboard_html_cached(_table, specs_json: str, name: str,
                            renders: Tuple[Tuple[str, str], ...],
                            storage_key: str, read_only: bool,
-                           theme: str) -> str:
+                           theme: str,
+                           model_svg: Tuple[Tuple[str, str], ...]) -> str:
     """The dashboard artifact.
 
     ``_table`` is underscore-prefixed so Streamlit does not try to hash a
@@ -627,6 +653,9 @@ def _dashboard_html_cached(_table, specs_json: str, name: str,
         # but not Streamlit's own theme setting, so it has to be told
         # which one is actually on screen around it.
         theme=theme,
+        # Both notations as inline SVG, for the session report's model
+        # section (which the browser cannot render itself).
+        model_svg=dict(model_svg),
     )
 
 
@@ -2724,6 +2753,7 @@ if _view == "Dashboards":
     # export carries both — the render is cached per style, so this
     # costs one render each rather than one per rerun.
     _renders: Dict[str, str] = {}
+    _model_svg: Dict[str, str] = {}
     for _style, _label in (("ucm", "ucm"), ("bpmn", "bpmn")):
         try:
             _png = _render_cached(mined["jucm"], _style)
@@ -2735,11 +2765,21 @@ if _view == "Dashboards":
             # A notation that will not render must not take the whole
             # dashboard down; the widget falls back to a placeholder.
             pass
+        try:
+            # Inline SVG for the session report's model section — sharper
+            # to zoom than the PNG. None for multi-map (composited) models;
+            # the report falls back to the PNG render above.
+            _svg = _render_svg_cached(mined["jucm"], _style)
+            if _svg:
+                _model_svg[_label] = _svg
+        except Exception:
+            pass
 
     _specs_json = _json.dumps(_DEFAULT_DASHBOARD_SPECS)
     _html = _dashboard_html_cached(
         _ft, _specs_json, "Ops overview",
         tuple(sorted(_renders.items())), file_hash, False, _theme,
+        tuple(sorted(_model_svg.items())),
     )
 
     # A pin carries a fresh id per click, so it must not reach the cache
