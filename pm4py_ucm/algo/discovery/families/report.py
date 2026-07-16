@@ -33,10 +33,8 @@ omitted, never faked.
 from __future__ import annotations
 
 import base64
-import io
 import json
 import os
-import tempfile
 from typing import Any, Dict, List, Optional
 
 from .family import ModelFamily
@@ -74,56 +72,38 @@ TOOL_BRAND = "PM4Py-UCM V3"
 def _render_cell_images(
     family: ModelFamily,
     style: str,
-    image_max_width: int,
 ) -> Optional[List[Optional[str]]]:
-    """One base64 ``data:`` URI per cell (``None`` entries for cells
+    """One base64 SVG ``data:`` URI per cell (``None`` entries for cells
     that failed to render); ``None`` altogether when rendering is
-    unavailable (no graphviz binary / no Pillow)."""
+    unavailable (no graphviz binary).
+
+    SVG rather than PNG: the embedded images stay crisp at any zoom, their
+    text is selectable, and the report is a fraction of the size — no
+    raster DPI, width cap or Pillow palette-quantisation needed, since a
+    vector has no resolution to trade off. A decomposed cell's maps are
+    stacked exactly as the PNG path composited them. The images are
+    embedded (``<img src>``), so stub links are omitted (``navigable=False``)
+    — they cannot be followed from an image anyway."""
     try:
-        from PIL import Image
-        from ....visualization.ucm.family_grid import _render_cell_png
-    except ImportError:
+        from ....visualization.ucm import svg as _svg
+    except ImportError:  # pragma: no cover - visualization always ships
         return None
 
     uris: List[Optional[str]] = []
-    with tempfile.TemporaryDirectory() as td:
-        for i, cell in enumerate(family.cells):
-            try:
-                path = _render_cell_png(
-                    cell.ucm, td, i, {"style": style, "dpi": IMAGE_DPI},
-                )
-                with Image.open(path) as im:
-                    # Cap the width, but never shrink below the 96-dpi
-                    # readability floor — a large decomposed model
-                    # would otherwise become unreadably small text.
-                    floor_w = round(im.width * _IMAGE_FLOOR_DPI / IMAGE_DPI)
-                    target_w = max(image_max_width, floor_w)
-                    if im.width > target_w:
-                        f = target_w / im.width
-                        im = im.convert("RGB").resize(
-                            (target_w, max(1, int(im.height * f))),
-                            Image.LANCZOS,
-                        )
-                    # Diagrams are flat-color: an adaptive 256-color
-                    # palette shrinks the embedded PNG severalfold at
-                    # no visible cost, which is what keeps the
-                    # floor-protected large images affordable.
-                    im = im.convert("RGB").quantize(
-                        colors=256, method=Image.MEDIANCUT,
-                    )
-                    buf = io.BytesIO()
-                    im.save(buf, format="PNG", optimize=True)
-                uris.append(
-                    "data:image/png;base64,"
-                    + base64.b64encode(buf.getvalue()).decode("ascii")
-                )
-            except Exception:
-                # One unrenderable cell must not sink the report; the
-                # first failure usually means graphviz is absent, so
-                # give up on the remaining cells too.
-                uris.append(None)
-                if all(u is None for u in uris):
-                    return None
+    for cell in family.cells:
+        try:
+            svg = _svg.model_to_svg(cell.ucm, style, navigable=False)
+            uris.append(
+                "data:image/svg+xml;base64,"
+                + base64.b64encode(svg.encode("utf-8")).decode("ascii")
+            )
+        except Exception:
+            # One unrenderable cell must not sink the report; the first
+            # failure usually means graphviz is absent, so give up on the
+            # remaining cells too.
+            uris.append(None)
+            if all(u is None for u in uris):
+                return None
     return uris
 
 
@@ -147,8 +127,10 @@ def family_report_html(
     :class:`~.stats.FamilyStats` when the log has been dropped.
     ``images=False`` (or an environment without the graphviz binary)
     omits the embedded per-cell model images; the statistics views are
-    unaffected. The output is deterministic for a given family — no
-    timestamps are embedded."""
+    unaffected. The images are now vector SVG, so ``image_max_width`` is
+    accepted for backward compatibility but ignored (a vector has no
+    resolution to cap). The output is deterministic for a given family —
+    no timestamps are embedded."""
     if stats is None:
         stats = compute_family_stats(family)
 
@@ -159,7 +141,7 @@ def family_report_html(
     data["style"] = style
 
     image_uris = (
-        _render_cell_images(family, style, image_max_width)
+        _render_cell_images(family, style)
         if images else None
     )
     if image_uris is not None:
@@ -1031,11 +1013,13 @@ function wireImages(root) {
 
 function openTab(src) {
   // A data: URI cannot be opened as a top-level tab — convert the
-  // embedded base64 PNG to a Blob URL first (works offline).
+  // embedded base64 image to a Blob URL first (works offline). The MIME
+  // type is read from the URI so SVG and PNG both open correctly.
+  const mime = (src.match(/^data:([^;,]+)/) || [, "image/png"])[1];
   const bin = atob(src.split(",")[1]);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  window.open(URL.createObjectURL(new Blob([bytes], {type: "image/png"})),
+  window.open(URL.createObjectURL(new Blob([bytes], {type: mime})),
               "_blank");
 }
 function lightbox(src, cap) {

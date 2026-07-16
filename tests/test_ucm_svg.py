@@ -53,34 +53,45 @@ def _single_map_ucm():
     return convert_to_ucm(_seq("A", "B", "C"), decomposition=None)
 
 
-def _umbrella_ucm():
-    """Dynamic-stub umbrella from a tiny two-cell family."""
-    from pm4py_ucm.algo.discovery.families import discover, assemble_umbrella
+def _toy_miner(sublog, params=None):
+    import pm4py
+    return pm4py.discover_process_tree_inductive(sublog)
 
+
+def _family_log():
+    """A log with two case attributes: kind (X/Y) and urgent (bool)."""
     rows = []
     ts = pd.Timestamp("2026-01-01")
-    for i in range(6):
-        rows += [
-            {"case:concept:name": f"b{i}", "concept:name": a,
-             "time:timestamp": ts, "case:kind": "X"}
-            for a in ("Reg", "Triage", "Surgery", "Close")
-        ]
-    for i in range(6):
-        rows += [
-            {"case:concept:name": f"l{i}", "concept:name": a,
-             "time:timestamp": ts, "case:kind": "Y"}
-            for a in ("Reg", "Scan", "Chemo", "Close")
-        ]
-    df = pd.DataFrame(rows)
+    i = 0
 
-    def _toy(sublog, params=None):
-        import pm4py
-        return pm4py.discover_process_tree_inductive(sublog)
+    def add(kind, urgent, acts, n):
+        nonlocal i
+        for _ in range(n):
+            for a in acts:
+                rows.append({
+                    "case:concept:name": f"c{i}", "concept:name": a,
+                    "time:timestamp": ts, "case:kind": kind,
+                    "case:urgent": urgent})
+            i += 1
 
-    fam = discover(df, ["kind"], min_cases=1,
-                   parameters={"tree_miner": _toy,
-                               "resource_attribute": False})
-    return assemble_umbrella(fam)
+    add("X", True, ("Reg", "Triage", "Surgery", "Close"), 5)
+    add("X", False, ("Reg", "Triage", "Close"), 5)
+    add("Y", True, ("Reg", "Scan", "Chemo", "Close"), 5)
+    add("Y", False, ("Reg", "Scan", "Close"), 5)
+    return pd.DataFrame(rows)
+
+
+def _family(attrs):
+    from pm4py_ucm.algo.discovery.families import discover
+    return discover(_family_log(), attrs, min_cases=1,
+                    parameters={"tree_miner": _toy_miner,
+                                "resource_attribute": False})
+
+
+def _umbrella_ucm():
+    """Dynamic-stub umbrella from a tiny two-cell family."""
+    from pm4py_ucm.algo.discovery.families import assemble_umbrella
+    return assemble_umbrella(_family(["kind"]))
 
 
 def _wellformed(svg):
@@ -164,3 +175,42 @@ class TestDynamicStubPicker:
                 assert href.startswith("#pm-map-2-")
             if href.startswith("#pm-stub-menu-"):
                 assert href.startswith("#pm-stub-menu-2-")
+
+
+class TestFamilyGridSvg:
+
+    def test_matrix_grid_wellformed_with_headers_and_captions(self):
+        from pm4py_ucm.visualization.ucm.family_grid import render_svg
+
+        fam = _family(["kind", "urgent"])
+        svg = render_svg(fam, "ucm")
+        doc = _wellformed(svg)
+        texts = [t.firstChild.data for t in doc.getElementsByTagName("text")
+                 if t.firstChild]
+        joined = " ".join(texts)
+        # Title names both axes; row + column headers present.
+        assert "kind" in joined and "urgent" in joined
+        assert "X" in texts and "Y" in texts          # row labels
+        # Every mined cell contributes a caption "n=… (…%)".
+        assert any(t.startswith("n=") and "%" in t for t in texts)
+
+    def test_stack_grid_one_attribute(self):
+        from pm4py_ucm.visualization.ucm.family_grid import render_svg
+
+        svg = render_svg(_family(["kind"]), "ucm")
+        doc = _wellformed(svg)
+        texts = [t.firstChild.data for t in doc.getElementsByTagName("text")
+                 if t.firstChild]
+        assert any("by kind" == t for t in texts)     # stack title
+        assert "X" in texts and "Y" in texts
+
+    def test_cell_links_are_namespaced_per_cell(self):
+        # A decomposed member inside the grid must keep its stub links to
+        # its own maps (id_prefix rXcY-), never another cell's.
+        from pm4py_ucm.visualization.ucm.family_grid import render_svg
+        import re as _re
+
+        svg = render_svg(_family(["kind", "urgent"]), "ucm")
+        _wellformed(svg)
+        for pid in _re.findall(r'id="pm-map-([^"]+)"', svg):
+            assert _re.match(r"r\d+c\d+-\d+$", pid), pid

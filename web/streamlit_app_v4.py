@@ -1022,22 +1022,21 @@ def _render_family_grid_svg(
     style: str,
     _family,
 ) -> Tuple[Optional[str], Optional[str]]:
-    """The whole family as one navigable SVG: every member model stacked
-    with a labelled title strip, so the grid zooms, pans and downloads as
-    vectors (the PNG grid is a flat raster composite).
+    """The whole family as one navigable 2-D vector SVG — the same matrix
+    the PNG grid composites (rows × columns, headers, captions), but as
+    vectors: it zooms, pans and downloads crisply and its text stays
+    selectable.
 
-    Each member is rendered with a per-cell id prefix, so a stub link
-    only ever resolves within its own member — no cross-family jumps.
-    Cached on ``(mine_fingerprint, style)`` like :func:`_render_family_grid`.
-    Returns ``(svg_str, None)`` or ``(None, error_text)``."""
+    Each member is rendered with a per-cell id prefix, so a decomposed
+    member's stub links only ever resolve within that member — no
+    cross-family jumps. Cached on ``(mine_fingerprint, style)`` like
+    :func:`_render_family_grid`. Returns ``(svg_str, None)`` or
+    ``(None, error_text)``."""
     try:
-        sections: List[Tuple[str, str]] = []
-        for i, cell in enumerate(_family.cells):
-            svg = _svgmod.model_to_svg(cell.ucm, style, id_prefix=f"{i}-")
-            sections.append((f"{cell.label} — {cell.caption}", svg))
-        if not sections:
+        from pm4py_ucm.visualization.ucm.family_grid import render_svg
+        if not getattr(_family, "cells", None):
             return None, "no cells to render"
-        return _svgmod.stack_svgs(sections, wrap_anchor=False), None
+        return render_svg(_family, style), None
     except Exception as exc:  # pragma: no cover - depends on env
         return None, f"{type(exc).__name__}: {exc}"
 
@@ -2510,63 +2509,56 @@ if _view == "Family":
                 )
                 fm5.metric("Case coverage", f"{fcov:.1f}%")
 
-                # Grid rendering is per-notation and cached
-                # independently of mining — switching UCM ↔ BPMN only
-                # re-renders the already-mined models.
+                # SVG is the default grid view: one 2-D vector matrix,
+                # crisp at any zoom with selectable text, and cheap to
+                # build (per-cell graphviz SVG, no rasterising). The PNG is
+                # a download prepared on demand below. Cached per notation,
+                # independent of mining — switching UCM ↔ BPMN re-renders
+                # but never re-mines.
+                grid_png = None  # rendered lazily (fallback / on-demand)
                 with st.spinner(f"Rendering family grid ({notation})..."):
-                    grid_png, grid_preview, grid_error = (
-                        _render_family_grid(
-                            st.session_state["family_fp"], style,
-                            fam["family"],
-                        )
+                    grid_svg, grid_svg_err = _render_family_grid_svg(
+                        st.session_state["family_fp"], style, fam["family"],
                     )
-                if grid_preview is not None:
-                    _fb64 = base64.b64encode(grid_preview).decode("ascii")
-                    # data-opentab="1" opts the image into the delegated
-                    # double-click-to-open-in-new-tab handler (installed
-                    # by the Model tab's _open_image_in_tab_button, which
-                    # runs earlier in the same script pass).
-                    st.markdown(
-                        f'<img src="data:image/png;base64,{_fb64}" '
-                        f'width="{_DISPLAY_WIDTH_PX}" '
-                        f'style="max-width:100%; height:auto; '
-                        f'cursor: zoom-in;" '
-                        f'data-opentab="1" '
-                        f'title="Double-click to open in a new browser tab" '
-                        f'alt="Model family grid" />',
-                        unsafe_allow_html=True,
-                    )
-                    st.caption(
-                        "One panel per combination — captions show "
-                        "each cell's case count and share of the log. "
-                        "Double-click the grid to open it in its own "
-                        "browser tab. This inline view is a downscaled "
-                        "preview; the **Grid PNG** download below is full "
-                        "resolution (text-readable)."
-                    )
-                    # Guarantee the double-click listener exists even if
-                    # the Model tab didn't render an image this run.
-                    _open_image_in_tab_button(
-                        _fb64, label="Open grid in new tab ⧉")
-                elif grid_error:
-                    st.warning(
-                        f"Grid rendering unavailable: {grid_error}"
-                    )
-
-                # Navigable vector version of the grid — every member
-                # stacked with a labelled title; zoom/pan, and for a
-                # decomposed member click a stub to jump to its sub-map
-                # (always within that same member). Opt-in so the compact
-                # 2-D PNG grid stays the default overview.
-                grid_svg, grid_svg_err = _render_family_grid_svg(
-                    st.session_state["family_fp"], style, fam["family"],
-                )
                 if grid_svg is not None:
-                    with st.expander(
-                        "Interactive SVG — zoom, pan, click stubs to "
-                        "navigate", expanded=False,
-                    ):
-                        _svg_viewer(grid_svg, height=620, key="familysvg")
+                    _svg_viewer(grid_svg, height=640, key="familysvg")
+                    st.caption(
+                        "One panel per combination (rows × columns) — "
+                        "captions show each cell's case count and share of "
+                        "the log. Vector SVG: scroll to zoom, drag to pan; "
+                        "for a decomposed member, click a stub to jump to "
+                        "its sub-map. Download SVG or a raster PNG below."
+                    )
+                else:
+                    # SVG failed — fall back to the raster grid so the
+                    # family stays visible, and say why.
+                    with st.spinner(f"Rendering family grid ({notation})..."):
+                        grid_png, grid_preview, grid_error = (
+                            _render_family_grid(
+                                st.session_state["family_fp"], style,
+                                fam["family"],
+                            )
+                        )
+                    if grid_preview is not None:
+                        _fb64 = base64.b64encode(grid_preview).decode("ascii")
+                        st.markdown(
+                            f'<img src="data:image/png;base64,{_fb64}" '
+                            f'width="{_DISPLAY_WIDTH_PX}" '
+                            f'style="max-width:100%; height:auto; '
+                            f'cursor: zoom-in;" data-opentab="1" '
+                            f'title="Double-click to open in a new browser tab" '
+                            f'alt="Model family grid" />',
+                            unsafe_allow_html=True,
+                        )
+                        st.caption(
+                            f"SVG render failed ({grid_svg_err}); showing "
+                            "the raster grid. Double-click to open it in a "
+                            "new browser tab."
+                        )
+                        _open_image_in_tab_button(
+                            _fb64, label="Open grid in new tab ⧉")
+                    elif grid_error:
+                        st.warning(f"Grid rendering unavailable: {grid_error}")
 
                 st.subheader("Cells")
                 st.dataframe(
@@ -2602,14 +2594,6 @@ if _view == "Family":
                          "conditioned plug-in per (merged) cell + one "
                          "strategy per combination.",
                 )
-                if grid_png is not None:
-                    fd4.download_button(
-                        "Grid PNG", data=grid_png,
-                        file_name=_safe_download_name(
-                            f"{stem}_family_grid_{style}", ".png",
-                        ),
-                        mime="image/png",
-                    )
                 if grid_svg is not None:
                     fd4.download_button(
                         "Grid SVG", data=grid_svg.encode("utf-8"),
@@ -2618,11 +2602,43 @@ if _view == "Family":
                         ),
                         mime="image/svg+xml",
                         help="Vector grid — crisp at any zoom, text "
-                             "selectable. Members are stacked with "
-                             "labelled titles.",
+                             "selectable.",
                     )
                 elif grid_svg_err:
                     fd4.caption(f"SVG unavailable: {grid_svg_err}")
+
+                # Grid PNG — a raster download, rendered ONLY when asked
+                # (SVG is the default view). Keyed by family + notation.
+                _grid_png_key = (
+                    f"family_grid_png::{st.session_state['family_fp']}"
+                    f"::{style}"
+                )
+                if grid_png is None and _grid_png_key in st.session_state:
+                    grid_png = st.session_state[_grid_png_key]
+                if grid_png is not None:
+                    fd4.download_button(
+                        "Grid PNG", data=grid_png,
+                        file_name=_safe_download_name(
+                            f"{stem}_family_grid_{style}", ".png",
+                        ),
+                        mime="image/png", key="family_grid_png_download",
+                    )
+                elif fd4.button(
+                    "Prepare Grid PNG…", key="family_grid_png_prepare",
+                    help="Render a raster PNG to download (SVG is the "
+                         "default; PNG is generated only when you ask).",
+                ):
+                    with st.spinner(f"Rendering family grid PNG "
+                                    f"({notation})..."):
+                        _gp, _, _ge = _render_family_grid(
+                            st.session_state["family_fp"], style,
+                            fam["family"],
+                        )
+                    if _gp is not None:
+                        st.session_state[_grid_png_key] = _gp
+                        st.rerun()
+                    else:
+                        fd4.caption(f"PNG unavailable: {_ge}")
                 report_bytes, report_error = _build_family_report(
                     st.session_state["family_fp"], style,
                     fam["family"], fam["stats"],
