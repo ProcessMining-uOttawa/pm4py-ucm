@@ -84,6 +84,8 @@ demo/*.png
 
 # Tutorial notebook output (regenerated on each run)
 demo/output/
+demo/tutorial_output/
+demo/scenario_output/
 
 # Event logs ship zipped — the notebook unzips them on first use.
 demo/ClaimsPaymentLog.xes
