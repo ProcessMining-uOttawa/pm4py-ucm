@@ -1282,9 +1282,14 @@ def _svg_viewer(svg: str, *, height: int = 620, key: str = "svgview") -> None:
   // links #pm-stub-menu-N (open the plug-in picker). Suppressed after a
   // drag so panning never triggers a jump.
   stage.addEventListener("click", (e) => {{
-    if (e.target.closest && e.target.closest(".pm-menu")) return;
     if (moved > 6) return;
-    const a = e.target.closest && e.target.closest("a");
+    // Drag-start calls setPointerCapture(#stage), which retargets the
+    // click event to #stage — so e.target is NOT the node under the
+    // cursor and closest("a") would miss every stub. Resolve the real
+    // element by coordinates instead.
+    const hit = document.elementFromPoint(e.clientX, e.clientY) || e.target;
+    if (hit && hit.closest && hit.closest(".pm-menu")) return;
+    const a = hit && hit.closest ? hit.closest("a") : null;
     if (!a) return;
     const href = a.getAttribute("xlink:href") || a.getAttribute("href") || "";
     if (href.startsWith("#pm-stub-menu-")) {{
@@ -1443,9 +1448,19 @@ st.markdown(
         font-family: Georgia, "Times New Roman", serif;
         font-weight: 700; font-size: 14px; color: var(--pm-ink);
       }
+      .pm-brand a { color: inherit; text-decoration: none; }
+      .pm-brand a:hover { text-decoration: underline; }
       .pm-brand span {
         font-family: ui-monospace, Menlo, Consolas, monospace;
         font-size: 10px; color: var(--pm-muted); margin-left: 6px;
+      }
+      .pm-brand span a { color: var(--pm-muted); }
+      .pm-byline {
+        font-size: 10.5px; color: var(--pm-muted); margin: 3px 0 2px;
+      }
+      .pm-byline a { color: var(--pm-muted); text-decoration: none; }
+      .pm-byline a:hover {
+        text-decoration: underline; color: var(--pm-ink);
       }
       /* Log card — the rail's persistent "what am I looking at". */
       .pm-log {
@@ -1481,6 +1496,15 @@ st.markdown(
       section[data-testid="stSidebar"] div[role="radiogroup"] input:checked
         + div { font-weight:600; }
       div[data-testid="stSidebarUserContent"] { padding-top: 10px; }
+      /* Reclaim the dead band at the top of the main area: the brand and
+         identity live in the rail, so there is no main-area title and
+         Streamlit's default top padding leaves a big gap below the header.
+         Lift the content to sit just under the (fixed, 60px) header —
+         which is left intact so its menu / Deploy / sidebar toggle stay
+         reachable. */
+      [data-testid="stMainBlockContainer"], .block-container {
+        padding-top: 4rem !important;
+      }
     </style>
     """,
     unsafe_allow_html=True,
@@ -1531,12 +1555,19 @@ def _accept_log_bytes(name: str, payload: bytes) -> None:
 # Sidebar — miner config (decomposition affects the Model tab only; the
 # Scenarios tab always runs flat).
 with st.sidebar:
-    # Brand at the top of the rail — the app's name and the version that
-    # is actually running (see ``_version`` above). The design carries
-    # the identity here rather than a main-area title.
+    # Brand at the top of the rail — the app's name (→ repo), the version
+    # actually running (→ that release's notes), and the attribution. The
+    # design carries the identity here rather than in a main-area title.
+    _repo_url = "https://github.com/ProcessMining-uOttawa/pm4py-ucm"
+    _release_url = f"{_repo_url}/releases/tag/v{_version}"
     st.markdown(
-        f'<div class="pm-brand">PM4Py-UCM<span>{_html_escape_min(_version)}'
-        f'</span></div>',
+        f'<div class="pm-brand">'
+        f'<a href="{_repo_url}" target="_blank" rel="noopener">PM4Py-UCM</a>'
+        f'<span><a href="{_release_url}" target="_blank" rel="noopener">'
+        f'{_html_escape_min(_version)}</a></span></div>'
+        f'<div class="pm-byline">'
+        f'<a href="https://damyot.github.io/" target="_blank" '
+        f'rel="noopener">D. Amyot</a>, uOttawa, 2026</div>',
         unsafe_allow_html=True,
     )
     st.header("Inductive miner")

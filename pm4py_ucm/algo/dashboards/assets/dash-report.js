@@ -305,7 +305,7 @@ export class Report {
 
 /** Wheel-zoom + drag-pan a diagram box, offline and dependency-free. */
 function panZoom(box) {
-  let scale = 1, tx = 0, ty = 0, dragging = false, px = 0, py = 0;
+  let scale = 1, tx = 0, ty = 0, dragging = false, px = 0, py = 0, moved = 0;
   const apply = () => {
     const inner = box.firstElementChild;
     if (inner) inner.style.transform = `translate(${tx}px,${ty}px) scale(${scale})`;
@@ -317,17 +317,40 @@ function panZoom(box) {
     apply();
   }, { passive: false });
   box.addEventListener("pointerdown", (e) => {
-    dragging = true; px = e.clientX; py = e.clientY;
+    dragging = true; moved = 0; px = e.clientX; py = e.clientY;
     box.setPointerCapture(e.pointerId); box.style.cursor = "grabbing";
   });
   box.addEventListener("pointermove", (e) => {
     if (!dragging) return;
-    tx += e.clientX - px; ty += e.clientY - py; px = e.clientX; py = e.clientY;
+    const dx = e.clientX - px, dy = e.clientY - py;
+    moved += Math.abs(dx) + Math.abs(dy);
+    tx += dx; ty += dy; px = e.clientX; py = e.clientY;
     apply();
   });
   const stop = () => { dragging = false; box.style.cursor = "grab"; };
   box.addEventListener("pointerup", stop);
   box.addEventListener("pointerleave", stop);
+  // Click a stub to jump to its plug-in panel — the decomposed model is
+  // stacked in one SVG, so navigating is panning that panel to the top.
+  // setPointerCapture (drag-start) retargets the click to the box, so
+  // resolve the clicked node by coordinates, not e.target. (The embedded
+  // model is the mined model, which only has single-plug-in #pm-map-N
+  // links; dynamic-stub pickers do not reach this section.)
+  box.addEventListener("click", (e) => {
+    if (moved > 6) return;
+    const hit = document.elementFromPoint(e.clientX, e.clientY) || e.target;
+    const a = hit && hit.closest ? hit.closest("a") : null;
+    if (!a) return;
+    const href = a.getAttribute("xlink:href") || a.getAttribute("href") || "";
+    if (!href.startsWith("#pm-map-")) return;
+    e.preventDefault();
+    const svg = box.querySelector("svg");
+    const target = svg && svg.querySelector(href);
+    if (!target) return;
+    const tr = target.getBoundingClientRect(), br = box.getBoundingClientRect();
+    ty += (br.top - tr.top) + 10;
+    apply();
+  });
   box.style.cursor = "grab";
   const inner = box.firstElementChild;
   if (inner) { inner.style.transformOrigin = "0 0"; inner.style.maxWidth = "none"; }
