@@ -80,6 +80,7 @@ from pm4py_ucm.algo.discovery.scenarios import synthesis as _scenarios
 from pm4py_ucm.algo.discovery.variants import clustering as _clustering_mod
 from pm4py_ucm.visualization.ucm import visualizer as _visualizer
 from pm4py_ucm.visualization.ucm import stacked as _stacked
+from pm4py_ucm.visualization.ucm import svg as _svgmod
 
 # Pillow's default decompression-bomb guard (~178M px) rejects very
 # large composites (family grids, decomposed stacks); raise it to a
@@ -363,218 +364,12 @@ def _render_cached(jucm_bytes: bytes, style: str) -> bytes:
         return png_path.read_bytes()
 
 
-def _svg_body(svg: str) -> str:
-    """Strip graphviz's XML declaration / DOCTYPE, leaving the ``<svg>``."""
-    i = svg.find("<svg")
-    return svg[i:] if i >= 0 else svg
-
-
-# Chrome for the stacked SVG — mirrors the PNG composite in
-# ``pm4py_ucm.visualization.ucm.stacked`` (a bold, centred map-name title
-# strip above each panel and a thin separator between panels) so the SVG
-# and PNG of a decomposed model read the same.
-_SVG_TITLE_PAD_TOP = 18.0
-_SVG_TITLE_FONT = 18.0
-_SVG_TITLE_PAD_BOTTOM = 10.0
-_SVG_SEP_MARGIN = 12.0
-_SVG_SEP_THICKNESS = 2.0
-_SVG_TITLE_COLOR = "#202020"
-_SVG_SEP_COLOR = "#a0a0a0"
-
-
-def _stack_svgs(panels: List[Tuple[str, str]], *, id_prefix: str = "",
-                wrap_anchor: bool = True) -> str:
-    """Stack per-map SVGs into one document with named title strips and
-    separators, matching the PNG composite.
-
-    ``panels`` is ``[(name, svg), …]``. Each panel is nested as an
-    ``<svg>`` at an increasing y offset — its own viewport and coordinate
-    system, so the graphviz layout inside is preserved exactly — under a
-    centred title, with a separator between adjacent panels.
-
-    ``wrap_anchor`` wraps each panel in ``<g id="pm-map-{id_prefix}{i}">``
-    so a stub's ``#pm-map-…`` hyperlink lands on it. ``id_prefix``
-    namespaces those ids per model, so stacking several models (a family
-    grid) keeps every stub link inside its own member — a stub in one
-    cell can never resolve to a panel in another. The outer cell stack
-    passes ``wrap_anchor=False`` (a cell is not itself a link target).
-    """
-    import re
-    from xml.sax.saxutils import escape
-
-    title_strip = _SVG_TITLE_PAD_TOP + _SVG_TITLE_FONT + _SVG_TITLE_PAD_BOTTOM
-    sep_total = _SVG_SEP_MARGIN * 2 + _SVG_SEP_THICKNESS
-
-    dims = []
-    for name, svg in panels:
-        m = re.search(r'<svg[^>]*\bwidth="([\d.]+)pt"[^>]*\bheight="([\d.]+)pt"',
-                      svg)
-        if m:
-            w, h = float(m.group(1)), float(m.group(2))
-        else:  # fall back to the viewBox extents
-            vb = re.search(r'viewBox="[\d.\-]+ [\d.\-]+ ([\d.]+) ([\d.]+)"', svg)
-            w, h = (float(vb.group(1)), float(vb.group(2))) if vb else (100.0, 100.0)
-        inner = svg[svg.index(">", svg.index("<svg")) + 1: svg.rindex("</svg>")]
-        dims.append((name, w, h, inner))
-
-    total_w = max(w for _, w, _, _ in dims)
-    total_h = sum(title_strip + h for _, _, h, _ in dims) \
-        + sep_total * (len(dims) - 1)
-
-    out = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" '
-        f'xmlns:xlink="http://www.w3.org/1999/xlink" '
-        f'width="{total_w:.0f}pt" height="{total_h:.0f}pt" '
-        f'viewBox="0 0 {total_w:.2f} {total_h:.2f}">',
-        # White backdrop so the chrome (title strips, gaps) matches the
-        # PNG rather than showing the page through.
-        f'<rect x="0" y="0" width="{total_w:.2f}" height="{total_h:.2f}" '
-        f'fill="#ffffff"/>',
-    ]
-    y = 0.0
-    for i, (name, w, h, inner) in enumerate(dims):
-        out.append(
-            f'<text x="{total_w / 2:.2f}" '
-            f'y="{y + _SVG_TITLE_PAD_TOP + _SVG_TITLE_FONT * 0.8:.2f}" '
-            f'text-anchor="middle" font-family="Arial, sans-serif" '
-            f'font-weight="bold" font-size="{_SVG_TITLE_FONT:.0f}" '
-            f'fill="{_SVG_TITLE_COLOR}">{escape(name)}</text>'
-        )
-        y += title_strip
-        x_off = (total_w - w) / 2  # centre a narrower panel, like the PNG
-        panel = (
-            f'<svg x="{x_off:.2f}" y="{y:.2f}" width="{w:.2f}" '
-            f'height="{h:.2f}" viewBox="0 0 {w:.2f} {h:.2f}">{inner}</svg>'
-        )
-        if wrap_anchor:
-            # A group above the panel is the clean scroll target a stub's
-            # ``#pm-map-{id_prefix}{i}`` hyperlink lands on.
-            out.append(f'<g id="pm-map-{id_prefix}{i}">{panel}</g>')
-        else:
-            out.append(panel)
-        y += h
-        if i != len(dims) - 1:
-            y += _SVG_SEP_MARGIN
-            out.append(
-                f'<line x1="{_SVG_SEP_MARGIN:.2f}" y1="{y:.2f}" '
-                f'x2="{total_w - _SVG_SEP_MARGIN:.2f}" y2="{y:.2f}" '
-                f'stroke="{_SVG_SEP_COLOR}" '
-                f'stroke-width="{_SVG_SEP_THICKNESS:.0f}"/>'
-            )
-            y += _SVG_SEP_THICKNESS + _SVG_SEP_MARGIN
-    out.append("</svg>")
-    return "\n".join(out)
-
-
-def _stub_cond_text(cond) -> str:
-    """A dynamic-stub binding's guard, as short display text: the logical
-    expression if it says more than the default ``true``, else the label."""
-    if cond is None:
-        return ""
-    expr = (getattr(cond, "expression", "") or "").strip()
-    if expr and expr.lower() != "true":
-        return expr
-    return (getattr(cond, "label", "") or "").strip()
-
-
-def _inject_stub_menus(svg: str, menus: List[Any]) -> str:
-    """Embed dynamic-stub picker data as an inert, hidden ``<g>`` inside
-    the SVG so the artifact stays self-contained.
-
-    ``menus`` is ``[(menu_id, stub_name, [(target_href, label, cond)]), …]``.
-    Each becomes ``<g id="{menu_id}" class="pm-stub-menu">`` with one
-    ``<g class="pm-binding" data-target=… data-label=… data-cond=…>`` per
-    plug-in. The viewer reads these on a stub click to build the picker;
-    a standalone SVG simply carries hidden metadata (dynamic stubs can't
-    pick without the viewer's JS). Values go through ``quoteattr`` so a
-    stray quote or ``<`` in a name or guard cannot break the markup.
-    """
-    if not menus:
-        return svg
-    from xml.sax.saxutils import quoteattr
-
-    parts = ['<g class="pm-stub-menus" style="display:none">']
-    for menu_id, stub_name, entries in menus:
-        parts.append(f'<g id="{menu_id}" class="pm-stub-menu" '
-                     f'data-stub={quoteattr(stub_name)}>')
-        for href, label, cond in entries:
-            parts.append(
-                f'<g class="pm-binding" data-target={quoteattr(href)} '
-                f'data-label={quoteattr(label)} '
-                f'data-cond={quoteattr(cond)}></g>')
-        parts.append('</g>')
-    parts.append('</g>')
-    markup = "".join(parts)
-    idx = svg.rindex("</svg>")
-    return svg[:idx] + markup + svg[idx:]
-
-
-def _model_svg(ucm, style: str, *, id_prefix: str = "") -> str:
-    """One model as an inline SVG string, navigable stub links included.
-
-    A single-map model renders directly. A decomposed (multi-map) model
-    renders each map to SVG and stacks them, hyperlinking each stub /
-    sub-process to its plug-in:
-
-    * a stub with a single plug-in gets a direct ``#pm-map-…`` link that
-      pans the viewer to that panel;
-    * a DYNAMIC stub with several plug-ins gets a ``#pm-stub-menu-…``
-      link — the viewer shows a picker of the plug-ins (with their
-      preconditions) so the reader chooses which sub-map to jump to.
-
-    ``id_prefix`` namespaces every panel / menu id, so a member rendered
-    inside a family grid only ever links within itself.
-    """
-    if len(ucm.maps) <= 1:
-        gviz = _visualizer.apply(ucm, parameters={"style": style})
-        return _svg_body(gviz.pipe(format="svg").decode("utf-8"))
-
-    from pm4py_ucm.visualization.ucm.variants import classic as _classic
-
-    _map_index = {id(m): i for i, m in enumerate(ucm.maps)}
-    stub_links: Dict[int, Any] = {}
-    menus: List[Any] = []
-    _sid = 0
-    for _m in ucm.maps:
-        for _node in _m.nodes:
-            if not isinstance(_node, pm4py_ucm.UCM.Stub):
-                continue
-            entries = []
-            for _b in _node.bindings:
-                _pi = _map_index.get(id(_b.plugin))
-                if _pi is None:
-                    continue
-                entries.append((
-                    f"#pm-map-{id_prefix}{_pi}",
-                    _b.plugin.name or f"Map{_pi}",
-                    _stub_cond_text(getattr(_b, "precondition", None)),
-                ))
-            if not entries:
-                continue
-            if len(entries) == 1:
-                # Single plug-in (a static stub): a direct link.
-                href, label, _ = entries[0]
-                stub_links[id(_node)] = (href, f"Go to sub-map: {label}")
-            else:
-                # Several plug-ins (a dynamic stub): a picker menu.
-                menu_id = f"pm-stub-menu-{id_prefix}{_sid}"
-                _sid += 1
-                stub_links[id(_node)] = (
-                    f"#{menu_id}",
-                    f"Choose sub-map for {_node.name or 'stub'} "
-                    f"({len(entries)} plug-ins)",
-                )
-                menus.append((menu_id, _node.name or "stub", entries))
-
-    panels = []
-    for idx, ucm_map in enumerate(ucm.maps):
-        gviz = _classic.apply(
-            ucm, parameters={"style": style, "map_index": idx,
-                             "format": "svg", "stub_links": stub_links})
-        name = ucm_map.name or f"Map{idx}"
-        panels.append(
-            (name, _svg_body(gviz.pipe(format="svg").decode("utf-8"))))
-    return _inject_stub_menus(_stack_svgs(panels, id_prefix=id_prefix), menus)
+# Inline-SVG model rendering (single/stacked, navigable stub links, the
+# dynamic-stub picker markup) lives in the PACKAGE
+# (pm4py_ucm.visualization.ucm.svg), so the app, the family grid, and the
+# HTML reports share one implementation and it carries unit tests. This
+# app keeps only the Streamlit-specific viewer (_svg_viewer) and the
+# cached wrappers below.
 
 
 @st.cache_data(show_spinner=False)
@@ -583,13 +378,13 @@ def _render_svg_cached(jucm_bytes: bytes, style: str) -> str:
 
     SVG zooms and pans crisply where a raster does not, and its text is
     selectable. Decomposed models stack their maps and hyperlink each
-    stub to its sub-map — see :func:`_model_svg`.
+    stub to its sub-map — see :func:`pm4py_ucm.visualization.ucm.svg`.
     """
     with tempfile.TemporaryDirectory() as td:
         jucm_path = Path(td) / "model.jucm"
         jucm_path.write_bytes(jucm_bytes)
         ucm = pm4py_ucm.read_ucm(str(jucm_path))
-        return _model_svg(ucm, style)
+        return _svgmod.model_to_svg(ucm, style)
 
 
 def _render_png(ucm, style: str, out_path: str) -> str:
@@ -1216,7 +1011,7 @@ def _render_family_cell_svg(
     :func:`_render_family_cell`. A decomposed cell keeps its stub links
     inside itself. ``None`` when rendering is unavailable."""
     try:
-        return _model_svg(_family.cells[cell_index].ucm, style)
+        return _svgmod.model_to_svg(_family.cells[cell_index].ucm, style)
     except Exception:  # pragma: no cover - depends on env
         return None
 
@@ -1238,11 +1033,11 @@ def _render_family_grid_svg(
     try:
         sections: List[Tuple[str, str]] = []
         for i, cell in enumerate(_family.cells):
-            svg = _model_svg(cell.ucm, style, id_prefix=f"{i}-")
+            svg = _svgmod.model_to_svg(cell.ucm, style, id_prefix=f"{i}-")
             sections.append((f"{cell.label} — {cell.caption}", svg))
         if not sections:
             return None, "no cells to render"
-        return _stack_svgs(sections, wrap_anchor=False), None
+        return _svgmod.stack_svgs(sections, wrap_anchor=False), None
     except Exception as exc:  # pragma: no cover - depends on env
         return None, f"{type(exc).__name__}: {exc}"
 
@@ -3274,11 +3069,11 @@ if _view == "Dashboards":
     # report's zoom/pan viewer. The render is cached per style, so both
     # notations cost one render each rather than one per rerun.
     _renders: Dict[str, str] = {}
-    _model_svg: Dict[str, str] = {}
+    _model_svgs: Dict[str, str] = {}
     for _style, _label in (("ucm", "ucm"), ("bpmn", "bpmn")):
         try:
             _svg = _render_svg_cached(mined["jucm"], _style)
-            _model_svg[_label] = _svg
+            _model_svgs[_label] = _svg
             _renders[_label] = (
                 "data:image/svg+xml;base64,"
                 + base64.b64encode(_svg.encode("utf-8")).decode("ascii")
@@ -3292,7 +3087,7 @@ if _view == "Dashboards":
     _html = _dashboard_html_cached(
         _ft, _specs_json, "Ops overview",
         tuple(sorted(_renders.items())), file_hash, False, _theme,
-        tuple(sorted(_model_svg.items())),
+        tuple(sorted(_model_svgs.items())),
     )
 
     # A pin carries a fresh id per click, so it must not reach the cache
