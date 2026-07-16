@@ -365,14 +365,22 @@ _SVG_TITLE_COLOR = "#202020"
 _SVG_SEP_COLOR = "#a0a0a0"
 
 
-def _stack_svgs(panels: List[Tuple[str, str]]) -> str:
+def _stack_svgs(panels: List[Tuple[str, str]], *, id_prefix: str = "",
+                wrap_anchor: bool = True) -> str:
     """Stack per-map SVGs into one document with named title strips and
     separators, matching the PNG composite.
 
-    ``panels`` is ``[(map_name, svg), …]``. Each map is nested as an
+    ``panels`` is ``[(name, svg), …]``. Each panel is nested as an
     ``<svg>`` at an increasing y offset — its own viewport and coordinate
     system, so the graphviz layout inside is preserved exactly — under a
     centred title, with a separator between adjacent panels.
+
+    ``wrap_anchor`` wraps each panel in ``<g id="pm-map-{id_prefix}{i}">``
+    so a stub's ``#pm-map-…`` hyperlink lands on it. ``id_prefix``
+    namespaces those ids per model, so stacking several models (a family
+    grid) keeps every stub link inside its own member — a stub in one
+    cell can never resolve to a panel in another. The outer cell stack
+    passes ``wrap_anchor=False`` (a cell is not itself a link target).
     """
     import re
     from xml.sax.saxutils import escape
@@ -417,14 +425,16 @@ def _stack_svgs(panels: List[Tuple[str, str]]) -> str:
         )
         y += title_strip
         x_off = (total_w - w) / 2  # centre a narrower panel, like the PNG
-        # ``id`` is the anchor a stub's ``#pm-map-N`` hyperlink lands on;
-        # a group above the panel gives the viewer a clean scroll target.
-        out.append(
-            f'<g id="pm-map-{i}">'
+        panel = (
             f'<svg x="{x_off:.2f}" y="{y:.2f}" width="{w:.2f}" '
             f'height="{h:.2f}" viewBox="0 0 {w:.2f} {h:.2f}">{inner}</svg>'
-            f'</g>'
         )
+        if wrap_anchor:
+            # A group above the panel is the clean scroll target a stub's
+            # ``#pm-map-{id_prefix}{i}`` hyperlink lands on.
+            out.append(f'<g id="pm-map-{id_prefix}{i}">{panel}</g>')
+        else:
+            out.append(panel)
         y += h
         if i != len(dims) - 1:
             y += _SVG_SEP_MARGIN
@@ -439,57 +449,130 @@ def _stack_svgs(panels: List[Tuple[str, str]]) -> str:
     return "\n".join(out)
 
 
+def _stub_cond_text(cond) -> str:
+    """A dynamic-stub binding's guard, as short display text: the logical
+    expression if it says more than the default ``true``, else the label."""
+    if cond is None:
+        return ""
+    expr = (getattr(cond, "expression", "") or "").strip()
+    if expr and expr.lower() != "true":
+        return expr
+    return (getattr(cond, "label", "") or "").strip()
+
+
+def _inject_stub_menus(svg: str, menus: List[Any]) -> str:
+    """Embed dynamic-stub picker data as an inert, hidden ``<g>`` inside
+    the SVG so the artifact stays self-contained.
+
+    ``menus`` is ``[(menu_id, stub_name, [(target_href, label, cond)]), …]``.
+    Each becomes ``<g id="{menu_id}" class="pm-stub-menu">`` with one
+    ``<g class="pm-binding" data-target=… data-label=… data-cond=…>`` per
+    plug-in. The viewer reads these on a stub click to build the picker;
+    a standalone SVG simply carries hidden metadata (dynamic stubs can't
+    pick without the viewer's JS). Values go through ``quoteattr`` so a
+    stray quote or ``<`` in a name or guard cannot break the markup.
+    """
+    if not menus:
+        return svg
+    from xml.sax.saxutils import quoteattr
+
+    parts = ['<g class="pm-stub-menus" style="display:none">']
+    for menu_id, stub_name, entries in menus:
+        parts.append(f'<g id="{menu_id}" class="pm-stub-menu" '
+                     f'data-stub={quoteattr(stub_name)}>')
+        for href, label, cond in entries:
+            parts.append(
+                f'<g class="pm-binding" data-target={quoteattr(href)} '
+                f'data-label={quoteattr(label)} '
+                f'data-cond={quoteattr(cond)}></g>')
+        parts.append('</g>')
+    parts.append('</g>')
+    markup = "".join(parts)
+    idx = svg.rindex("</svg>")
+    return svg[:idx] + markup + svg[idx:]
+
+
+def _model_svg(ucm, style: str, *, id_prefix: str = "") -> str:
+    """One model as an inline SVG string, navigable stub links included.
+
+    A single-map model renders directly. A decomposed (multi-map) model
+    renders each map to SVG and stacks them, hyperlinking each stub /
+    sub-process to its plug-in:
+
+    * a stub with a single plug-in gets a direct ``#pm-map-…`` link that
+      pans the viewer to that panel;
+    * a DYNAMIC stub with several plug-ins gets a ``#pm-stub-menu-…``
+      link — the viewer shows a picker of the plug-ins (with their
+      preconditions) so the reader chooses which sub-map to jump to.
+
+    ``id_prefix`` namespaces every panel / menu id, so a member rendered
+    inside a family grid only ever links within itself.
+    """
+    if len(ucm.maps) <= 1:
+        gviz = _visualizer.apply(ucm, parameters={"style": style})
+        return _svg_body(gviz.pipe(format="svg").decode("utf-8"))
+
+    from pm4py_ucm.visualization.ucm.variants import classic as _classic
+
+    _map_index = {id(m): i for i, m in enumerate(ucm.maps)}
+    stub_links: Dict[int, Any] = {}
+    menus: List[Any] = []
+    _sid = 0
+    for _m in ucm.maps:
+        for _node in _m.nodes:
+            if not isinstance(_node, pm4py_ucm.UCM.Stub):
+                continue
+            entries = []
+            for _b in _node.bindings:
+                _pi = _map_index.get(id(_b.plugin))
+                if _pi is None:
+                    continue
+                entries.append((
+                    f"#pm-map-{id_prefix}{_pi}",
+                    _b.plugin.name or f"Map{_pi}",
+                    _stub_cond_text(getattr(_b, "precondition", None)),
+                ))
+            if not entries:
+                continue
+            if len(entries) == 1:
+                # Single plug-in (a static stub): a direct link.
+                href, label, _ = entries[0]
+                stub_links[id(_node)] = (href, f"Go to sub-map: {label}")
+            else:
+                # Several plug-ins (a dynamic stub): a picker menu.
+                menu_id = f"pm-stub-menu-{id_prefix}{_sid}"
+                _sid += 1
+                stub_links[id(_node)] = (
+                    f"#{menu_id}",
+                    f"Choose sub-map for {_node.name or 'stub'} "
+                    f"({len(entries)} plug-ins)",
+                )
+                menus.append((menu_id, _node.name or "stub", entries))
+
+    panels = []
+    for idx, ucm_map in enumerate(ucm.maps):
+        gviz = _classic.apply(
+            ucm, parameters={"style": style, "map_index": idx,
+                             "format": "svg", "stub_links": stub_links})
+        name = ucm_map.name or f"Map{idx}"
+        panels.append(
+            (name, _svg_body(gviz.pipe(format="svg").decode("utf-8"))))
+    return _inject_stub_menus(_stack_svgs(panels, id_prefix=id_prefix), menus)
+
+
 @st.cache_data(show_spinner=False)
 def _render_svg_cached(jucm_bytes: bytes, style: str) -> str:
-    """The model as one inline SVG string.
+    """The model as one inline SVG string (cached per ``jucm`` + notation).
 
     SVG zooms and pans crisply where a raster does not, and its text is
-    selectable. A single-map model renders directly; a decomposed
-    (multi-map) model renders each of its maps to SVG and stacks them into
-    one document — the same panels the PNG path composites, but as
-    vectors, so the whole family stays exportable as SVG.
+    selectable. Decomposed models stack their maps and hyperlink each
+    stub to its sub-map — see :func:`_model_svg`.
     """
     with tempfile.TemporaryDirectory() as td:
         jucm_path = Path(td) / "model.jucm"
         jucm_path.write_bytes(jucm_bytes)
         ucm = pm4py_ucm.read_ucm(str(jucm_path))
-        if len(ucm.maps) <= 1:
-            gviz = _visualizer.apply(ucm, parameters={"style": style})
-            return _svg_body(gviz.pipe(format="svg").decode("utf-8"))
-
-        from pm4py_ucm.visualization.ucm.variants import classic as _classic
-
-        # Hyperlink each stub / sub-process to its plug-in map's panel, so
-        # the stacked SVG is navigable: click a stub to jump to its
-        # sub-model. Only STATIC single-binding stubs get a direct link;
-        # a DYNAMIC (multi-binding) stub selects among several plug-ins by
-        # precondition and can't be one href — those are left unlinked for
-        # now (a picker is future work).
-        _map_index = {id(m): i for i, m in enumerate(ucm.maps)}
-        stub_links: Dict[int, Any] = {}
-        for _m in ucm.maps:
-            for _node in _m.nodes:
-                if not isinstance(_node, pm4py_ucm.UCM.Stub):
-                    continue
-                if getattr(_node, "dynamic", False) or len(_node.bindings) != 1:
-                    continue
-                _plugin = _node.bindings[0].plugin
-                _pi = _map_index.get(id(_plugin))
-                if _pi is not None:
-                    stub_links[id(_node)] = (
-                        f"#pm-map-{_pi}",
-                        f"Go to sub-map: {_plugin.name or f'Map{_pi}'}",
-                    )
-
-        panels = []
-        for idx, ucm_map in enumerate(ucm.maps):
-            gviz = _classic.apply(
-                ucm, parameters={"style": style, "map_index": idx,
-                                 "format": "svg", "stub_links": stub_links})
-            name = ucm_map.name or f"Map{idx}"
-            panels.append(
-                (name, _svg_body(gviz.pipe(format="svg").decode("utf-8"))))
-        return _stack_svgs(panels)
+        return _model_svg(ucm, style)
 
 
 def _render_png(ucm, style: str, out_path: str) -> str:
@@ -1102,6 +1185,51 @@ def _render_family_cell(
         return None
 
 
+@st.cache_data(show_spinner=False)
+def _render_family_cell_svg(
+    mine_fingerprint: str,
+    style: str,
+    cell_index: int,
+    _family,
+) -> Optional[str]:
+    """One cell's model as a navigable inline SVG for the Compare tab.
+
+    Cached on ``(mining run, notation, cell)`` — ``_family`` excluded
+    from the key (underscore), same convention as
+    :func:`_render_family_cell`. A decomposed cell keeps its stub links
+    inside itself. ``None`` when rendering is unavailable."""
+    try:
+        return _model_svg(_family.cells[cell_index].ucm, style)
+    except Exception:  # pragma: no cover - depends on env
+        return None
+
+
+@st.cache_data(show_spinner=False)
+def _render_family_grid_svg(
+    mine_fingerprint: str,
+    style: str,
+    _family,
+) -> Tuple[Optional[str], Optional[str]]:
+    """The whole family as one navigable SVG: every member model stacked
+    with a labelled title strip, so the grid zooms, pans and downloads as
+    vectors (the PNG grid is a flat raster composite).
+
+    Each member is rendered with a per-cell id prefix, so a stub link
+    only ever resolves within its own member — no cross-family jumps.
+    Cached on ``(mine_fingerprint, style)`` like :func:`_render_family_grid`.
+    Returns ``(svg_str, None)`` or ``(None, error_text)``."""
+    try:
+        sections: List[Tuple[str, str]] = []
+        for i, cell in enumerate(_family.cells):
+            svg = _model_svg(cell.ucm, style, id_prefix=f"{i}-")
+            sections.append((f"{cell.label} — {cell.caption}", svg))
+        if not sections:
+            return None, "no cells to render"
+        return _stack_svgs(sections, wrap_anchor=False), None
+    except Exception as exc:  # pragma: no cover - depends on env
+        return None, f"{type(exc).__name__}: {exc}"
+
+
 def _heat_styler(df, formats=None):
     """Column-wise sequential heatmap for ``st.dataframe`` without a
     matplotlib dependency (same blue ramp as the HTML report). Falls
@@ -1223,12 +1351,29 @@ def _svg_viewer(svg: str, *, height: int = 620, key: str = "svgview") -> None:
 <style>
   html, body {{ margin: 0; height: 100%; }}
   #stage {{
+    position: relative;
     width: 100%; height: {height}px; overflow: hidden;
     border: 1px solid #e2dfd8; border-radius: 8px; background: #fff;
     touch-action: none; cursor: grab;
   }}
   #stage svg {{ width: 100%; height: auto; display: block;
     transform-origin: 0 0; user-select: none; }}
+  /* Dynamic-stub picker: a plug-in chooser shown at the click. */
+  .pm-menu {{ position: absolute; z-index: 20; min-width: 180px;
+    max-width: 320px; background: #fff; border: 1px solid #cfc9bf;
+    border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.18);
+    overflow: hidden; font-family: Arial, sans-serif; }}
+  .pm-menu-head {{ padding: 6px 10px; font-size: 11px; font-weight: 700;
+    color: #6b6459; background: #f4f1ea; border-bottom: 1px solid #e2dfd8;
+    text-transform: uppercase; letter-spacing: .03em; }}
+  .pm-menu-item {{ padding: 7px 10px; cursor: pointer;
+    border-bottom: 1px solid #f0ede6; }}
+  .pm-menu-item:last-child {{ border-bottom: none; }}
+  .pm-menu-item:hover {{ background: #f7f4ee; }}
+  .pm-menu-label {{ font-size: 13px; color: #202020; font-weight: 600; }}
+  .pm-menu-cond {{ font-size: 11px; color: #8a8478; margin-top: 2px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    white-space: pre-wrap; word-break: break-word; }}
 </style>
 <div id="stage"></div>
 <script>
@@ -1240,15 +1385,73 @@ def _svg_viewer(svg: str, *, height: int = 620, key: str = "svgview") -> None:
   const svg = stage.querySelector("svg");
   if (!svg) return;
   let scale = 1, tx = 0, ty = 0, drag = false, px = 0, py = 0, moved = 0;
+  let menuEl = null;
   const apply = () => svg.style.transform =
     `translate(${{tx}}px,${{ty}}px) scale(${{scale}})`;
+  const closeMenu = () => {{ if (menuEl) {{ menuEl.remove(); menuEl = null; }} }};
+  // Pan so the target panel's top meets the viewport.
+  const panTo = (href) => {{
+    const target = svg.querySelector(href);
+    if (!target) return;
+    const tr = target.getBoundingClientRect();
+    const sr = stage.getBoundingClientRect();
+    ty += (sr.top - tr.top) + 10;
+    apply();
+  }};
+  // A dynamic stub links to a hidden <g id="pm-stub-menu-…"> carrying one
+  // <g class="pm-binding" data-target/label/cond> per plug-in. Show them
+  // as a picker at the click; choosing one pans to that plug-in's panel.
+  const showMenu = (menuHref, cx, cy) => {{
+    closeMenu();
+    const menu = svg.querySelector(menuHref);
+    if (!menu) return;
+    const rows = menu.querySelectorAll(".pm-binding");
+    if (!rows.length) return;
+    const el = document.createElement("div");
+    el.className = "pm-menu";
+    const sr = stage.getBoundingClientRect();
+    el.style.left = Math.min(Math.max(4, cx - sr.left), sr.width - 190) + "px";
+    el.style.top = Math.max(4, cy - sr.top) + "px";
+    const head = document.createElement("div");
+    head.className = "pm-menu-head";
+    const stub = menu.getAttribute("data-stub") || "";
+    head.textContent = "Go to plug-in" + (stub ? ": " + stub : "");
+    el.appendChild(head);
+    rows.forEach((r) => {{
+      const item = document.createElement("div");
+      item.className = "pm-menu-item";
+      const lab = document.createElement("div");
+      lab.className = "pm-menu-label";
+      lab.textContent = r.getAttribute("data-label") || "plug-in";
+      item.appendChild(lab);
+      const cond = r.getAttribute("data-cond");
+      if (cond) {{
+        const c = document.createElement("div");
+        c.className = "pm-menu-cond";
+        c.textContent = "[" + cond + "]";
+        item.appendChild(c);
+      }}
+      item.addEventListener("click", (ev) => {{
+        ev.stopPropagation();
+        const t = r.getAttribute("data-target");
+        closeMenu();
+        if (t) panTo(t);
+      }});
+      el.appendChild(item);
+    }});
+    stage.appendChild(el);
+    menuEl = el;
+  }};
   stage.addEventListener("wheel", (e) => {{
     e.preventDefault();
+    closeMenu();
     const f = e.deltaY < 0 ? 1.1 : 1 / 1.1;
     scale = Math.min(12, Math.max(0.2, scale * f));
     apply();
   }}, {{ passive: false }});
   stage.addEventListener("pointerdown", (e) => {{
+    if (e.target.closest && e.target.closest(".pm-menu")) return;
+    closeMenu();
     drag = true; moved = 0; px = e.clientX; py = e.clientY;
     stage.setPointerCapture(e.pointerId); stage.style.cursor = "grabbing";
   }});
@@ -1262,22 +1465,23 @@ def _svg_viewer(svg: str, *, height: int = 620, key: str = "svgview") -> None:
   const stop = () => {{ drag = false; stage.style.cursor = "grab"; }};
   stage.addEventListener("pointerup", stop);
   stage.addEventListener("pointerleave", stop);
-  // Click a stub / sub-process to jump to its plug-in map. graphviz
-  // emits <a xlink:href="#pm-map-N">; pan so that panel's top meets the
-  // viewport. Suppressed after a drag so panning never triggers a jump.
+  // Click a stub / sub-process to navigate. graphviz emits an SVG anchor;
+  // a static stub links #pm-map-N (pan to that panel), a dynamic stub
+  // links #pm-stub-menu-N (open the plug-in picker). Suppressed after a
+  // drag so panning never triggers a jump.
   stage.addEventListener("click", (e) => {{
+    if (e.target.closest && e.target.closest(".pm-menu")) return;
     if (moved > 6) return;
     const a = e.target.closest && e.target.closest("a");
     if (!a) return;
     const href = a.getAttribute("xlink:href") || a.getAttribute("href") || "";
-    if (!href.startsWith("#pm-map-")) return;
-    e.preventDefault();
-    const target = svg.querySelector(href);
-    if (!target) return;
-    const tr = target.getBoundingClientRect();
-    const sr = stage.getBoundingClientRect();
-    ty += (sr.top - tr.top) + 10;   // bring the panel's top into view
-    apply();
+    if (href.startsWith("#pm-stub-menu-")) {{
+      e.preventDefault();
+      showMenu(href, e.clientX, e.clientY);
+    }} else if (href.startsWith("#pm-map-")) {{
+      e.preventDefault();
+      panTo(href);
+    }}
   }});
 }})();
 </script>""",
@@ -2540,6 +2744,21 @@ if _view == "Family":
                         f"Grid rendering unavailable: {grid_error}"
                     )
 
+                # Navigable vector version of the grid — every member
+                # stacked with a labelled title; zoom/pan, and for a
+                # decomposed member click a stub to jump to its sub-map
+                # (always within that same member). Opt-in so the compact
+                # 2-D PNG grid stays the default overview.
+                grid_svg, grid_svg_err = _render_family_grid_svg(
+                    st.session_state["family_fp"], style, fam["family"],
+                )
+                if grid_svg is not None:
+                    with st.expander(
+                        "Interactive SVG — zoom, pan, click stubs to "
+                        "navigate", expanded=False,
+                    ):
+                        _svg_viewer(grid_svg, height=620, key="familysvg")
+
                 st.subheader("Cells")
                 st.dataframe(
                     fam["summary_df"], use_container_width=True,
@@ -2582,6 +2801,19 @@ if _view == "Family":
                         ),
                         mime="image/png",
                     )
+                if grid_svg is not None:
+                    fd4.download_button(
+                        "Grid SVG", data=grid_svg.encode("utf-8"),
+                        file_name=_safe_download_name(
+                            f"{stem}_family_grid_{style}", ".svg",
+                        ),
+                        mime="image/svg+xml",
+                        help="Vector grid — crisp at any zoom, text "
+                             "selectable. Members are stacked with "
+                             "labelled titles.",
+                    )
+                elif grid_svg_err:
+                    fd4.caption(f"SVG unavailable: {grid_svg_err}")
                 report_bytes, report_error = _build_family_report(
                     st.session_state["family_fp"], style,
                     fam["family"], fam["stats"],
@@ -2709,24 +2941,51 @@ if _view == "Compare":
             )
 
         # ---- models side by side ----------------------------------------
-        st.caption("Double-click either model to open it full-size in a "
-                   "new browser tab.")
+        # SVG is the on-screen default (crisp zoom/pan, selectable text);
+        # a decomposed member's stubs are clickable and stay inside that
+        # member. PNG stays available as a download.
+        st.caption("Zoom and drag to pan each model. For a decomposed "
+                   "member, click a stub to jump to its sub-map; a "
+                   "dynamic stub opens a plug-in picker.")
+        _cmp_stem = Path(log_name).stem
         _imc = st.columns(2)
         for _col, _tag, _idx, _cell in (
                 (_imc[0], "A", _ia, _A), (_imc[1], "B", _ib, _B)):
             with _col:
-                _png = _render_family_cell(
-                    _cmp_fp, style, _idx, _cmp_fam["family"],
-                )
                 _cap = (
                     f"{_tag} — {_cell.label} · n={_cell.n_cases} "
                     f"({_cell.coverage * 100:.1f}% of the log)"
                 )
+                _csvg = _render_family_cell_svg(
+                    _cmp_fp, style, _idx, _cmp_fam["family"],
+                )
+                if _csvg is not None:
+                    _svg_viewer(_csvg, height=460, key=f"cmpsvg{_tag}")
+                    st.caption(_cap)
+                    _dlc = st.columns(2)
+                    _dlc[0].download_button(
+                        "SVG", data=_csvg.encode("utf-8"),
+                        file_name=_safe_download_name(
+                            f"{_cmp_stem}_compare_{_tag}_{style}", ".svg"),
+                        mime="image/svg+xml", key=f"cmpsvgdl{_tag}",
+                    )
+                    _png = _render_family_cell(
+                        _cmp_fp, style, _idx, _cmp_fam["family"],
+                    )
+                    if _png is not None:
+                        _dlc[1].download_button(
+                            "PNG", data=_png,
+                            file_name=_safe_download_name(
+                                f"{_cmp_stem}_compare_{_tag}_{style}", ".png"),
+                            mime="image/png", key=f"cmppngdl{_tag}",
+                        )
+                    continue
+                # SVG unavailable — fall back to the PNG image (with the
+                # shared double-click-to-open-in-a-new-tab behaviour).
+                _png = _render_family_cell(
+                    _cmp_fp, style, _idx, _cmp_fam["family"],
+                )
                 if _png is not None:
-                    # data-opentab="1" opts into the shared double-click
-                    # handler (installed by the Model tab, which always
-                    # renders before this tab) so the model opens in a
-                    # new tab — the same behaviour as the Model tab.
                     _cb64 = base64.b64encode(_png).decode("ascii")
                     st.markdown(
                         f'<img src="data:image/png;base64,{_cb64}" '
