@@ -38,6 +38,36 @@ const STATE_LABEL = { met: "MET", risk: "AT RISK", missed: "MISSED" };
 //: a 2-column card.
 const BAR_CAP = 24;
 
+//: Aggregations offered per result type — mirror of catalog.AGGS_BY_TYPE,
+//: needed here because a ƒ custom metric has no catalog entry to read
+//: them from.
+const AGGS_BY_TYPE = {
+  time: ["avg", "median", "p90", "min", "max"],
+  count: ["avg", "median", "p90", "sum", "min", "max"],
+  percent: ["share"],
+  rate: ["avg", "median", "p90", "max"],
+};
+const CUSTOM_DEFAULT_AGG = { percent: "share", time: "avg", count: "avg" };
+
+//: Insertable functions shown in the formula editor, grouped as the
+//: handoff's rail is.
+const FORMULA_HELP = [
+  ["case", [
+    ["contains(\"act\")", "1 if the case has the activity"],
+    ["count(\"act\")", "how many times the activity occurs"],
+    ["duration()", "case length, in days"],
+    ["attr(\"name\")", "a numeric case attribute"],
+  ]],
+  ["time", [
+    ["time_between(\"a\", \"b\")", "days from first a to the next b"],
+    ["timestamp(\"act\")", "when the activity first occurs"],
+  ]],
+  ["combine", [
+    ["where", "keep only cases matching a condition"],
+    ["and", "both are true"], ["or", "either is true"], ["not", "negate"],
+  ]],
+];
+
 export class Dashboard {
   /**
    * @param {HTMLElement} root
@@ -803,12 +833,80 @@ export class Dashboard {
       }
       metricSel.append(group);
     }
+    metricSel.append(h("optgroup", { label: "ƒ" },
+      h("option", { value: "custom",
+        title: "Write your own metric over the log" },
+        "ƒ Custom formula…")));
 
     const aggSel = h("select", { class: "pm-select" });
     const paramsBox = h("div", {
       style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap;flex:1",
     });
     const helpNote = h("div", { class: "pm-row__note" });
+
+    // ƒ custom-formula editor: a textarea over the closed grammar, a
+    // live validity chip and inferred result type, and insertable
+    // functions. Validation and the result type come from the same
+    // engine the metric computes with, so what the chip says is exactly
+    // what will run.
+    const fxArea = h("textarea", {
+      class: "pm-fx", rows: "2", spellcheck: "false",
+      placeholder: 'e.g. contains("Payment") where attr("amount") > 500',
+    });
+    const fxChip = h("span", { class: "pm-fx__chip" });
+    const fxType = h("span", { class: "pm-tag" });
+    const fxFns = h("div", { class: "pm-fx__fns" });
+    for (const [group, fns] of FORMULA_HELP) {
+      fxFns.append(h("span", { class: "pm-fx__group" }, group));
+      for (const [text, tip] of fns) {
+        fxFns.append(h("button", {
+          class: "pm-fx__fn", type: "button", title: tip,
+          onclick: () => {
+            // Insert at the caret, then place the caret inside the first
+            // quotes so the next thing typed is the name.
+            const s = fxArea.selectionStart, e = fxArea.selectionEnd;
+            const v = fxArea.value;
+            fxArea.value = v.slice(0, s) + text + v.slice(e);
+            const q = text.indexOf('"');
+            const caret = s + (q >= 0 ? q + 1 : text.length);
+            fxArea.focus();
+            fxArea.setSelectionRange(caret, caret);
+            fxInput();
+          },
+        }, text.replace(/\(.*/, text.includes("(") ? "()" : "")));
+      }
+    }
+    const validateFormula = () => {
+      const c = E.compileFormula(fxArea.value, this.table.activities,
+        this.table.attributes.map((a) => a.name)
+          .concat(this.table.attributes.map((a) => a.label)));
+      spec.params = { formula: fxArea.value };
+      if (!c.ok) {
+        fxChip.textContent = "invalid";
+        fxChip.className = "pm-fx__chip pm-fx__chip--bad";
+        fxChip.title = c.error;
+        fxType.textContent = "";
+        fxArea.classList.add("pm-fx--bad");
+        return c;
+      }
+      fxChip.textContent = c.unknown.length ? "check names" : "valid";
+      fxChip.className = "pm-fx__chip "
+        + (c.unknown.length ? "pm-fx__chip--warn" : "pm-fx__chip--ok");
+      fxChip.title = c.unknown.length
+        ? "Not found in this log: " + c.unknown.join(", ")
+        : "";
+      fxType.textContent = c.resultType;
+      fxArea.classList.remove("pm-fx--bad");
+      return c;
+    };
+    const fxInput = () => {
+      const c = validateFormula();
+      // Result type can change with the formula, so the aggregations on
+      // offer are rebuilt from it before the preview recomputes.
+      if (c.ok) rebuildAggs(spec.agg);
+      refresh();
+    };
+    fxArea.addEventListener("input", fxInput);
 
     const titleInput = h("input", {
       class: "pm-input", type: "text", style: "flex:1;min-width:200px",
@@ -877,9 +975,25 @@ export class Dashboard {
 
     // -- wiring ------------------------------------------------------
 
-    const metric = () => this.catalog[metricSel.value];
+    const isCustom = () => metricSel.value === "custom";
+    // For a custom metric there is no catalog entry: synthesise one from
+    // the formula's live result type so the rest of the composer (aggs,
+    // viz, unit) works unchanged.
+    const metric = () => {
+      if (isCustom()) {
+        const rt = validateFormula().resultType || "count";
+        return { params: [], aggs: AGGS_BY_TYPE[rt],
+          defaultAgg: CUSTOM_DEFAULT_AGG[rt], resultType: rt,
+          label: "custom metric", help: "" };
+      }
+      return this.catalog[metricSel.value];
+    };
 
     const rebuildParams = (keep) => {
+      // The formula editor stands in for the Params row on a custom
+      // metric; the two are never shown together.
+      rows.formula.style.display = isCustom() ? "" : "none";
+      if (isCustom()) { rows.params.style.display = "none"; return; }
       const m = metric();
       paramsBox.replaceChildren();
       const prev = keep || {};
@@ -987,7 +1101,12 @@ export class Dashboard {
 
     metricSel.addEventListener("change", () => {
       // Changing the metric abandons the old params/agg — they belonged
-      // to a different measurement — so nothing is kept here.
+      // to a different measurement — so nothing is kept here. Switching
+      // to custom seeds a real formula so the preview is not born broken.
+      if (isCustom() && !fxArea.value.trim()) {
+        fxArea.value = "duration()";
+        validateFormula();
+      }
       rebuildParams(); rebuildAggs(); refresh();
     });
     aggSel.addEventListener("change", refresh);
@@ -1007,6 +1126,12 @@ export class Dashboard {
       h("span", { class: "pm-row__label" }, "Metric"), metricSel, aggSel);
     rows.params = h("div", { class: "pm-row" },
       h("span", { class: "pm-row__label" }, "Params"), paramsBox);
+    rows.formula = h("div", { class: "pm-row pm-row--fx" },
+      h("span", { class: "pm-row__label" }, "ƒ"),
+      h("div", { style: "flex:1;min-width:260px" },
+        h("div", { style: "display:flex;gap:8px;align-items:center" },
+          fxArea, fxChip, fxType),
+        fxFns));
     rows.title = h("div", { class: "pm-row" },
       h("span", { class: "pm-row__label" }, "Title"), titleInput);
     rows.filter = h("div", { class: "pm-row" },
@@ -1026,13 +1151,15 @@ export class Dashboard {
       h("span", { class: "pm-row__hint" }, "warn at"), warnInput,
       modeSel, shareLabel, shareInput, targetNote);
 
-    body.append(rows.metric, rows.title, rows.params, rows.filter,
-                rows.segment, rows.target, helpNote, preview);
+    body.append(rows.metric, rows.title, rows.params, rows.formula,
+                rows.filter, rows.segment, rows.target, helpNote, preview);
 
     // Set every control from the spec, then compute. For a fresh widget
     // the spec is the defaults; for an edit it is the saved widget, so
     // the composer opens showing exactly what is on the card.
     metricSel.value = spec.metric;
+    if (spec.metric === "custom") fxArea.value = (spec.params || {}).formula || "";
+    validateFormula();
     rebuildParams(isEdit ? spec.params : undefined);
     rebuildAggs(spec.agg);
     rowsSel.value = spec.segment.rows || "";
@@ -1070,6 +1197,10 @@ export class Dashboard {
 // ---------------------------------------------------------------------
 
 function defaultTitle(spec, metric) {
+  if (spec.metric === "custom") {
+    const f = (spec.params || {}).formula || "";
+    return f ? "ƒ " + f : "custom metric";
+  }
   const p = spec.params || {};
   const parts = [];
   if (metric.aggs.length > 1 && spec.agg !== "share") parts.push(spec.agg);

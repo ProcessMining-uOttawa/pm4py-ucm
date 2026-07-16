@@ -207,6 +207,46 @@ Interval-only metrics stay **visible** in the composer on a
 single-timestamp log, marked unavailable with a reason, rather than
 leaving a hole where a user expects service time to be.
 
+### ƒ Custom formulas
+
+A custom metric is a per-case expression in a small closed grammar,
+optionally narrowed by a `where` clause, then aggregated like any other
+metric. It exists so a user can measure something the catalog does not
+name without anyone shipping code.
+
+The grammar is parsed to an explicit AST and **never** handed to a
+language `eval` — the only operations are the ones enumerated, over the
+only data the fact table exposes. Full grammar and semantics are in the
+module docstring of
+[`formula.py`](../pm4py_ucm/algo/dashboards/formula.py); the short form:
+
+* functions: `duration()`, `contains(act)`, `count(act)`,
+  `time_between(a, b)`, `timestamp(act)`, `attr(name)`;
+* `+ - * /`, comparisons, `and` / `or` / `not`, parentheses;
+* a trailing `where <predicate>` that drops non-matching cases to null.
+
+**One value type.** Every expression evaluates, per case, to a number or
+null — there are no strings at runtime; strings are only the *names*
+inside a call. That single type is what keeps the grammar agreeing
+between the Python evaluator and the JS one, with no string/number
+coercion to get subtly wrong in two languages. `null` (a missing time, an
+absent attribute) propagates and is dropped by aggregation, exactly as
+everywhere else.
+
+**Only numeric attributes.** `attr(name)` reads a *numeric* case
+attribute; a categorical one is filtered with the widget's Filter row.
+This keeps the whole grammar single-typed.
+
+**Result type** is inferred from the AST — a comparison, a logical, or a
+bare `contains()` is a 0/1 indicator → `percent`; anything mentioning a
+time function → `time`; else → `count` — and drives the unit and the
+aggregations offered, exactly as a catalog metric's does.
+
+The evaluator exists twice, like the rest of the engine, and the parity
+suite feeds the same formulas to both. The composer's editor validates
+through the *same* `compile_formula`, so what its chip calls valid is
+exactly what will run.
+
 ### Aggregations
 
 `avg`, `median`, `p90`, `sum`, `min`, `max`, `share`. Which are offered

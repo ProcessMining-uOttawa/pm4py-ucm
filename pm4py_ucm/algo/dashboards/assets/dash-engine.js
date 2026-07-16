@@ -196,6 +196,7 @@ export function perCaseValues(t, metric, params) {
   const out = new Float64Array(n).fill(NaN);
 
   switch (metric) {
+    case "custom": return customValues(t, p.formula || "");
     case "duration": {
       for (let i = 0; i < n; i++) out[i] = t.dt[t.off[i + 1] - 1] / DAY;
       return out;
@@ -755,12 +756,380 @@ export function heat(u, dark) {
 }
 
 // ---------------------------------------------------------------------
+// The ƒ custom-metric grammar
+//
+// Mirror of pm4py_ucm/algo/dashboards/formula.py — same tokenizer,
+// parser and evaluator, pinned by the parity test. A custom metric is a
+// per-case expression over a single value type (number or null); strings
+// appear only as the names inside a call. See the Python module's
+// docstring for the grammar and the reasoning.
+// ---------------------------------------------------------------------
+
+export const FORMULA_FUNCTIONS = {
+  duration: 0, contains: 1, count: 1, time_between: 2, timestamp: 1, attr: 1,
+};
+const FORMULA_TIME_FUNCS = new Set(["duration", "time_between", "timestamp"]);
+const FORMULA_KEYWORDS = new Set(["where", "and", "or", "not"]);
+const FORMULA_CMP = new Set(["==", "!=", ">", ">=", "<", "<="]);
+
+export class FormulaError extends Error {}
+
+function formulaTokenize(text) {
+  const toks = [];
+  let i = 0;
+  const n = text.length;
+  const isDigit = (c) => c >= "0" && c <= "9";
+  const isAlpha = (c) => /[A-Za-z_]/.test(c);
+  while (i < n) {
+    const c = text[i];
+    if (c === " " || c === "\t" || c === "\r" || c === "\n") { i++; continue; }
+    if (c === "(" || c === ")") {
+      toks.push({ kind: c === "(" ? "lparen" : "rparen", value: c, pos: i });
+      i++; continue;
+    }
+    if (c === ",") { toks.push({ kind: "comma", value: c, pos: i }); i++; continue; }
+    if (c === '"' || c === "'") {
+      let j = i + 1;
+      while (j < n && text[j] !== c) j++;
+      if (j >= n) throw new FormulaError(`Unclosed string starting at position ${i}.`);
+      toks.push({ kind: "str", value: text.slice(i + 1, j), pos: i });
+      i = j + 1; continue;
+    }
+    if (isDigit(c) || (c === "." && i + 1 < n && isDigit(text[i + 1]))) {
+      let j = i;
+      while (j < n && (isDigit(text[j]) || text[j] === ".")) j++;
+      const v = Number(text.slice(i, j));
+      if (!Number.isFinite(v)) throw new FormulaError(`Bad number ${text.slice(i, j)}.`);
+      toks.push({ kind: "num", value: v, pos: i });
+      i = j; continue;
+    }
+    if (isAlpha(c)) {
+      let j = i;
+      while (j < n && /[A-Za-z0-9_]/.test(text[j])) j++;
+      const word = text.slice(i, j);
+      toks.push({ kind: FORMULA_KEYWORDS.has(word) ? "kw" : "ident",
+        value: word, pos: i });
+      i = j; continue;
+    }
+    const two = text.slice(i, i + 2);
+    if (["==", "!=", ">=", "<="].includes(two)) {
+      toks.push({ kind: "op", value: two, pos: i }); i += 2; continue;
+    }
+    if ("+-*/><".includes(c)) { toks.push({ kind: "op", value: c, pos: i }); i++; continue; }
+    if (c === "=") throw new FormulaError(`Use == for comparison, not = (position ${i}).`);
+    throw new FormulaError(`Unexpected character ${c} at position ${i}.`);
+  }
+  toks.push({ kind: "end", value: null, pos: text.length });
+  return toks;
+}
+
+class FormulaParser {
+  constructor(toks) { this.toks = toks; this.i = 0; }
+  peek() { return this.toks[this.i]; }
+  next() { return this.toks[this.i++]; }
+  expect(kind, what) {
+    const t = this.peek();
+    if (t.kind !== kind) {
+      throw new FormulaError(`Expected ${what} but found ${t.value == null ? "end of formula" : t.value}.`);
+    }
+    return this.next();
+  }
+  parse() {
+    let node = this.orExpr();
+    if (this.peek().kind === "kw" && this.peek().value === "where") {
+      this.next();
+      node = { t: "where", e: node, cond: this.orExpr() };
+    }
+    if (this.peek().kind !== "end") {
+      throw new FormulaError(`Unexpected ${this.peek().value} after the formula.`);
+    }
+    return node;
+  }
+  orExpr() {
+    let node = this.andExpr();
+    while (this.peek().kind === "kw" && this.peek().value === "or") {
+      this.next(); node = { t: "logic", op: "or", l: node, r: this.andExpr() };
+    }
+    return node;
+  }
+  andExpr() {
+    let node = this.notExpr();
+    while (this.peek().kind === "kw" && this.peek().value === "and") {
+      this.next(); node = { t: "logic", op: "and", l: node, r: this.notExpr() };
+    }
+    return node;
+  }
+  notExpr() {
+    if (this.peek().kind === "kw" && this.peek().value === "not") {
+      this.next(); return { t: "not", e: this.notExpr() };
+    }
+    return this.comparison();
+  }
+  comparison() {
+    const node = this.additive();
+    const t = this.peek();
+    if (t.kind === "op" && FORMULA_CMP.has(t.value)) {
+      this.next(); return { t: "cmp", op: t.value, l: node, r: this.additive() };
+    }
+    return node;
+  }
+  additive() {
+    let node = this.term();
+    while (this.peek().kind === "op" && (this.peek().value === "+" || this.peek().value === "-")) {
+      const op = this.next().value; node = { t: "bin", op, l: node, r: this.term() };
+    }
+    return node;
+  }
+  term() {
+    let node = this.unary();
+    while (this.peek().kind === "op" && (this.peek().value === "*" || this.peek().value === "/")) {
+      const op = this.next().value; node = { t: "bin", op, l: node, r: this.unary() };
+    }
+    return node;
+  }
+  unary() {
+    if (this.peek().kind === "op" && this.peek().value === "-") {
+      this.next(); return { t: "neg", e: this.unary() };
+    }
+    return this.primary();
+  }
+  primary() {
+    const t = this.peek();
+    if (t.kind === "num") { this.next(); return { t: "num", v: t.value }; }
+    if (t.kind === "lparen") {
+      this.next(); const node = this.orExpr(); this.expect("rparen", "a closing )");
+      return node;
+    }
+    if (t.kind === "ident") return this.call();
+    if (t.kind === "str") {
+      throw new FormulaError(`A bare string ${t.value} is not a value — strings are only names inside a function like contains("…").`);
+    }
+    throw new FormulaError(`Expected a number or a function, found ${t.value == null ? "end of formula" : t.value}.`);
+  }
+  call() {
+    const name = this.next().value;
+    if (!(name in FORMULA_FUNCTIONS)) {
+      throw new FormulaError(`Unknown function ${name}. Available: ${Object.keys(FORMULA_FUNCTIONS).sort().join(", ")}.`);
+    }
+    this.expect("lparen", `( after ${name}`);
+    const args = [];
+    if (this.peek().kind !== "rparen") {
+      args.push(this.arg());
+      while (this.peek().kind === "comma") { this.next(); args.push(this.arg()); }
+    }
+    this.expect("rparen", `a closing ) for ${name}(`);
+    const want = FORMULA_FUNCTIONS[name];
+    if (args.length !== want) {
+      throw new FormulaError(`${name}() takes ${want} argument${want === 1 ? "" : "s"}, got ${args.length}.`);
+    }
+    return { t: "call", fn: name, args };
+  }
+  arg() {
+    const t = this.peek();
+    if (t.kind === "str") { this.next(); return { t: "str", v: t.value }; }
+    throw new FormulaError('A function argument must be a quoted name like "Payment".');
+  }
+}
+
+export function parseFormula(text) {
+  if (!text || !text.trim()) throw new FormulaError("The formula is empty.");
+  return new FormulaParser(formulaTokenize(text)).parse();
+}
+
+function formulaReferencesTime(node) {
+  if (node.t === "call") return FORMULA_TIME_FUNCS.has(node.fn);
+  for (const k of Object.keys(node)) {
+    const v = node[k];
+    if (v && typeof v === "object" && !Array.isArray(v) && formulaReferencesTime(v)) return true;
+  }
+  for (const a of node.args || []) if (formulaReferencesTime(a)) return true;
+  return false;
+}
+
+export function formulaResultType(ast) {
+  const top = ast.t === "where" ? ast.e : ast;
+  if (top.t === "cmp" || top.t === "logic" || top.t === "not") return "percent";
+  if (top.t === "call" && top.fn === "contains") return "percent";
+  if (formulaReferencesTime(ast)) return "time";
+  return "count";
+}
+
+function formulaStringArgs(node, fn, out) {
+  if (node.t === "call" && node.fn === fn) {
+    for (const a of node.args) if (a.t === "str") out.push(a.v);
+  }
+  for (const k of Object.keys(node)) {
+    const v = node[k];
+    if (v && typeof v === "object" && !Array.isArray(v)) formulaStringArgs(v, fn, out);
+  }
+  for (const a of node.args || []) formulaStringArgs(a, fn, out);
+  return out;
+}
+
+function formulaPairs(node, out) {
+  if (node.t === "call" && node.fn === "time_between") {
+    const [a, b] = node.args;
+    if (a.t === "str" && b.t === "str") out.push([a.v, b.v]);
+  }
+  for (const k of Object.keys(node)) {
+    const v = node[k];
+    if (v && typeof v === "object" && !Array.isArray(v)) formulaPairs(v, out);
+  }
+  for (const a of node.args || []) formulaPairs(a, out);
+  return out;
+}
+
+/** Names the formula uses that the log lacks — a soft editor warning. */
+export function formulaUnknownNames(ast, activities, attributes) {
+  const acts = new Set(activities), attrs = new Set(attributes);
+  const usedActs = new Set();
+  for (const fn of ["contains", "count", "timestamp"]) {
+    formulaStringArgs(ast, fn, []).forEach((x) => usedActs.add(x));
+  }
+  for (const [a, b] of formulaPairs(ast, [])) { usedActs.add(a); usedActs.add(b); }
+  const missing = [...usedActs].filter((a) => !acts.has(a)).sort();
+  const usedAttrs = new Set(formulaStringArgs(ast, "attr", []));
+  for (const a of [...usedAttrs].sort()) if (!attrs.has(a)) missing.push(`attr:${a}`);
+  return missing;
+}
+
+/** Per-case value array for a formula AST; NaN is null. Mirrors evaluate(). */
+export function evaluateFormula(ast, base, nCases) {
+  const filled = (v) => { const a = new Float64Array(nCases); a.fill(v); return a; };
+  const ev = (node) => {
+    switch (node.t) {
+      case "num": return filled(node.v);
+      case "call": {
+        const args = node.args.map((a) => a.v);
+        return Float64Array.from(base[node.fn](...args));
+      }
+      case "neg": { const e = ev(node.e); return e.map((x) => -x); }
+      case "bin": {
+        const l = ev(node.l), r = ev(node.r), o = new Float64Array(nCases);
+        for (let i = 0; i < nCases; i++) {
+          const a = l[i], b = r[i];
+          let v;
+          if (node.op === "+") v = a + b;
+          else if (node.op === "-") v = a - b;
+          else if (node.op === "*") v = a * b;
+          else v = a / b;                       // divide
+          o[i] = Number.isFinite(v) ? v : NaN;  // /0 or nan input -> null
+        }
+        return o;
+      }
+      case "cmp": {
+        const l = ev(node.l), r = ev(node.r), o = new Float64Array(nCases);
+        for (let i = 0; i < nCases; i++) {
+          const a = l[i], b = r[i];
+          if (Number.isNaN(a) || Number.isNaN(b)) { o[i] = NaN; continue; }
+          o[i] = ({ "==": a === b, "!=": a !== b, ">": a > b, ">=": a >= b,
+            "<": a < b, "<=": a <= b })[node.op] ? 1 : 0;
+        }
+        return o;
+      }
+      case "logic": {
+        const l = ev(node.l), r = ev(node.r), o = new Float64Array(nCases);
+        for (let i = 0; i < nCases; i++) {
+          const a = l[i], b = r[i];
+          if (Number.isNaN(a) || Number.isNaN(b)) { o[i] = NaN; continue; }
+          o[i] = (node.op === "and" ? (a !== 0 && b !== 0) : (a !== 0 || b !== 0)) ? 1 : 0;
+        }
+        return o;
+      }
+      case "not": {
+        const e = ev(node.e), o = new Float64Array(nCases);
+        for (let i = 0; i < nCases; i++) o[i] = Number.isNaN(e[i]) ? NaN : (e[i] === 0 ? 1 : 0);
+        return o;
+      }
+      case "where": {
+        const val = ev(node.e), cond = ev(node.cond), o = new Float64Array(nCases);
+        for (let i = 0; i < nCases; i++) {
+          o[i] = (Number.isFinite(cond[i]) && cond[i] !== 0) ? val[i] : NaN;
+        }
+        return o;
+      }
+      default: throw new FormulaError(`Cannot evaluate node ${node.t}.`);
+    }
+  };
+  return ev(ast);
+}
+
+/** compile_formula's mirror: {ok, ast, resultType, error, unknown}. */
+export function compileFormula(text, activities = [], attributes = []) {
+  let ast;
+  try { ast = parseFormula(text); }
+  catch (e) {
+    return { ok: false, ast: null, resultType: null,
+      error: String(e && e.message || e), unknown: [] };
+  }
+  return { ok: true, ast, resultType: formulaResultType(ast), error: null,
+    unknown: formulaUnknownNames(ast, activities, attributes) };
+}
+
+/** The per-case primitives the ƒ functions resolve to — mirror of
+ *  engine._formula_base. Reuses perCaseValues so a formula and a catalog
+ *  widget agree on what each function means. */
+function formulaBase(t) {
+  const attrOf = (name) => {
+    const attr = attributeOf(t, name);
+    const out = new Float64Array(t.nCases).fill(NaN);
+    if (!attr || attr.type !== "integer") return out;   // numeric only
+    const buf = t.buffers[attr.buffer];
+    for (let i = 0; i < t.nCases; i++) out[i] = buf[i];
+    return out;
+  };
+  const timestampOf = (act) => {
+    const code = t.activities.indexOf(act);
+    const out = new Float64Array(t.nCases).fill(NaN);
+    if (code < 0) return out;
+    for (let i = 0; i < t.nCases; i++) {
+      for (let j = t.off[i]; j < t.off[i + 1]; j++) {
+        if (t.act[j] === code) { out[i] = t.starts[i] + t.dt[j]; break; }
+      }
+    }
+    return out;
+  };
+  return {
+    duration: () => perCaseValues(t, "duration"),
+    contains: (a) => perCaseValues(t, "actPresence", { activity: a }),
+    count: (a) => perCaseValues(t, "actFreq", { activity: a }),
+    time_between: (a, b) => perCaseValues(t, "timeBetween", { from: a, to: b }),
+    timestamp: timestampOf,
+    attr: attrOf,
+  };
+}
+
+/** Per-case values for a custom formula; a bad formula yields all-null. */
+export function customValues(t, formula) {
+  try {
+    return evaluateFormula(parseFormula(formula), formulaBase(t), t.nCases);
+  } catch (e) {
+    return new Float64Array(t.nCases).fill(NaN);
+  }
+}
+
+// ---------------------------------------------------------------------
 // Widget computation
 // ---------------------------------------------------------------------
 
+const CUSTOM_DEFAULT_AGG = { percent: "share", time: "avg", count: "avg" };
+
+/** The metric a widget measures — a catalog entry, or a synthetic one for
+ *  a ƒ custom formula. Mirror of engine._resolve_metric. */
+function resolveMetric(spec, catalog) {
+  if (spec.metric === "custom") {
+    const rtype = compileFormula((spec.params || {}).formula || "").resultType
+      || "count";
+    return { resultType: rtype, defaultAgg: CUSTOM_DEFAULT_AGG[rtype],
+      label: spec.title || spec.customName || "custom metric" };
+  }
+  const m = catalog[spec.metric];
+  if (!m) throw new Error(`Unknown metric ${spec.metric}`);
+  return m;
+}
+
 export function computeWidget(spec, t, catalog, dashboardFilters) {
-  const metric = catalog[spec.metric];
-  if (!metric) throw new Error(`Unknown metric ${spec.metric}`);
+  const metric = resolveMetric(spec, catalog);
 
   const filters = [...(dashboardFilters || []), ...(spec.filter || [])];
   const mask = applyFilters(t, filters);
@@ -937,7 +1306,8 @@ function grid(t, values, rowsAx, colsAx, aggKind, unit, target) {
  */
 export function targetGoalText(spec, catalog) {
   const target = spec.target || {};
-  const metric = catalog[spec.metric];
+  let metric;
+  try { metric = resolveMetric(spec, catalog || {}); } catch (e) { metric = null; }
   const unit = metric ? UNIT_BY_TYPE[metric.resultType] : "";
   const suffix = unit === "d" ? " d" : unit === "%" ? "%" : "";
   const arrow = target.dir === ">=" ? "≥" : "≤";

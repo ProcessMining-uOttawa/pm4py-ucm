@@ -649,6 +649,44 @@
 .pm-toggle[aria-pressed="true"] { background: var(--garnet); }
 .pm-toggle[aria-pressed="true"]::after { left: 18px; }
 
+/* ƒ custom-formula editor */
+.pm-fx {
+  flex: 1;
+  width: 100%;
+  font-family: var(--f-mono);
+  font-size: 12.5px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--border-ctl);
+  border-radius: 6px;
+  padding: 7px 9px;
+  resize: vertical;
+}
+.pm-fx:focus { outline: none; border-color: var(--garnet); }
+.pm-fx--bad { border-color: var(--missed-fg); }
+.pm-fx__chip {
+  font-family: var(--f-mono); font-size: 10px; font-weight: 600;
+  border-radius: 12px; padding: 2px 8px; white-space: nowrap;
+  cursor: help;
+}
+.pm-fx__chip--ok { background: var(--met-bg); color: var(--met-fg); }
+.pm-fx__chip--warn { background: var(--risk-bg); color: var(--risk-fg); }
+.pm-fx__chip--bad { background: var(--missed-bg); color: var(--missed-fg); }
+.pm-fx__fns {
+  display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
+  margin-top: 6px;
+}
+.pm-fx__group {
+  font-size: 9px; font-weight: 600; letter-spacing: .06em;
+  color: var(--faint); text-transform: uppercase; margin: 0 2px 0 4px;
+}
+.pm-fx__fn {
+  font-family: var(--f-mono); font-size: 10.5px;
+  color: var(--garnet); background: var(--garnet-tint);
+  border: 0; border-radius: 5px; padding: 2px 7px; cursor: pointer;
+}
+.pm-fx__fn:hover { background: var(--garnet); color: var(--on-garnet); }
+
 .pm-preview {
   background: var(--paper);
   border: 1px solid var(--border);

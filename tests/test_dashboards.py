@@ -673,6 +673,190 @@ class TestCatalog:
 
 
 # ---------------------------------------------------------------------------
+# ƒ custom-metric grammar
+# ---------------------------------------------------------------------------
+
+from pm4py_ucm.algo.dashboards import (  # noqa: E402
+    FormulaError, compile_formula, parse_formula, result_type,
+)
+from pm4py_ucm.algo.dashboards.engine import custom_values  # noqa: E402
+
+
+class TestFormulaParsing:
+
+    def test_empty_is_an_error(self):
+        assert compile_formula("")["ok"] is False
+        assert compile_formula("   ")["error"] == "The formula is empty."
+
+    def test_unknown_function(self):
+        c = compile_formula('frequency("A")')
+        assert not c["ok"] and "Unknown function" in c["error"]
+
+    def test_wrong_arity(self):
+        assert "takes 1 argument" in compile_formula("contains()")["error"]
+        assert "takes 0 arguments" in compile_formula("duration(\"A\")")["error"]
+
+    def test_single_equals_is_caught(self):
+        assert "Use ==" in compile_formula("duration() = 5")["error"]
+
+    def test_bare_string_rejected(self):
+        assert not compile_formula('"Payment"')["ok"]
+
+    def test_non_string_argument_rejected(self):
+        assert not compile_formula("count(5)")["ok"]
+
+    def test_unbalanced_parens(self):
+        assert not compile_formula("duration( >")["ok"]
+        assert not compile_formula("(duration()")["ok"]
+
+    @pytest.mark.parametrize("formula,want", [
+        ("duration()", "time"),
+        ('time_between("A", "B")', "time"),
+        ('timestamp("A")', "time"),
+        ('count("A")', "count"),
+        ('count("A") + 1', "count"),
+        ("duration() > 5", "percent"),
+        ('contains("A")', "percent"),
+        ('contains("A") and contains("B")', "percent"),
+        ('not contains("A")', "percent"),
+        ('duration() where contains("A")', "time"),
+        ('contains("A") where duration() > 5', "percent"),
+    ])
+    def test_result_type(self, formula, want):
+        assert compile_formula(formula)["resultType"] == want
+
+    def test_unknown_names_are_warned_not_errors(self):
+        c = compile_formula('contains("Nope") + attr("ghost")',
+                            activities=["A"], attributes=["amount"])
+        assert c["ok"] is True
+        assert "Nope" in c["unknown"]
+        assert "attr:ghost" in c["unknown"]
+
+
+class TestFormulaEvaluation:
+    """Evaluated against the hand-computable four-case fixture."""
+
+    def test_duration(self, table):
+        v = custom_values(table, "duration()")
+        assert list(v) == [3.0, 6.0, 4.0, 8.0]
+
+    def test_count(self, table):
+        assert list(custom_values(table, 'count("A")')) == [1, 1, 1, 2]
+
+    def test_contains_is_zero_one(self, table):
+        assert list(custom_values(table, 'contains("B")')) == [1, 1, 0, 1]
+
+    def test_comparison(self, table):
+        # durations 3,6,4,8 > 4  ->  0,1,0,1
+        assert list(custom_values(table, "duration() > 4")) == [0, 1, 0, 1]
+
+    def test_arithmetic(self, table):
+        # count(A): 1,1,1,2 ; count(C): 1,1,1,1 -> A + C*2
+        assert list(custom_values(table, 'count("A") + count("C") * 2')) \
+            == [3, 3, 3, 4]
+
+    def test_where_excludes_via_null(self, table):
+        v = custom_values(table, 'duration() where contains("B")')
+        # c2 has no B -> null, not zero
+        assert np.isnan(v[2])
+        assert aggregate(v, "avg") == pytest.approx((3 + 6 + 8) / 3)
+
+    def test_logic_and(self, table):
+        # contains(B): 1,1,0,1 ; duration()>5: 0,1,0,1  -> and
+        assert list(custom_values(table, 'contains("B") and duration() > 5')) \
+            == [0, 1, 0, 1]
+
+    def test_not(self, table):
+        assert list(custom_values(table, 'not contains("B")')) == [0, 0, 1, 0]
+
+    def test_null_propagates_through_arithmetic(self, table):
+        # time_between A->B is null for c2 (no B); +1 stays null
+        v = custom_values(table, 'time_between("A", "B") + 1')
+        assert np.isnan(v[2])
+        assert not np.isnan(v[0])
+
+    def test_divide_by_zero_is_null_not_inf(self, table):
+        v = custom_values(table, '1 / (count("B") - 1)')  # c0,c1,c3 have 1 B
+        # count(B)-1 == 0 for those -> null, not inf
+        assert np.isnan(v[0])
+
+    def test_attr_numeric(self):
+        df = pd.DataFrame([
+            {"case:concept:name": "c1", "concept:name": "A",
+             "time:timestamp": pd.Timestamp("2026-01-01", tz="UTC"),
+             "case:amount": 100},
+            {"case:concept:name": "c2", "concept:name": "A",
+             "time:timestamp": pd.Timestamp("2026-01-02", tz="UTC"),
+             "case:amount": 900},
+        ])
+        t = build_fact_table(df)
+        v = custom_values(t, 'attr("case:amount") > 500')
+        assert list(v) == [0, 1]
+
+    def test_broken_formula_is_all_null_not_a_crash(self, table):
+        v = custom_values(table, "duration( >")
+        assert np.all(np.isnan(v))
+
+
+class TestFormulaWidget:
+
+    def test_custom_metric_in_a_widget(self, table):
+        w = compute_widget({
+            "id": "c", "metric": "custom", "viz": "kpi",
+            "params": {"formula": "duration() > 4"},
+        }, table)
+        assert w["resultType"] == "percent"
+        assert w["agg"] == "share"
+        assert w["value"] == pytest.approx(50.0)   # 2 of 4 over 4 days
+
+    def test_custom_time_metric_unit(self, table):
+        w = compute_widget({
+            "id": "c", "metric": "custom", "viz": "kpi", "agg": "avg",
+            "params": {"formula": "duration()"},
+        }, table)
+        assert w["unit"] == "d"
+        assert w["value"] == pytest.approx(5.25)
+
+    def test_broken_custom_widget_renders_empty(self, table):
+        w = compute_widget({"id": "c", "metric": "custom", "viz": "kpi",
+                            "params": {"formula": "count("}}, table)
+        assert w["text"] == "—"
+
+
+class TestFormulaEditor:
+    """The composer's ƒ editor, checked at the source level (the browser
+    behaviour is verified live, not in CI)."""
+
+    def test_composer_offers_a_custom_option(self):
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        assert 'value: "custom"' in ui
+        assert "ƒ Custom formula" in ui
+
+    def test_editor_validates_with_the_same_engine_it_computes_with(self):
+        """The chip and result type come from E.compileFormula, so what
+        the editor says is valid is exactly what will run."""
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        assert "E.compileFormula(fxArea.value" in ui
+
+    def test_editor_rebuilds_aggregations_from_the_result_type(self):
+        """The result type changes with the formula, so the aggregations
+        on offer must follow it."""
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        assert "AGGS_BY_TYPE" in ui and "rebuildAggs(spec.agg)" in ui
+
+    def test_js_agg_table_matches_the_python_catalog(self):
+        """AGGS_BY_TYPE is duplicated into JS because a custom metric has
+        no catalog entry; it must still agree with the Python source."""
+        from pm4py_ucm.algo.dashboards.catalog import AGGS_BY_TYPE
+
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        for rtype, aggs in AGGS_BY_TYPE.items():
+            # Each type's list appears verbatim in the JS table.
+            js_list = ", ".join(f'"{a}"' for a in aggs)
+            assert js_list in ui, f"{rtype}: {js_list}"
+
+
+# ---------------------------------------------------------------------------
 # The self-contained artifact
 # ---------------------------------------------------------------------------
 
@@ -1025,6 +1209,30 @@ _PARITY_SPECS = [
      "agg": "sum"},
     {"id": "series-completion", "metric": "completionRate", "viz": "bar",
      "agg": "sum"},
+    # ƒ custom formulas — the parity-risky part is the evaluator's
+    # arithmetic / comparison / logic / where / null propagation, all of
+    # which these exercise on the fixture's A/B/C activities.
+    {"id": "cust-count", "metric": "custom", "viz": "kpi", "agg": "avg",
+     "params": {"formula": 'count("A")'}},
+    {"id": "cust-contains", "metric": "custom", "viz": "kpi",
+     "params": {"formula": 'contains("B")'}},
+    {"id": "cust-cmp", "metric": "custom", "viz": "kpi",
+     "params": {"formula": "duration() > 4"}},
+    {"id": "cust-arith", "metric": "custom", "viz": "kpi", "agg": "avg",
+     "params": {"formula": 'count("A") + count("C") * 2'}},
+    {"id": "cust-where", "metric": "custom", "viz": "kpi", "agg": "avg",
+     "params": {"formula": 'duration() where contains("B")'}},
+    {"id": "cust-logic", "metric": "custom", "viz": "kpi",
+     "params": {"formula": 'contains("B") and duration() > 5'}},
+    {"id": "cust-not", "metric": "custom", "viz": "kpi",
+     "params": {"formula": 'not contains("B")'}},
+    {"id": "cust-tb", "metric": "custom", "viz": "kpi", "agg": "median",
+     "params": {"formula": 'time_between("A", "C")'}},
+    {"id": "cust-seg", "metric": "custom", "viz": "table", "agg": "avg",
+     "params": {"formula": 'count("A")'},
+     "segment": {"rows": "attr:case:country", "cols": "resource"}},
+    {"id": "cust-broken", "metric": "custom", "viz": "kpi",
+     "params": {"formula": "duration( >"}},
 ]
 
 _PARITY_DASHBOARD_FILTERS = [

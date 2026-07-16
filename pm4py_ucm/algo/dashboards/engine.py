@@ -220,6 +220,9 @@ def per_case_values(table: FactTable, metric: str,
     off = table.offsets.astype(np.int64)
     dt = table.dt.astype(np.float64)
 
+    if metric == "custom":
+        return custom_values(table, p.get("formula", ""))
+
     if metric == "duration":
         # Events are time-ordered, so the case's last dt is its span.
         last = off[1:] - 1
@@ -305,6 +308,65 @@ def per_case_values(table: FactTable, metric: str,
         )
 
     raise ValueError(f"Unknown metric {metric!r}")
+
+
+def _formula_base(table: FactTable) -> Dict[str, Any]:
+    """The per-case primitives the ƒ grammar's functions resolve to.
+
+    Each returns an ``[n_cases]`` array. They are the *same* computations
+    the catalog metrics use, routed through :func:`per_case_values`, so a
+    formula and a catalog widget can never disagree about what
+    ``duration()`` or ``count("X")`` means.
+    """
+    import numpy as np
+
+    def timestamp(act: str):
+        first = _first_occurrence(table, _act_code(table, act))
+        out = np.full(table.n_cases, np.nan)
+        ok = first >= 0
+        # Absolute epoch seconds of the first occurrence.
+        starts = table.starts.astype(np.float64)
+        owner = _case_of_event(table)
+        out[ok] = starts[ok] + table.dt.astype(np.float64)[first[ok]]
+        return out
+
+    def attr(name: str):
+        values, spec = case_attribute_values(table, name)
+        if values is None or spec is None or spec.type != "integer":
+            # Only numeric attributes are values; a categorical one is
+            # filtered with the widget's Filter row, not read here.
+            return np.full(table.n_cases, np.nan)
+        return np.asarray(values, dtype=np.float64)
+
+    return {
+        "duration": lambda: per_case_values(table, "duration"),
+        "contains": lambda a: per_case_values(table, "actPresence",
+                                              {"activity": a}),
+        "count": lambda a: per_case_values(table, "actFreq", {"activity": a}),
+        "time_between": lambda a, b: per_case_values(
+            table, "timeBetween", {"from": a, "to": b}),
+        "timestamp": timestamp,
+        "attr": attr,
+    }
+
+
+def custom_values(table: FactTable, formula: str):
+    """``[n_cases]`` value array for a ƒ custom-metric formula.
+
+    Parse errors surface as an all-``NaN`` result rather than an
+    exception, so a widget carrying a broken formula renders as empty
+    ("—") instead of taking the dashboard down — the composer is where a
+    formula is validated before it is ever saved.
+    """
+    import numpy as np
+
+    from .formula import FormulaError, evaluate, parse
+
+    try:
+        ast = parse(formula)
+        return evaluate(ast, _formula_base(table), table.n_cases)
+    except (FormulaError, KeyError, ValueError):
+        return np.full(table.n_cases, np.nan)
 
 
 def _rework(table: FactTable):
@@ -819,6 +881,37 @@ def fmt(value: Optional[float], unit: str) -> str:
 # Widget computation
 # ---------------------------------------------------------------------------
 
+#: Default aggregation for a ƒ custom metric, by inferred result type.
+_CUSTOM_DEFAULT_AGG = {"percent": "share", "time": "avg", "count": "avg"}
+
+
+def _resolve_metric(spec: Dict[str, Any]):
+    """The metric a widget measures — a catalog entry, or a synthetic one
+    for a ƒ custom formula whose result type is inferred from the AST.
+
+    ``compute_widget`` only reads ``result_type``, ``default_agg`` and
+    ``label``, so the synthetic object carries just those.
+    """
+    from types import SimpleNamespace
+
+    metric_id = spec.get("metric", "")
+    if metric_id == "custom":
+        from .formula import compile_formula
+
+        formula = (spec.get("params") or {}).get("formula", "")
+        rtype = compile_formula(formula)["resultType"] or "count"
+        return SimpleNamespace(
+            result_type=rtype,
+            default_agg=_CUSTOM_DEFAULT_AGG[rtype],
+            label=spec.get("title") or spec.get("customName")
+            or "custom metric",
+        )
+    metric = BY_ID.get(metric_id)
+    if metric is None:
+        raise ValueError(f"Unknown metric {metric_id!r}")
+    return metric
+
+
 def compute_widget(spec: Dict[str, Any], table: FactTable, *,
                    dashboard_filters: Optional[Sequence[Dict[str, Any]]] = None
                    ) -> Dict[str, Any]:
@@ -836,9 +929,7 @@ def compute_widget(spec: Dict[str, Any], table: FactTable, *,
     import numpy as np
 
     metric_id = spec.get("metric", "")
-    metric = BY_ID.get(metric_id)
-    if metric is None:
-        raise ValueError(f"Unknown metric {metric_id!r}")
+    metric = _resolve_metric(spec)
 
     filters = list(dashboard_filters or []) + list(spec.get("filter") or [])
     mask = apply_filters(table, filters)
@@ -1056,7 +1147,10 @@ def target_goal_text(spec: Dict[str, Any]) -> str:
     difference but a different claim.
     """
     target = spec.get("target") or {}
-    metric = BY_ID.get(spec.get("metric", ""))
+    try:
+        metric = _resolve_metric(spec)
+    except ValueError:
+        metric = None
     unit = UNIT_BY_TYPE[metric.result_type] if metric else ""
     suffix = " d" if unit == "d" else ("%" if unit == "%" else "")
     arrow = "≥" if target.get("dir") == ">=" else "≤"

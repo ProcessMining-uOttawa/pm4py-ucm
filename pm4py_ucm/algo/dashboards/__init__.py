@@ -52,6 +52,13 @@ from .view import (  # noqa: F401
     dashboard_html,
     write_dashboard,
 )
+from .formula import (  # noqa: F401
+    FUNCTIONS,
+    FormulaError,
+    compile_formula,
+    parse as parse_formula,
+    result_type,
+)
 from .engine import (  # noqa: F401
     AGGS,
     STATE_UI,
