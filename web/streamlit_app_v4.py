@@ -88,6 +88,23 @@ from PIL import Image as _PILImage
 _PILImage.MAX_IMAGE_PIXELS = 1_000_000_000
 
 
+def _embed_html(html: str, *, height: int, scrolling: bool = False) -> None:
+    """Embed a self-contained HTML document in a sandboxed iframe.
+
+    THE single seam for ``st.components.v1.html`` — every island (the
+    Dashboards view, the SVG model viewer, the open-image-in-tab button)
+    goes through here. ``st.components.v1.html`` is deprecated in favour
+    of ``st.iframe`` (see the tracking issue): ``st.iframe`` takes a
+    URL/Path rather than an HTML string, so migrating means serving each
+    artifact from a file — a change confined to THIS function instead of
+    scattered across the app. ``st.html`` is not an option for these:
+    they need the iframe's isolated JS realm (and, for the open-in-tab
+    button, its sandboxed popup escape), which inline ``st.html`` does
+    not give.
+    """
+    _components.html(html, height=height, scrolling=scrolling)
+
+
 _SAMPLES_DIR = Path(__file__).resolve().parent / "samples"
 _DISPLAY_WIDTH_PX = 1100
 _NONE_OPT = "(none)"
@@ -1286,8 +1303,7 @@ def _open_image_in_tab_button(png_b64: str, label: str = "Open image "
     *current* ``src`` at click time, so re-rendered models never open
     stale; a delegated document-level listener survives Streamlit
     re-rendering the ``st.markdown`` image element on every rerun."""
-    import streamlit.components.v1 as _components
-    _components.html(
+    _embed_html(
         f"""
 <a id="ot" target="_blank" rel="noopener"
   style="font-family: 'Source Sans Pro', sans-serif; font-size: 0.9rem;
@@ -1343,10 +1359,8 @@ def _svg_viewer(svg: str, *, height: int = 620, key: str = "svgview") -> None:
     load; the wheel zooms and dragging pans, so a tall decomposed stack is
     navigable without leaving the page.
     """
-    import streamlit.components.v1 as _components
-
     b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
-    _components.html(
+    _embed_html(
         f"""
 <style>
   html, body {{ margin: 0; height: 100%; }}
@@ -3297,7 +3311,7 @@ if _view == "Dashboards":
 
     # The island owns its own scrolling; a fixed height keeps the page
     # from growing an outer scrollbar around an inner one.
-    _components.html(_html, height=760, scrolling=True)
+    _embed_html(_html, height=760, scrolling=True)
 
     with st.expander("About these numbers"):
         st.markdown(
