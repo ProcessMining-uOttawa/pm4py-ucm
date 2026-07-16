@@ -42,9 +42,10 @@ pm4py_ucm.write_ucm(ucm, "running-example.jucm")  # opens in jUCMNav
 
 ## Web front-end
 
-One [Streamlit](https://streamlit.io) front-end —
-[`web/streamlit_app_v3.py`](web/streamlit_app_v3.py) (**V3**) — serves
-every deployment. Four tabs:
+The [Streamlit](https://streamlit.io) front-end — now the **V4** app
+([`web/streamlit_app_v4.py`](web/streamlit_app_v4.py), since v0.6.0) —
+serves the deployment: a left-rail workspace over these views (a strict
+superset of the earlier four-tab V3 app):
 
 - **Model** — upload an event log (XES or CSV), tune the inductive
   miner / decomposition / performer settings interactively, preview
@@ -84,20 +85,20 @@ activities and edges, applied to every tab's outputs). See
 
 Deployed on Streamlit Community Cloud at
 **https://pm4py-ucm.streamlit.app/** (`streamlit_app.py`, the
-deployment's main file, is a shim that runs V3, so that URL always
-tracks the latest code; the V1 model-only app it used to serve was
-retired at v0.5.1 and lives in git history).
+deployment's main file, is a shim that runs V4, so that URL always
+tracks the latest code; the earlier V3 and V1 apps live in git history).
 
 **https://pm4py-ucm-scenarios.streamlit.app/** deliberately keeps
 serving the **frozen V2 app** ([`web/streamlit_app_v2.py`](web/streamlit_app_v2.py),
 model + scenarios) — it is referenced by a paper under review and
 must stay as published.
 
-A preview **V4 app** ([`web/streamlit_app_v4.py`](web/streamlit_app_v4.py))
-reworks these into a left-rail workspace and adds a **Dashboards** view —
-build widgets from a metric catalog (filters, segmentation, targets, a
-scorecard, and a ƒ custom-formula language) and export a self-contained
-interactive HTML dashboard. Not yet the deployed default.
+The **Dashboards** view — V4's addition to the four above — builds
+widgets from a metric catalog (filters, segmentation, targets, a
+scorecard, and a **ƒ custom-formula language**) over your log, and exports
+a self-contained interactive HTML dashboard (or a multi-section session
+report). See [`docs/dashboards.md`](docs/dashboards.md) and
+[`demo/dashboards_tutorial.ipynb`](demo/dashboards_tutorial.ipynb).
 
 ![Dashboards view (V4)](web/PM4Py-UCM-Dashboard.png)
 
