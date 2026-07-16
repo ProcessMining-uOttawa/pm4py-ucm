@@ -117,18 +117,80 @@ export class Dashboard {
    */
   _initTheme(theme) {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const host = this._hostThemeSource();
+
+    // Precedence: the live host theme when we are embedded and can read
+    // it, else the theme the host baked into the page, else the OS. The
+    // live read is what fixes the "partial refresh": Streamlit's own
+    // theme-toggle regenerates this page, but the theme it bakes in can
+    // lag a rerun, so trusting it left the island a step behind. Reading
+    // the host directly is never stale.
+    const resolve = () => host ? host.read()
+      : theme ? theme === "dark" : mq.matches;
+
     const apply = () => {
-      this.dark = theme ? theme === "dark" : mq.matches;
-      this.root.setAttribute("data-theme", this.dark ? "dark" : "light");
+      this.dark = resolve();
+      const t = this.dark ? "dark" : "light";
+      // Two places: the .pm-dash root (its token block keys off the
+      // attribute) and <html> (the page-background CSS in the template
+      // keys off that), so a dark dashboard has no light gutter.
+      this.root.setAttribute("data-theme", t);
+      document.documentElement.setAttribute("data-theme", t);
     };
     apply();
-    if (!theme) {
-      const onChange = () => { apply(); this.render(); };
-      // addEventListener on a MediaQueryList is unsupported on old
-      // Safari; the export may well be opened there.
+
+    const onChange = () => { const before = this.dark; apply();
+      if (this.dark !== before) this.render(); };
+    if (host) {
+      host.observe(onChange);
+    } else if (!theme) {
+      // A standalone export follows the OS live. addEventListener on a
+      // MediaQueryList is unsupported on old Safari, which may well open
+      // the export.
       if (mq.addEventListener) mq.addEventListener("change", onChange);
       else if (mq.addListener) mq.addListener(onChange);
     }
+  }
+
+  /**
+   * A reader for the embedding host's live theme, or ``null`` when there
+   * is no reachable host (the standalone export, opened top-level).
+   *
+   * Streamlit renders the island in a same-origin ``srcdoc`` iframe with
+   * ``allow-same-origin``, so the host document is readable. Its ``.stApp``
+   * carries a CSS ``color-scheme`` that states the active theme — and the
+   * shell overrides the app *background* but not that, so it stays a
+   * clean signal. Background luminance is the fallback if a Streamlit
+   * version ever drops it.
+   */
+  _hostThemeSource() {
+    let doc;
+    try {
+      if (window.parent === window) return null;   // top-level: the export
+      doc = window.parent.document;                 // throws if cross-origin
+      if (!doc) return null;
+    } catch (e) {
+      return null;                                  // no allow-same-origin
+    }
+    const read = () => {
+      const app = doc.querySelector(".stApp") || doc.body;
+      if (!app) return !!this.dark;
+      const cs = getComputedStyle(app);
+      if (cs.colorScheme === "dark") return true;
+      if (cs.colorScheme === "light") return false;
+      return isDarkColor(cs.backgroundColor);
+    };
+    const observe = (cb) => {
+      // A Streamlit theme toggle surfaces as an attribute change on the
+      // app and/or a stylesheet swap in the head. Watch both; the read
+      // is cheap, so reacting to a superfluous mutation costs nothing.
+      const mo = new MutationObserver(cb);
+      const app = doc.querySelector(".stApp");
+      if (app) mo.observe(app, { attributes: true,
+        attributeFilter: ["class", "style"] });
+      if (doc.head) mo.observe(doc.head, { childList: true, subtree: true });
+    };
+    return { read, observe };
   }
 
   /** The resolved theme, for surfaces that render outside the root. */
@@ -377,6 +439,30 @@ export class Dashboard {
       }, "⬇"));
     }
     if (!this.readOnly) {
+      // Reorder by one position. The grid is grid-auto-flow:dense, so
+      // array order is the reading order left-to-right, top-to-bottom;
+      // moving a widget one step in the array moves it one cell. Kept to
+      // two buttons rather than drag-and-drop, which fights the dense
+      // reflow and the iframe's scroll.
+      tools.append(h("button", {
+        class: "pm-w__tool", title: "Move earlier",
+        disabled: i === 0,
+        onclick: () => this._move(i, -1),
+      }, "◄"));
+      tools.append(h("button", {
+        class: "pm-w__tool", title: "Move later",
+        disabled: i === this.specs.length - 1,
+        onclick: () => this._move(i, +1),
+      }, "►"));
+      // A model widget is pinned, not composed — it has no metric,
+      // segmentation or target to edit — so it gets move/remove but not
+      // the composer.
+      if (w.viz !== "model") {
+        tools.append(h("button", {
+          class: "pm-w__tool", title: "Edit widget",
+          onclick: () => this._openComposer(spec, i),
+        }, "✎"));
+      }
       tools.append(h("button", {
         class: "pm-w__tool", title: "Remove widget",
         onclick: () => {
@@ -661,16 +747,46 @@ export class Dashboard {
             confirm: null, cancel: "Close" });
   }
 
+  _move(i, delta) {
+    const j = i + delta;
+    if (j < 0 || j >= this.specs.length) return;
+    const [s] = this.specs.splice(i, 1);
+    this.specs.splice(j, 0, s);
+    this._save();
+    this.render();
+  }
+
   // -- composer -------------------------------------------------------
 
-  _openComposer() {
-    const spec = {
-      id: `w${Date.now().toString(36)}`,
-      metric: "duration", params: {}, agg: "avg",
-      filter: [], segment: {}, viz: "kpi", statusColors: false,
-      target: { on: false, dir: "<=", value: 14, warn: 18,
-                mode: "aggregate" },
-    };
+  /**
+   * Build or edit a widget.
+   *
+   * With no argument it opens on a fresh spec ("+ Add widget"); passed an
+   * existing spec and its index it opens on a deep copy of that spec (so
+   * a cancelled edit leaves the original untouched) and replaces it on
+   * save. One method serves both, so the two can never drift in what they
+   * can express.
+   */
+  _openComposer(editSpec, editIndex = -1) {
+    const isEdit = editSpec != null;
+    const spec = isEdit
+      ? JSON.parse(JSON.stringify(editSpec))
+      : {
+          id: `w${Date.now().toString(36)}`,
+          metric: "duration", params: {}, agg: "avg",
+          filter: [], segment: {}, viz: "kpi", statusColors: false,
+        };
+    // Normalise the shape a saved spec may not carry (target gets
+    // deleted when off, filter/segment may be absent), so every control
+    // below has a field to bind to.
+    spec.params = spec.params || {};
+    spec.filter = spec.filter || [];
+    spec.segment = spec.segment || {};
+    spec.target = spec.target
+      || { on: false, dir: "<=", value: 14, warn: 18, mode: "aggregate" };
+    // A user-set title survives edits; the auto-title only fills in until
+    // the field is touched.
+    let titleEdited = isEdit;
 
     const body = h("div", {});
     const preview = h("div", { class: "pm-preview" });
@@ -693,6 +809,14 @@ export class Dashboard {
       style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap;flex:1",
     });
     const helpNote = h("div", { class: "pm-row__note" });
+
+    const titleInput = h("input", {
+      class: "pm-input", type: "text", style: "flex:1;min-width:200px",
+      placeholder: "auto",
+      // Once the user types a title, stop overwriting it with the
+      // auto-generated one on every field change.
+      oninput: () => { titleEdited = true; spec.title = titleInput.value; },
+    });
 
     // Per-widget filter. The dashboard's own filters stack ON TOP of
     // these at compute time, so this row narrows one widget without
@@ -755,12 +879,14 @@ export class Dashboard {
 
     const metric = () => this.catalog[metricSel.value];
 
-    const rebuildParams = () => {
+    const rebuildParams = (keep) => {
       const m = metric();
       paramsBox.replaceChildren();
+      const prev = keep || {};
       spec.params = {};
       // Seed from the log's dominant start/end activities, so the
-      // composer opens on a real measurement instead of an empty one.
+      // composer opens on a real measurement instead of an empty one —
+      // except when editing, where the widget's own params are restored.
       const ends = E.commonEndpoints(this.table);
       for (const p of m.params) {
         const sel = h("select", {
@@ -769,7 +895,8 @@ export class Dashboard {
         });
         const options = p.kind === "activity" ? this.table.activities : [];
         options.forEach((o) => sel.append(h("option", { value: o }, o)));
-        const preferred = p.name === "to" ? ends.to : ends.from;
+        const preferred = prev[p.name] != null ? prev[p.name]
+          : (p.name === "to" ? ends.to : ends.from);
         const value = options.includes(preferred) ? preferred : options[0];
         sel.value = value;
         spec.params[p.name] = value;
@@ -782,12 +909,13 @@ export class Dashboard {
       rows.params.style.display = m.params.length ? "" : "none";
     };
 
-    const rebuildAggs = () => {
+    const rebuildAggs = (keep) => {
       const m = metric();
+      const chosen = m.aggs.includes(keep) ? keep : m.defaultAgg;
       aggSel.replaceChildren(...m.aggs.map((a) =>
-        h("option", { value: a, selected: a === m.defaultAgg }, a)));
+        h("option", { value: a, selected: a === chosen }, a)));
       aggSel.disabled = m.aggs.length < 2;
-      spec.agg = m.defaultAgg;
+      spec.agg = chosen;
     };
 
     const syncViz = () => {
@@ -827,7 +955,11 @@ export class Dashboard {
       syncTarget();
       spec.metric = metricSel.value;
       spec.agg = aggSel.value;
-      spec.title = defaultTitle(spec, metric());
+      // The auto-title tracks the fields until the user overrides it; the
+      // placeholder then shows what auto would produce.
+      const auto = defaultTitle(spec, metric());
+      titleInput.placeholder = auto;
+      if (!titleEdited) { spec.title = auto; titleInput.value = auto; }
 
       // Live preview computes the real widget over the real cases — the
       // log is already in the browser, so there is nothing to sample and
@@ -854,6 +986,8 @@ export class Dashboard {
     };
 
     metricSel.addEventListener("change", () => {
+      // Changing the metric abandons the old params/agg — they belonged
+      // to a different measurement — so nothing is kept here.
       rebuildParams(); rebuildAggs(); refresh();
     });
     aggSel.addEventListener("change", refresh);
@@ -873,6 +1007,8 @@ export class Dashboard {
       h("span", { class: "pm-row__label" }, "Metric"), metricSel, aggSel);
     rows.params = h("div", { class: "pm-row" },
       h("span", { class: "pm-row__label" }, "Params"), paramsBox);
+    rows.title = h("div", { class: "pm-row" },
+      h("span", { class: "pm-row__label" }, "Title"), titleInput);
     rows.filter = h("div", { class: "pm-row" },
       h("span", { class: "pm-row__label" }, "Filter"),
       fPick.axisSel, h("span", { class: "pm-row__hint" }, "is"),
@@ -890,21 +1026,39 @@ export class Dashboard {
       h("span", { class: "pm-row__hint" }, "warn at"), warnInput,
       modeSel, shareLabel, shareInput, targetNote);
 
-    body.append(rows.metric, rows.params, rows.filter, rows.segment,
-                rows.target, helpNote, preview);
+    body.append(rows.metric, rows.title, rows.params, rows.filter,
+                rows.segment, rows.target, helpNote, preview);
 
-    rebuildParams(); rebuildAggs(); drawChips(); refresh();
+    // Set every control from the spec, then compute. For a fresh widget
+    // the spec is the defaults; for an edit it is the saved widget, so
+    // the composer opens showing exactly what is on the card.
+    metricSel.value = spec.metric;
+    rebuildParams(isEdit ? spec.params : undefined);
+    rebuildAggs(spec.agg);
+    rowsSel.value = spec.segment.rows || "";
+    colsSel.value = spec.segment.cols || "";
+    dirSel.value = spec.target.dir;
+    valInput.value = spec.target.value;
+    warnInput.value = spec.target.warn;
+    modeSel.value = spec.target.mode || "aggregate";
+    if (spec.target.shareGoal != null) shareInput.value = spec.target.shareGoal;
+    if (isEdit && spec.title) titleInput.value = spec.title;
+    drawChips();
+    refresh();
 
     modal({
       theme: this._theme(),
-      title: "New widget", sub: `→ ${this.name}`, body,
-      confirm: "Add to dashboard",
+      title: isEdit ? "Edit widget" : "New widget",
+      sub: `→ ${this.name}`, body,
+      confirm: isEdit ? "Save changes" : "Add to dashboard",
       onConfirm: () => {
         if (!spec.target.on) delete spec.target;
-        this.specs.push(JSON.parse(JSON.stringify(spec)));
+        const clean = JSON.parse(JSON.stringify(spec));
+        if (isEdit) this.specs[editIndex] = clean;
+        else this.specs.push(clean);
         this._save();
         this.render();
-        toast("Widget added", this._theme());
+        toast(isEdit ? "Widget updated" : "Widget added", this._theme());
         return true;
       },
     });
@@ -924,6 +1078,15 @@ function defaultTitle(spec, metric) {
   else parts.push(metric.label.toLowerCase());
   if (parts.length === 1) parts[0] = metric.label;
   return parts.join(" ");
+}
+
+/** Is a CSS colour dark enough to want light text — the theme fallback. */
+function isDarkColor(color) {
+  const m = String(color).match(/[\d.]+/g);
+  if (!m || m.length < 3) return false;
+  const [r, g, b] = m.map(Number);
+  // Rec. 601 luma; < 0.5 of 255 reads as a dark surface.
+  return (0.299 * r + 0.587 * g + 0.114 * b) < 128;
 }
 
 function axisLabel(axis) {

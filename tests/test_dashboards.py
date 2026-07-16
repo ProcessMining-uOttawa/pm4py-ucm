@@ -813,6 +813,28 @@ class TestView:
         assert "_applyPendingPin" in ui
         assert "applied.includes(pin.id)" in ui
 
+    def test_composer_is_one_method_for_add_and_edit(self):
+        """Add and edit must share the composer, or the two drift in what
+        they can express. Edit replaces at the index; add appends."""
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        assert "_openComposer(editSpec, editIndex" in ui
+        assert "this.specs[editIndex] = clean" in ui   # edit path
+        assert "this.specs.push(clean)" in ui           # add path
+        # Edit opens on a deep copy, so a cancelled edit leaves the
+        # original untouched.
+        assert "JSON.parse(JSON.stringify(editSpec))" in ui
+
+    def test_model_widgets_are_not_editable_by_the_composer(self):
+        """A pinned model has no metric/segment/target for the
+        metric-based composer to edit."""
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        assert 'if (w.viz !== "model")' in ui
+
+    def test_reorder_moves_by_one_position(self):
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        assert "_move(i, delta)" in ui
+        assert "this.specs.splice(i, 1)" in ui and "this.specs.splice(j, 0" in ui
+
     def test_filters_travel_into_the_page(self, table):
         f = [{"field": "contains", "op": "is", "value": "B"}]
         html = dashboard_html(table, filters=f)
@@ -924,6 +946,26 @@ class TestTheme:
         assert '"data-theme": theme' in ui       # the scrim
         assert 'el.setAttribute("data-theme", theme)' in ui  # the toast
         assert ui.count("theme: this._theme()") >= 3
+
+    def test_embedded_island_reads_the_live_host_theme(self):
+        """The partial-refresh fix: rather than trust the theme Python
+        baked in (which can lag a rerun), the embedded island reads the
+        host's own color-scheme and re-themes on change."""
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        assert "_hostThemeSource" in ui
+        assert "window.parent.document" in ui
+        assert 'cs.colorScheme === "dark"' in ui
+        assert "MutationObserver" in ui
+        # The theme must reach both the root (token block) and <html>
+        # (the page background), or a dark board keeps a light gutter.
+        assert 'document.documentElement.setAttribute("data-theme"' in ui
+
+    def test_theme_read_falls_back_when_there_is_no_host(self):
+        """A standalone export is top-level, so window.parent === window;
+        it must then use the pinned/OS theme, not crash reaching for a
+        host."""
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        assert "if (window.parent === window) return null" in ui
 
 
 # ---------------------------------------------------------------------------

@@ -397,6 +397,10 @@
   border-radius: 4px;
 }
 .pm-w__tool:hover { color: var(--garnet); background: var(--garnet-tint); }
+.pm-w__tool:disabled {
+  opacity: .3; cursor: default;
+}
+.pm-w__tool:disabled:hover { color: var(--faint); background: none; }
 
 .pm-w__body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 
