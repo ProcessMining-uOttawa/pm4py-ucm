@@ -1565,6 +1565,113 @@ class TestJsParity:
         assert json.dumps(_norm(js)) == json.dumps(_norm(py))
 
 
+_UNBOUND_RUNNER = r"""
+import * as E from %(engine)s;
+import { readFileSync } from "node:fs";
+
+const inp = JSON.parse(readFileSync(process.argv[2], "utf8"));
+const t = E.decodePayload(inp.payload);
+process.stdout.write(JSON.stringify(inp.specs.map((s) => E.unboundRefs(s, t))));
+"""
+
+
+class TestSaveLoadDefinition:
+    """Save/Load a dashboard *definition* (its widgets and filters) as
+    portable JSON, and report which widgets cannot bind when a definition
+    is loaded against a log that lacks the activities or attributes it
+    names. ``unboundRefs`` is the binding check that drives that report.
+    """
+
+    # Every place a spec can name an activity or attribute the log lacks.
+    _SPECS = [
+        # 0 no references at all
+        {"metric": "duration", "params": {}},
+        # 1 a metric activity the log lacks
+        {"metric": "actFreq", "params": {"activity": "Z"}},
+        # 2 a metric activity the log has
+        {"metric": "actFreq", "params": {"activity": "A"}},
+        # 3 an edge endpoint the log lacks
+        {"metric": "timeBetween", "params": {"from": "A", "to": "Z"}},
+        # 4 a segment axis on a missing attribute
+        {"metric": "duration", "params": {}, "segment": {"rows": "attr:region"}},
+        # 5 a segment axis that binds
+        {"metric": "duration", "params": {},
+         "segment": {"rows": "attr:case:country"}},
+        # 6 a custom formula naming a missing activity and attribute
+        {"metric": "custom",
+         "params": {"formula": 'count("Z") + attr("region")'}},
+        # 7 a widget filter on a missing activity
+        {"metric": "duration", "params": {},
+         "filter": [{"field": "contains", "value": "Z"}]},
+        # 8 a widget filter on a missing attribute
+        {"metric": "duration", "params": {},
+         "filter": [{"field": "attr:region", "value": "x"}]},
+        # 9 a drill-down (segment) filter on a missing attribute
+        {"metric": "duration", "params": {},
+         "filter": [{"field": "segment", "value": ["attr:region", "x"]}]},
+    ]
+
+    _EXPECT = [
+        {"activities": [], "attributes": []},
+        {"activities": ["Z"], "attributes": []},
+        {"activities": [], "attributes": []},
+        {"activities": ["Z"], "attributes": []},
+        {"activities": [], "attributes": ["region"]},
+        {"activities": [], "attributes": []},
+        {"activities": ["Z"], "attributes": ["region"]},
+        {"activities": ["Z"], "attributes": []},
+        {"activities": [], "attributes": ["region"]},
+        {"activities": [], "attributes": ["region"]},
+    ]
+
+    def test_unbound_refs_finds_every_missing_name(self, tmp_path):
+        node = shutil.which("node")
+        if node is None:
+            pytest.skip("node is not available")
+        t = build_fact_table(_log(), log_name="t")
+        inp = tmp_path / "input.json"
+        inp.write_text(json.dumps(
+            {"payload": t.to_payload(), "specs": self._SPECS}),
+            encoding="utf8")
+        runner = tmp_path / "runner.mjs"
+        runner.write_text(
+            _UNBOUND_RUNNER % {"engine": json.dumps(ENGINE_JS.resolve().as_uri())},
+            encoding="utf8")
+        proc = subprocess.run([node, str(runner), str(inp)],
+                              capture_output=True, text=True,
+                              encoding="utf8", timeout=120)
+        assert proc.returncode == 0, proc.stderr
+        assert json.loads(proc.stdout) == self._EXPECT
+
+    def test_save_and_load_controls_exist(self):
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        # The toolbar offers both, and only when the dashboard is editable.
+        assert "⬇ Save" in ui and "⬆ Load" in ui
+        assert "downloadDefinition()" in ui
+        assert "_pickDefinition()" in ui
+        assert "loadDefinition(file)" in ui
+
+    def test_saved_definition_shape(self):
+        """The saved file is the recipe, not the data — a marker, a name,
+        the origin log, the specs and the filters."""
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        body = ui.split("downloadDefinition()", 1)[1].split("_pickDefinition", 1)[0]
+        for key in ("pm4pyUcmDashboard", "name:", "log:", "specs:", "filters:"):
+            assert key in body, key
+        assert ".dashboard.json" in body
+
+    def test_load_rejects_a_foreign_file(self):
+        """A file without the marker is refused, not applied."""
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        body = ui.split("_applyDefinition(def)", 1)[1]
+        assert "pm4pyUcmDashboard == null" in body
+        assert "Not a PM4Py-UCM dashboard file" in body
+
+    def test_load_report_uses_unbound_refs(self):
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        assert "E.unboundRefs(" in ui
+
+
 def _norm(obj):
     """Canonicalise for comparison: round away the last bits of IEEE
     noise, and coerce every number to float.

@@ -345,6 +345,161 @@ export class Dashboard {
     toast("Session report exported", this._theme());
   }
 
+  // -- save / load a dashboard definition ----------------------------
+
+  /**
+   * The dashboard's *definition* — its widgets and filters — as a small
+   * portable JSON file, distinct from the self-contained HTML export.
+   *
+   * The HTML export ships the whole fact table so it runs offline; this
+   * ships only the recipe (a few KB), so it can be reloaded here or
+   * opened on another log. A definition names activities and attributes,
+   * so it is portable across logs that share them; `unboundRefs` reports
+   * what a target log is missing on load.
+   */
+  downloadDefinition() {
+    const def = {
+      pm4pyUcmDashboard: 1,
+      name: this.name,
+      log: this.table.logName,
+      specs: this.exportSpecs(),
+      filters: JSON.parse(JSON.stringify(this.filters)),
+    };
+    const blob = new Blob([JSON.stringify(def, null, 2)],
+      { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${(this.name || "dashboard")
+      .replace(/[^\w.-]+/g, "_")}.dashboard.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast("Dashboard definition saved", this._theme());
+  }
+
+  /** Open the OS file picker and load the chosen definition. */
+  _pickDefinition() {
+    const input = h("input", {
+      type: "file", accept: ".json,application/json",
+      style: "display:none",
+    });
+    input.addEventListener("change", () => {
+      const file = input.files && input.files[0];
+      if (file) this.loadDefinition(file);
+      input.remove();
+    });
+    document.body.append(input);
+    input.click();
+  }
+
+  /** Read a definition file and apply it (async — FileReader). */
+  loadDefinition(file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      let def;
+      try { def = JSON.parse(reader.result); }
+      catch (e) {
+        toast("Could not load — the file is not valid JSON", this._theme());
+        return;
+      }
+      this._applyDefinition(def);
+    };
+    reader.onerror = () =>
+      toast("Could not read that file", this._theme());
+    reader.readAsText(file);
+  }
+
+  /**
+   * Replace the current widgets with a loaded definition, reporting any
+   * that cannot bind to this log.
+   *
+   * Widget ids are re-minted so a definition with blank or colliding ids
+   * (or one loaded twice) never breaks reorder/edit, which key off id.
+   * Filters are exploration state tied to the values of the log they were
+   * taken on, so they are only carried when the definition came from this
+   * same log; otherwise they are dropped and noted.
+   */
+  _applyDefinition(def) {
+    if (!def || def.pm4pyUcmDashboard == null || !Array.isArray(def.specs)) {
+      toast("Not a PM4Py-UCM dashboard file", this._theme());
+      return;
+    }
+
+    const stamp = Date.now().toString(36);
+    const specs = def.specs.map((s, i) => {
+      const c = JSON.parse(JSON.stringify(s));
+      c.id = `w${stamp}${i}`;
+      return c;
+    });
+
+    const unbound = specs
+      .map((s) => ({ spec: s, refs: E.unboundRefs(s, this.table) }))
+      .filter((u) => u.refs.activities.length || u.refs.attributes.length);
+
+    const sameLog = def.log && def.log === this.table.logName;
+    const filters = sameLog ? (def.filters || []).slice() : [];
+    const droppedFilters = sameLog ? 0 : (def.filters || []).length;
+
+    if (typeof def.name === "string" && def.name.trim()) {
+      this.name = def.name.trim();
+    }
+    this.specs = specs;
+    this.filters = filters;
+    this._save();
+    this.render();
+
+    this._reportLoad(specs.length, unbound, droppedFilters, def.log);
+  }
+
+  /** Tell the user what loaded, and what could not bind. */
+  _reportLoad(total, unbound, droppedFilters, fromLog) {
+    if (!unbound.length && !droppedFilters) {
+      toast(`Loaded “${this.name}” — ${total} ` +
+        `widget${total === 1 ? "" : "s"}`, this._theme());
+      return;
+    }
+
+    const title = (s) => {
+      try { return this._compute(s).title || s.title || s.metric; }
+      catch (e) { return s.title || s.metric; }
+    };
+    const body = h("div", { class: "pm-load-report" });
+    body.append(h("p", {},
+      `Loaded ${total} widget${total === 1 ? "" : "s"} into ` +
+      `“${this.name}”.`));
+
+    if (unbound.length) {
+      body.append(h("p", {},
+        `${unbound.length} couldn't bind to this log ` +
+        `(${this.table.logName}) and will show “—”:`));
+      const list = h("ul", { class: "pm-load-report__list" });
+      for (const u of unbound) {
+        const miss = u.refs.activities
+          .map((a) => `activity “${a}”`)
+          .concat(u.refs.attributes.map((a) => `attribute “${a}”`))
+          .join(", ");
+        list.append(h("li", {},
+          h("strong", {}, title(u.spec)),
+          h("span", { class: "pm-load-report__miss" }, ` — missing ${miss}`)));
+      }
+      body.append(list);
+    }
+
+    if (droppedFilters) {
+      body.append(h("p", { class: "pm-load-report__note" },
+        `${droppedFilters} filter${droppedFilters === 1 ? "" : "s"} ` +
+        `${droppedFilters === 1 ? "was" : "were"} not carried over` +
+        (fromLog ? ` (built on ${fromLog}, not this log).` : ".")));
+    }
+
+    modal({
+      theme: this._theme(),
+      title: "Dashboard loaded",
+      sub: `→ ${this.name}`,
+      body,
+      cancel: "Close",
+    });
+  }
+
   // -- computation ---------------------------------------------------
 
   _compute(spec) {
@@ -443,6 +598,20 @@ export class Dashboard {
              + "the process model in both notations — as one offline file.",
         onclick: () => this.downloadReport(),
       }, "⬇ Session report"));
+      kids.push(h("button", {
+        class: "pm-btn pm-btn--ghost",
+        title: "Save this dashboard's definition (its widgets and filters) "
+             + "as a small JSON file you can reload later, or open on "
+             + "another log.",
+        onclick: () => this.downloadDefinition(),
+      }, "⬇ Save"));
+      kids.push(h("button", {
+        class: "pm-btn pm-btn--ghost",
+        title: "Load a saved dashboard definition (.json), replacing the "
+             + "current widgets. Widgets that name activities or attributes "
+             + "this log lacks are reported and shown as “—”.",
+        onclick: () => this._pickDefinition(),
+      }, "⬆ Load"));
       kids.push(h("button", {
         class: "pm-btn", onclick: () => this._openComposer(),
       }, "+ Add widget"));
