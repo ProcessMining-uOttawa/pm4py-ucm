@@ -50,6 +50,9 @@ every deployment. Four tabs:
   miner / decomposition / performer settings interactively, preview
   the diagram in UCM or BPMN notation, and download the rendered PNG
   plus the `.jucm` file.
+
+  ![Model view](web/PM4Py-UCM-Model.png)
+
 - **Scenarios** — concurrency-aware variant clustering + one
   executable jUCMNav `ScenarioDef` per variant. Both variant-driven
   and data-driven OR-fork encodings are exposed; the tab surfaces
@@ -58,14 +61,22 @@ every deployment. Four tabs:
   four downloads: the `.jucm` with the synthesized scenario group,
   `variants.csv`, `case_variant_map.csv`, and (data-driven mode)
   `condition_mining.csv`. Runs on flat and decomposed UCMs alike.
+
+  ![Scenarios view](web/PM4Py-UCM-Scenarios.png)
+
 - **Family** — pick 1–2 case attributes (with per-value filters and a
   pre-mining coverage heatmap), mine one model per combination, and
   download the per-cell zip, the combined `.jucm`, the dynamic-stub
   umbrella `.jucm`, the grid PNG, and the interactive HTML statistics
   report.
+
+  ![Family view](web/PM4Py-UCM-Family.png)
+
 - **Compare** — rank the family members on a heat-mapped statistics
   table and compare any two side by side (models, activity/edge
   deltas, aligned choice shares).
+
+  ![Compare view](web/PM4Py-UCM-Compare.png)
 
 Plus a **Performance overlay** sidebar section (frequencies/times on
 activities and edges, applied to every tab's outputs). See
@@ -82,7 +93,13 @@ serving the **frozen V2 app** ([`web/streamlit_app_v2.py`](web/streamlit_app_v2.
 model + scenarios) — it is referenced by a paper under review and
 must stay as published.
 
-![Overview of the PM4Py-UCM web interface](web/WebInterfaceOverview.png)
+A preview **V4 app** ([`web/streamlit_app_v4.py`](web/streamlit_app_v4.py))
+reworks these into a left-rail workspace and adds a **Dashboards** view —
+build widgets from a metric catalog (filters, segmentation, targets, a
+scorecard, and a ƒ custom-formula language) and export a self-contained
+interactive HTML dashboard. Not yet the deployed default.
+
+![Dashboards view (V4)](web/PM4Py-UCM-Dashboard.png)
 
 Run locally with:
 
