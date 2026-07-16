@@ -352,18 +352,36 @@ def _svg_body(svg: str) -> str:
     return svg[i:] if i >= 0 else svg
 
 
-def _stack_svgs(panels: List[str], gap: float = 28.0) -> str:
-    """Stack per-map SVGs into one document, one above the next.
+# Chrome for the stacked SVG — mirrors the PNG composite in
+# ``pm4py_ucm.visualization.ucm.stacked`` (a bold, centred map-name title
+# strip above each panel and a thin separator between panels) so the SVG
+# and PNG of a decomposed model read the same.
+_SVG_TITLE_PAD_TOP = 18.0
+_SVG_TITLE_FONT = 18.0
+_SVG_TITLE_PAD_BOTTOM = 10.0
+_SVG_SEP_MARGIN = 12.0
+_SVG_SEP_THICKNESS = 2.0
+_SVG_TITLE_COLOR = "#202020"
+_SVG_SEP_COLOR = "#a0a0a0"
 
-    Each panel is nested as an ``<svg>`` at an increasing y offset, which
-    gives it its own viewport and coordinate system, so the graphviz
-    layout inside is preserved exactly — the vector equivalent of what
-    :func:`~pm4py_ucm.visualization.ucm.stacked` does with raster panels.
+
+def _stack_svgs(panels: List[Tuple[str, str]]) -> str:
+    """Stack per-map SVGs into one document with named title strips and
+    separators, matching the PNG composite.
+
+    ``panels`` is ``[(map_name, svg), …]``. Each map is nested as an
+    ``<svg>`` at an increasing y offset — its own viewport and coordinate
+    system, so the graphviz layout inside is preserved exactly — under a
+    centred title, with a separator between adjacent panels.
     """
     import re
+    from xml.sax.saxutils import escape
+
+    title_strip = _SVG_TITLE_PAD_TOP + _SVG_TITLE_FONT + _SVG_TITLE_PAD_BOTTOM
+    sep_total = _SVG_SEP_MARGIN * 2 + _SVG_SEP_THICKNESS
 
     dims = []
-    for svg in panels:
+    for name, svg in panels:
         m = re.search(r'<svg[^>]*\bwidth="([\d.]+)pt"[^>]*\bheight="([\d.]+)pt"',
                       svg)
         if m:
@@ -372,23 +390,47 @@ def _stack_svgs(panels: List[str], gap: float = 28.0) -> str:
             vb = re.search(r'viewBox="[\d.\-]+ [\d.\-]+ ([\d.]+) ([\d.]+)"', svg)
             w, h = (float(vb.group(1)), float(vb.group(2))) if vb else (100.0, 100.0)
         inner = svg[svg.index(">", svg.index("<svg")) + 1: svg.rindex("</svg>")]
-        dims.append((w, h, inner))
+        dims.append((name, w, h, inner))
 
-    total_w = max(w for w, _, _ in dims)
-    total_h = sum(h for _, h, _ in dims) + gap * (len(dims) - 1)
+    total_w = max(w for _, w, _, _ in dims)
+    total_h = sum(title_strip + h for _, _, h, _ in dims) \
+        + sep_total * (len(dims) - 1)
+
     out = [
         f'<svg xmlns="http://www.w3.org/2000/svg" '
         f'xmlns:xlink="http://www.w3.org/1999/xlink" '
         f'width="{total_w:.0f}pt" height="{total_h:.0f}pt" '
-        f'viewBox="0 0 {total_w:.2f} {total_h:.2f}">'
+        f'viewBox="0 0 {total_w:.2f} {total_h:.2f}">',
+        # White backdrop so the chrome (title strips, gaps) matches the
+        # PNG rather than showing the page through.
+        f'<rect x="0" y="0" width="{total_w:.2f}" height="{total_h:.2f}" '
+        f'fill="#ffffff"/>',
     ]
     y = 0.0
-    for w, h, inner in dims:
+    for i, (name, w, h, inner) in enumerate(dims):
         out.append(
-            f'<svg x="0" y="{y:.2f}" width="{w:.2f}" height="{h:.2f}" '
-            f'viewBox="0 0 {w:.2f} {h:.2f}">{inner}</svg>'
+            f'<text x="{total_w / 2:.2f}" '
+            f'y="{y + _SVG_TITLE_PAD_TOP + _SVG_TITLE_FONT * 0.8:.2f}" '
+            f'text-anchor="middle" font-family="Arial, sans-serif" '
+            f'font-weight="bold" font-size="{_SVG_TITLE_FONT:.0f}" '
+            f'fill="{_SVG_TITLE_COLOR}">{escape(name)}</text>'
         )
-        y += h + gap
+        y += title_strip
+        x_off = (total_w - w) / 2  # centre a narrower panel, like the PNG
+        out.append(
+            f'<svg x="{x_off:.2f}" y="{y:.2f}" width="{w:.2f}" '
+            f'height="{h:.2f}" viewBox="0 0 {w:.2f} {h:.2f}">{inner}</svg>'
+        )
+        y += h
+        if i != len(dims) - 1:
+            y += _SVG_SEP_MARGIN
+            out.append(
+                f'<line x1="{_SVG_SEP_MARGIN:.2f}" y1="{y:.2f}" '
+                f'x2="{total_w - _SVG_SEP_MARGIN:.2f}" y2="{y:.2f}" '
+                f'stroke="{_SVG_SEP_COLOR}" '
+                f'stroke-width="{_SVG_SEP_THICKNESS:.0f}"/>'
+            )
+            y += _SVG_SEP_THICKNESS + _SVG_SEP_MARGIN
     out.append("</svg>")
     return "\n".join(out)
 
@@ -413,11 +455,13 @@ def _render_svg_cached(jucm_bytes: bytes, style: str) -> str:
 
         from pm4py_ucm.visualization.ucm.variants import classic as _classic
         panels = []
-        for idx in range(len(ucm.maps)):
+        for idx, ucm_map in enumerate(ucm.maps):
             gviz = _classic.apply(
                 ucm, parameters={"style": style, "map_index": idx,
                                  "format": "svg"})
-            panels.append(_svg_body(gviz.pipe(format="svg").decode("utf-8")))
+            name = ucm_map.name or f"Map{idx}"
+            panels.append(
+                (name, _svg_body(gviz.pipe(format="svg").decode("utf-8"))))
         return _stack_svgs(panels)
 
 
@@ -1133,6 +1177,68 @@ def _open_image_in_tab_button(png_b64: str, label: str = "Open image "
     )
 
 
+def _svg_viewer(svg: str, *, height: int = 620, key: str = "svgview") -> None:
+    """Show an SVG model inline with wheel-zoom and drag-to-pan.
+
+    SVG is the on-screen default: it stays crisp at any zoom and its text
+    is selectable. It is embedded through ``components.html`` (Streamlit's
+    markdown sanitiser strips raw ``<svg>``) and carried base64-encoded so
+    nothing in the diagram — a stray ``</script>`` in a label, a non-ASCII
+    map name — can break the surrounding HTML. The SVG fits the width on
+    load; the wheel zooms and dragging pans, so a tall decomposed stack is
+    navigable without leaving the page.
+    """
+    import streamlit.components.v1 as _components
+
+    b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    _components.html(
+        f"""
+<style>
+  html, body {{ margin: 0; height: 100%; }}
+  #stage {{
+    width: 100%; height: {height}px; overflow: hidden;
+    border: 1px solid #e2dfd8; border-radius: 8px; background: #fff;
+    touch-action: none; cursor: grab;
+  }}
+  #stage svg {{ width: 100%; height: auto; display: block;
+    transform-origin: 0 0; user-select: none; }}
+</style>
+<div id="stage"></div>
+<script>
+(() => {{
+  const stage = document.getElementById("stage");
+  // Decode as UTF-8 so accented map names survive.
+  const bytes = Uint8Array.from(atob("{b64}"), c => c.charCodeAt(0));
+  stage.innerHTML = new TextDecoder("utf-8").decode(bytes);
+  const svg = stage.querySelector("svg");
+  if (!svg) return;
+  let scale = 1, tx = 0, ty = 0, drag = false, px = 0, py = 0;
+  const apply = () => svg.style.transform =
+    `translate(${{tx}}px,${{ty}}px) scale(${{scale}})`;
+  stage.addEventListener("wheel", (e) => {{
+    e.preventDefault();
+    const f = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+    scale = Math.min(12, Math.max(0.2, scale * f));
+    apply();
+  }}, {{ passive: false }});
+  stage.addEventListener("pointerdown", (e) => {{
+    drag = true; px = e.clientX; py = e.clientY;
+    stage.setPointerCapture(e.pointerId); stage.style.cursor = "grabbing";
+  }});
+  stage.addEventListener("pointermove", (e) => {{
+    if (!drag) return;
+    tx += e.clientX - px; ty += e.clientY - py; px = e.clientX; py = e.clientY;
+    apply();
+  }});
+  const stop = () => {{ drag = false; stage.style.cursor = "grab"; }};
+  stage.addEventListener("pointerup", stop);
+  stage.addEventListener("pointerleave", stop);
+}})();
+</script>""",
+        height=height + 6,
+    )
+
+
 class _ProgressUI:
     """A ``progress_callback(stage, done, total)`` that renders a
     progress bar with a remaining-time estimate inside an
@@ -1769,74 +1875,88 @@ if _view == "Model":
     m4.metric("Maps", mined["n_maps"])
     m5.metric("Nodes", mined["n_nodes"])
 
+    # SVG is the default on-screen render: vector, crisp at any zoom, with
+    # selectable text, and cheap (0.1–0.4 s even for a decomposed stack).
+    # PNG is no longer rendered proactively — it is a download prepared on
+    # demand below.
     try:
         with st.spinner(f"Rendering {notation} diagram..."):
-            png_bytes = _render_cached(mined["jucm"], style)
-    except Exception as exc:
-        st.error(f"Render failed: {type(exc).__name__}: {exc}")
-        with st.expander("Show technical details"):
-            st.code(traceback.format_exc(), language="text")
-        st.stop()
-
-    _b64 = base64.b64encode(png_bytes).decode("ascii")
-    st.markdown(
-        f'<img src="data:image/png;base64,{_b64}" '
-        f'width="{_DISPLAY_WIDTH_PX}" '
-        f'style="max-width:100%; height:auto; cursor: zoom-in;" '
-        f'data-opentab="1" '
-        f'title="Double-click to open in a new browser tab" '
-        f'alt="Mined {notation} model" />',
-        unsafe_allow_html=True,
-    )
-    st.caption(
-        f"Mined model ({notation}, decomposition={decomposition_preset}) — "
-        "double-click the image (or use the button below) to open it "
-        "in its own browser tab and zoom complex models more easily."
-    )
-
-    # SVG alongside PNG: it stays crisp at any zoom and its text is
-    # selectable/searchable. Works for single- and multi-map (decomposed)
-    # models alike — the latter stacks its per-map SVGs. Only an actual
-    # render failure disables the button, with the reason.
-    try:
-        _svg = _render_svg_cached(mined["jucm"], style)
+            _svg = _render_svg_cached(mined["jucm"], style)
         _svg_err = None
     except Exception as _exc:
         _svg = None
         _svg_err = f"{type(_exc).__name__}: {_exc}"
 
-    d1, d2, d3, d4, d5 = st.columns(5)
-    with d1:
-        _open_image_in_tab_button(_b64)
-    d2.download_button(
-        "Download PNG", data=png_bytes,
-        file_name=_safe_download_name(Path(log_name).stem, ".png"),
-        mime="image/png",
-    )
-    # One widget in the slot whether or not SVG is available (enabled vs
-    # disabled), rather than switching between download_button and button
-    # — swapping widget *types* in one column leaves Streamlit a hidden
-    # phantom element behind.
+    if _svg is not None:
+        _svg_viewer(_svg, height=620)
+        st.caption(
+            f"Mined model ({notation}, "
+            f"decomposition={decomposition_preset}) — vector SVG; scroll "
+            "to zoom, drag to pan. Download SVG or a raster PNG below."
+        )
+    else:
+        # SVG failed for some reason — fall back to a PNG so the model is
+        # still visible, and say why.
+        try:
+            _png_fallback = _render_cached(mined["jucm"], style)
+            st.markdown(
+                f'<img src="data:image/png;base64,'
+                f'{base64.b64encode(_png_fallback).decode("ascii")}" '
+                f'width="{_DISPLAY_WIDTH_PX}" '
+                f'style="max-width:100%; height:auto; cursor: zoom-in;" '
+                f'data-opentab="1" alt="Mined {notation} model" />',
+                unsafe_allow_html=True,
+            )
+            st.caption(f"SVG render failed ({_svg_err}); showing PNG.")
+        except Exception as exc:
+            st.error(f"Render failed: {type(exc).__name__}: {exc}")
+            with st.expander("Show technical details"):
+                st.code(traceback.format_exc(), language="text")
+            st.stop()
+
     _svg_ok = _svg is not None
-    d3.download_button(
+    d1, d2, d3, d4 = st.columns(4)
+
+    # Download SVG.
+    d1.download_button(
         "Download SVG",
         data=_svg.encode("utf-8") if _svg_ok else b"",
         file_name=_safe_download_name(Path(log_name).stem, ".svg"),
         mime="image/svg+xml",
         disabled=not _svg_ok,
         key="model_svg_download",
-        help=(
-            "Vector — crisp at any zoom, with selectable text."
-            if _svg_ok else
-            f"SVG render failed ({_svg_err}); use the PNG."
-        ),
+        help="Vector — crisp at any zoom, with selectable text.",
     )
-    d4.download_button(
+
+    # Download PNG — rendered ONLY when asked, since SVG is the default
+    # display. First press renders (with a spinner) and stashes it; the
+    # button then becomes the actual download. Keyed by model + notation
+    # so switching either re-arms it.
+    _png_key = f"model_png::{file_hash}::{style}"
+    with d2:
+        if _png_key in st.session_state:
+            st.download_button(
+                "Download PNG", data=st.session_state[_png_key],
+                file_name=_safe_download_name(Path(log_name).stem, ".png"),
+                mime="image/png", key="model_png_download",
+            )
+        elif st.button("Prepare PNG…", key="model_png_prepare",
+                       help="Render a raster PNG to download (SVG is the "
+                            "default; PNG is generated only when you ask)."):
+            with st.spinner(f"Rendering {notation} PNG..."):
+                try:
+                    st.session_state[_png_key] = _render_cached(
+                        mined["jucm"], style)
+                except Exception as exc:
+                    st.warning(f"PNG render failed: {exc}")
+            st.rerun()
+
+    d3.download_button(
         "Download .jucm (no scenarios)", data=mined["jucm"],
         file_name=_safe_download_name(Path(log_name).stem, ".jucm"),
         mime="application/xml",
     )
-    with d5.popover("Pin to dashboard ▦", use_container_width=True):
+    with d4.popover("Pin to dashboard ▦", use_container_width=True):
         st.caption(
             "Adds the model to the Dashboards view as a widget. The pin "
             "is live: it renders whatever the model currently is, so it "
@@ -2827,31 +2947,24 @@ if _view == "Dashboards":
             f"timestamp could not be parsed."
         )
 
-    # Model widgets render the diagram the Model view shows. Both
-    # notations are passed so the in-page toggle is instant and the
-    # export carries both — the render is cached per style, so this
-    # costs one render each rather than one per rerun.
+    # Model widgets and the report's model section both render from SVG
+    # now — no PNG is produced here. One SVG per notation serves both: a
+    # data URI for a model widget's <img>, and the raw SVG for the
+    # report's zoom/pan viewer. The render is cached per style, so both
+    # notations cost one render each rather than one per rerun.
     _renders: Dict[str, str] = {}
     _model_svg: Dict[str, str] = {}
     for _style, _label in (("ucm", "ucm"), ("bpmn", "bpmn")):
         try:
-            _png = _render_cached(mined["jucm"], _style)
+            _svg = _render_svg_cached(mined["jucm"], _style)
+            _model_svg[_label] = _svg
             _renders[_label] = (
-                "data:image/png;base64,"
-                + base64.b64encode(_png).decode("ascii")
+                "data:image/svg+xml;base64,"
+                + base64.b64encode(_svg.encode("utf-8")).decode("ascii")
             )
         except Exception:
             # A notation that will not render must not take the whole
             # dashboard down; the widget falls back to a placeholder.
-            pass
-        try:
-            # Inline SVG for the session report's model section — sharper
-            # to zoom than the PNG. None for multi-map (composited) models;
-            # the report falls back to the PNG render above.
-            _svg = _render_svg_cached(mined["jucm"], _style)
-            if _svg:
-                _model_svg[_label] = _svg
-        except Exception:
             pass
 
     _specs_json = _json.dumps(_DEFAULT_DASHBOARD_SPECS)
