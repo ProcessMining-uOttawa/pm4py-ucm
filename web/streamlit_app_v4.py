@@ -1744,7 +1744,17 @@ if _view == "Model":
         "in its own browser tab and zoom complex models more easily."
     )
 
-    d1, d2, d3, d4 = st.columns(4)
+    # SVG alongside PNG: it stays crisp at any zoom and its text is
+    # selectable/searchable. Only single-map models render as one SVG; a
+    # decomposed model is stacked from per-map raster panels
+    # (_render_svg_cached returns None), so the SVG button is offered
+    # disabled there with the reason, rather than silently missing.
+    try:
+        _svg = _render_svg_cached(mined["jucm"], style)
+    except Exception:
+        _svg = None
+
+    d1, d2, d3, d4, d5 = st.columns(5)
     with d1:
         _open_image_in_tab_button(_b64)
     d2.download_button(
@@ -1752,12 +1762,33 @@ if _view == "Model":
         file_name=_safe_download_name(Path(log_name).stem, ".png"),
         mime="image/png",
     )
+    # One widget in the slot whether or not SVG is available (enabled vs
+    # disabled), rather than switching between download_button and button
+    # — swapping widget *types* in one column leaves Streamlit a hidden
+    # phantom element behind.
+    _svg_ok = _svg is not None
     d3.download_button(
+        "Download SVG",
+        data=_svg.encode("utf-8") if _svg_ok else b"",
+        file_name=_safe_download_name(Path(log_name).stem, ".svg"),
+        mime="image/svg+xml",
+        disabled=not _svg_ok,
+        key="model_svg_download",
+        help=(
+            "Vector — crisp at any zoom, with selectable text."
+            if _svg_ok else
+            f"SVG is a single vector image, so it is offered for "
+            f"single-map models only. This model has {mined['n_maps']} "
+            f"maps (decomposition = {decomposition_preset}); use the "
+            f"PNG, which stacks the panels."
+        ),
+    )
+    d4.download_button(
         "Download .jucm (no scenarios)", data=mined["jucm"],
         file_name=_safe_download_name(Path(log_name).stem, ".jucm"),
         mime="application/xml",
     )
-    with d4.popover("Pin to dashboard ▦", use_container_width=True):
+    with d5.popover("Pin to dashboard ▦", use_container_width=True):
         st.caption(
             "Adds the model to the Dashboards view as a widget. The pin "
             "is live: it renders whatever the model currently is, so it "
