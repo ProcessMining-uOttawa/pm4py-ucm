@@ -346,29 +346,79 @@ def _render_cached(jucm_bytes: bytes, style: str) -> bytes:
         return png_path.read_bytes()
 
 
-@st.cache_data(show_spinner=False)
-def _render_svg_cached(jucm_bytes: bytes, style: str) -> Optional[str]:
-    """The model as one inline SVG string, or ``None`` when it cannot be
-    produced as a single SVG.
+def _svg_body(svg: str) -> str:
+    """Strip graphviz's XML declaration / DOCTYPE, leaving the ``<svg>``."""
+    i = svg.find("<svg")
+    return svg[i:] if i >= 0 else svg
 
-    SVG is what the session report's model section wants — it zooms and
-    pans crisply where a raster does not. Only single-map models qualify:
-    a decomposed model is stacked from per-map panels
-    (:func:`~pm4py_ucm.visualization.ucm.stacked`), which composites
-    raster images, so those fall back to the PNG the report already has.
+
+def _stack_svgs(panels: List[str], gap: float = 28.0) -> str:
+    """Stack per-map SVGs into one document, one above the next.
+
+    Each panel is nested as an ``<svg>`` at an increasing y offset, which
+    gives it its own viewport and coordinate system, so the graphviz
+    layout inside is preserved exactly — the vector equivalent of what
+    :func:`~pm4py_ucm.visualization.ucm.stacked` does with raster panels.
+    """
+    import re
+
+    dims = []
+    for svg in panels:
+        m = re.search(r'<svg[^>]*\bwidth="([\d.]+)pt"[^>]*\bheight="([\d.]+)pt"',
+                      svg)
+        if m:
+            w, h = float(m.group(1)), float(m.group(2))
+        else:  # fall back to the viewBox extents
+            vb = re.search(r'viewBox="[\d.\-]+ [\d.\-]+ ([\d.]+) ([\d.]+)"', svg)
+            w, h = (float(vb.group(1)), float(vb.group(2))) if vb else (100.0, 100.0)
+        inner = svg[svg.index(">", svg.index("<svg")) + 1: svg.rindex("</svg>")]
+        dims.append((w, h, inner))
+
+    total_w = max(w for w, _, _ in dims)
+    total_h = sum(h for _, h, _ in dims) + gap * (len(dims) - 1)
+    out = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" '
+        f'xmlns:xlink="http://www.w3.org/1999/xlink" '
+        f'width="{total_w:.0f}pt" height="{total_h:.0f}pt" '
+        f'viewBox="0 0 {total_w:.2f} {total_h:.2f}">'
+    ]
+    y = 0.0
+    for w, h, inner in dims:
+        out.append(
+            f'<svg x="0" y="{y:.2f}" width="{w:.2f}" height="{h:.2f}" '
+            f'viewBox="0 0 {w:.2f} {h:.2f}">{inner}</svg>'
+        )
+        y += h + gap
+    out.append("</svg>")
+    return "\n".join(out)
+
+
+@st.cache_data(show_spinner=False)
+def _render_svg_cached(jucm_bytes: bytes, style: str) -> str:
+    """The model as one inline SVG string.
+
+    SVG zooms and pans crisply where a raster does not, and its text is
+    selectable. A single-map model renders directly; a decomposed
+    (multi-map) model renders each of its maps to SVG and stacks them into
+    one document — the same panels the PNG path composites, but as
+    vectors, so the whole family stays exportable as SVG.
     """
     with tempfile.TemporaryDirectory() as td:
         jucm_path = Path(td) / "model.jucm"
         jucm_path.write_bytes(jucm_bytes)
         ucm = pm4py_ucm.read_ucm(str(jucm_path))
-        if len(ucm.maps) != 1:
-            return None
-        gviz = _visualizer.apply(ucm, parameters={"style": style})
-        svg = gviz.pipe(format="svg").decode("utf-8")
-        # graphviz prepends an XML declaration and a DOCTYPE; strip them so
-        # the <svg> can be inlined straight into the report document.
-        i = svg.find("<svg")
-        return svg[i:] if i >= 0 else svg
+        if len(ucm.maps) <= 1:
+            gviz = _visualizer.apply(ucm, parameters={"style": style})
+            return _svg_body(gviz.pipe(format="svg").decode("utf-8"))
+
+        from pm4py_ucm.visualization.ucm.variants import classic as _classic
+        panels = []
+        for idx in range(len(ucm.maps)):
+            gviz = _classic.apply(
+                ucm, parameters={"style": style, "map_index": idx,
+                                 "format": "svg"})
+            panels.append(_svg_body(gviz.pipe(format="svg").decode("utf-8")))
+        return _stack_svgs(panels)
 
 
 def _render_png(ucm, style: str, out_path: str) -> str:
@@ -1745,14 +1795,15 @@ if _view == "Model":
     )
 
     # SVG alongside PNG: it stays crisp at any zoom and its text is
-    # selectable/searchable. Only single-map models render as one SVG; a
-    # decomposed model is stacked from per-map raster panels
-    # (_render_svg_cached returns None), so the SVG button is offered
-    # disabled there with the reason, rather than silently missing.
+    # selectable/searchable. Works for single- and multi-map (decomposed)
+    # models alike — the latter stacks its per-map SVGs. Only an actual
+    # render failure disables the button, with the reason.
     try:
         _svg = _render_svg_cached(mined["jucm"], style)
-    except Exception:
+        _svg_err = None
+    except Exception as _exc:
         _svg = None
+        _svg_err = f"{type(_exc).__name__}: {_exc}"
 
     d1, d2, d3, d4, d5 = st.columns(5)
     with d1:
@@ -1777,10 +1828,7 @@ if _view == "Model":
         help=(
             "Vector — crisp at any zoom, with selectable text."
             if _svg_ok else
-            f"SVG is a single vector image, so it is offered for "
-            f"single-map models only. This model has {mined['n_maps']} "
-            f"maps (decomposition = {decomposition_preset}); use the "
-            f"PNG, which stacks the panels."
+            f"SVG render failed ({_svg_err}); use the PNG."
         ),
     )
     d4.download_button(
