@@ -170,6 +170,7 @@ def dashboard_html(
     storage_key: Optional[str] = None,
     title: Optional[str] = None,
     theme: Optional[str] = None,
+    pending_pin: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Build the self-contained dashboard document.
 
@@ -208,6 +209,17 @@ def dashboard_html(
         preference is the wrong answer. A standalone export should leave
         it ``None`` — there is no host to ask, and it then tracks the
         reader's system theme live.
+    pending_pin
+        ``{"id": <unique per request>, "spec": <widget spec>}`` — a
+        widget the host wants added, as "Pin to dashboard" on the Model
+        view does.
+
+        The host cannot add it directly: ``components.html`` is one-way
+        and the widgets live in the browser. So it travels in the config
+        and the island applies it. Because the config is re-sent on every
+        rerun, ``id`` must be **fresh per request** — the island
+        remembers the ids it has applied, and a reused one would either
+        be ignored or breed a duplicate widget on every interaction.
 
     Returns
     -------
@@ -229,6 +241,7 @@ def dashboard_html(
         "renders": renders or {},
         "storageKey": storage_key or table.log_name,
         "theme": theme,
+        "pendingPin": pending_pin,
     }
     return _TEMPLATE % {
         # On <html> rather than set by script: the browser paints the page

@@ -791,6 +791,28 @@ class TestView:
         html = dashboard_html(table)
         assert '"storageKey":"t"' in html
 
+    def test_pending_pin_travels_into_the_page(self, table):
+        pin = {"id": "abc", "spec": {"id": "w9", "title": "Model",
+                                     "metric": "duration", "viz": "model"}}
+        html = dashboard_html(table, pending_pin=pin)
+        cfg = json.loads(html.split('id="pm-data">', 1)[1]
+                         .split("</script>", 1)[0].replace("<\\/", "</"))
+        assert cfg["pendingPin"] == pin
+
+    def test_absent_pin_is_a_splicable_null(self, table):
+        """The app splices a pin into the *cached* document rather than
+        keying the cache on it — a pin id is unique per click and would
+        miss the cache every time, rebuilding a megabyte for nothing.
+        That splice targets this exact literal."""
+        assert '"pendingPin":null' in dashboard_html(table)
+
+    def test_pin_is_applied_once(self):
+        """The config is re-sent on every rerun, so an un-guarded pin
+        would breed a new widget on each one."""
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        assert "_applyPendingPin" in ui
+        assert "applied.includes(pin.id)" in ui
+
     def test_filters_travel_into_the_page(self, table):
         f = [{"field": "contains", "op": "is", "value": "B"}]
         html = dashboard_html(table, filters=f)

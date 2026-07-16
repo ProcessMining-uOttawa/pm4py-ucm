@@ -383,6 +383,11 @@
 .pm-w__badge--met { background: var(--met-bg); color: var(--met-fg); }
 .pm-w__badge--risk { background: var(--risk-bg); color: var(--risk-fg); }
 .pm-w__badge--missed { background: var(--missed-bg); color: var(--missed-fg); }
+/* Not a target state — this one says "measuring a different population
+   from the header's count", so it stays neutral. */
+.pm-w__badge--filter {
+  background: var(--desk); color: var(--ink-2); cursor: help;
+}
 
 .pm-w__tools { display: flex; align-items: center; gap: 4px; }
 .pm-w__tool {

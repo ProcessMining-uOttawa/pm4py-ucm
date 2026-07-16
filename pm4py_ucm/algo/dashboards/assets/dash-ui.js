@@ -62,7 +62,42 @@ export class Dashboard {
 
     root.classList.add("pm-dash");
     this._initTheme(opts.theme);
+    this._applyPendingPin(opts.pendingPin);
     this.render();
+  }
+
+  /**
+   * Add a widget the host asked for — "Pin to dashboard" on the Model
+   * view.
+   *
+   * The host cannot reach in and do this itself: `components.html` is
+   * one-way, and the widgets live in this browser. So the host puts the
+   * request in the config and reruns, and the island applies it here.
+   *
+   * That makes the request arrive on EVERY rerun, not once, so it has to
+   * be idempotent — the applied pin ids are remembered, and the host
+   * mints a fresh id per click. Without that, one pin would breed a new
+   * widget on every interaction with the page.
+   */
+  _applyPendingPin(pin) {
+    if (!pin || !pin.id || this.readOnly) return;
+    const key = `${this._key()}:pins`;
+    let applied = [];
+    try {
+      applied = JSON.parse(localStorage.getItem(key) || "[]");
+    } catch (e) { /* a corrupt store just means we might re-pin once */ }
+    if (applied.includes(pin.id)) return;
+
+    this.specs.push(pin.spec);
+    this._save();
+    try {
+      // Keep only the recent ones: this list is unbounded otherwise, and
+      // only the last few pins can still be in flight.
+      localStorage.setItem(key, JSON.stringify(applied.concat(pin.id).slice(-20)));
+    } catch (e) {
+      console.warn("dashboard: could not record the pin", e);
+    }
+    this._pinned = pin.spec.title;
   }
 
   // -- theme ---------------------------------------------------------
@@ -206,6 +241,10 @@ export class Dashboard {
       this._targets(computed),
       this._grid(computed),
     );
+    if (this._pinned) {
+      toast(`Pinned “${this._pinned}”`, this._theme());
+      this._pinned = null;
+    }
   }
 
   _header() {
@@ -346,8 +385,18 @@ export class Dashboard {
       }, "✕"));
     }
 
+    // A widget with its own filter is measuring a different population
+    // from the one the header advertises; say so on the card, or its
+    // lower numbers read as a bug.
+    const own = (spec.filter || []).length;
     card.append(h("div", { class: "pm-w__head" },
       h("div", { class: "pm-w__title", title: w.title }, w.title),
+      own > 0 && h("span", {
+        class: "pm-w__badge pm-w__badge--filter",
+        title: "This widget has its own filter:\n"
+             + spec.filter.map((f) => "· " + describeFilter(f, this.table))
+                 .join("\n"),
+      }, own === 1 ? "FILTERED" : `${own} FILTERS`),
       w.state && h("span", { class: `pm-w__badge pm-w__badge--${w.state}` },
         STATE_LABEL[w.state]),
       tools));
@@ -524,9 +573,17 @@ export class Dashboard {
     else this.render();
   }
 
-  _openFilter() {
+  /**
+   * An axis/value picker, shared by the dashboard filter bar and the
+   * composer's per-widget FILTER row.
+   *
+   * Both produce the same `segment` filter the engine already
+   * understands, and the same one a table-cell drill-down produces — so
+   * a filter arrived at by clicking and a filter built by hand are the
+   * same object, and neither needs its own code path.
+   */
+  _filterPicker() {
     const axes = E.segmentAxes(this.table);
-    const body = h("div", {});
     const axisSel = h("select", { class: "pm-select" },
       ...axes.map((a) => h("option", { value: a.id }, a.label)));
     const valSel = h("select", { class: "pm-select" });
@@ -536,20 +593,25 @@ export class Dashboard {
     };
     axisSel.addEventListener("change", fill);
     fill();
+    return {
+      axisSel, valSel,
+      get: () => ({ field: "segment", op: "is",
+                    value: [axisSel.value, valSel.value] }),
+    };
+  }
 
-    body.append(h("div", { class: "pm-row" },
-      h("span", { class: "pm-row__label" }, "Where"), axisSel,
-      h("span", { class: "pm-row__hint" }, "is"), valSel));
+  _openFilter() {
+    const p = this._filterPicker();
+    const body = h("div", {}, h("div", { class: "pm-row" },
+      h("span", { class: "pm-row__label" }, "Where"), p.axisSel,
+      h("span", { class: "pm-row__hint" }, "is"), p.valSel));
 
     modal({
       theme: this._theme(),
       title: "Add filter", sub: `→ ${this.name}`, body,
       confirm: "Apply filter",
       onConfirm: () => {
-        this.filters.push({
-          field: "segment", op: "is",
-          value: [axisSel.value, valSel.value],
-        });
+        this.filters.push(p.get());
         this.render();
         toast("Filter applied", this._theme());
         return true;
@@ -631,6 +693,31 @@ export class Dashboard {
       style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap;flex:1",
     });
     const helpNote = h("div", { class: "pm-row__note" });
+
+    // Per-widget filter. The dashboard's own filters stack ON TOP of
+    // these at compute time, so this row narrows one widget without
+    // touching the rest of the board — "everything, but this card is
+    // just the appeals".
+    const fPick = this._filterPicker();
+    const fChips = h("div", {
+      style: "display:flex;gap:6px;flex-wrap:wrap;align-items:center",
+    });
+    const fAdd = h("button", {
+      class: "pm-btn pm-btn--ghost", type: "button",
+      onclick: () => {
+        spec.filter.push(fPick.get());
+        drawChips();
+        refresh();
+      },
+    }, "+ add");
+    const drawChips = () => {
+      fChips.replaceChildren(...spec.filter.map((f, i) =>
+        h("span", { class: "pm-chip" }, describeFilter(f, this.table),
+          h("button", {
+            type: "button", title: "Remove",
+            onclick: () => { spec.filter.splice(i, 1); drawChips(); refresh(); },
+          }, "✕"))));
+    };
 
     const rowsSel = h("select", { class: "pm-select" });
     const colsSel = h("select", { class: "pm-select" });
@@ -786,6 +873,13 @@ export class Dashboard {
       h("span", { class: "pm-row__label" }, "Metric"), metricSel, aggSel);
     rows.params = h("div", { class: "pm-row" },
       h("span", { class: "pm-row__label" }, "Params"), paramsBox);
+    rows.filter = h("div", { class: "pm-row" },
+      h("span", { class: "pm-row__label" }, "Filter"),
+      fPick.axisSel, h("span", { class: "pm-row__hint" }, "is"),
+      fPick.valSel, fAdd, fChips,
+      h("span", { class: "pm-row__note" },
+        "Applies to this widget only. The dashboard's filters stack on "
+        + "top of it."));
     rows.segment = h("div", { class: "pm-row" },
       h("span", { class: "pm-row__label" }, "Segment"),
       h("span", { class: "pm-row__hint" }, "rows"), rowsSel,
@@ -796,10 +890,10 @@ export class Dashboard {
       h("span", { class: "pm-row__hint" }, "warn at"), warnInput,
       modeSel, shareLabel, shareInput, targetNote);
 
-    body.append(rows.metric, rows.params, rows.segment, rows.target,
-                helpNote, preview);
+    body.append(rows.metric, rows.params, rows.filter, rows.segment,
+                rows.target, helpNote, preview);
 
-    rebuildParams(); rebuildAggs(); refresh();
+    rebuildParams(); rebuildAggs(); drawChips(); refresh();
 
     modal({
       theme: this._theme(),

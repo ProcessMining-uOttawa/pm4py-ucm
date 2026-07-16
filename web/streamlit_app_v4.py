@@ -51,6 +51,7 @@ import os
 import re
 import tempfile
 import traceback
+import uuid
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -1657,10 +1658,20 @@ with st.sidebar:
     )
     st.markdown(
         '<div style="font-weight:700;font-size:10px;letter-spacing:.08em;'
-        'color:#a09b91;text-transform:uppercase;margin-bottom:2px">'
+        'color:var(--pm-faint);text-transform:uppercase;margin-bottom:2px">'
         'Views</div>',
         unsafe_allow_html=True,
     )
+    # A view switch requested from elsewhere in the page (Pin to
+    # dashboard) arrives as `goto_view` and is consumed HERE, before the
+    # radio exists. Streamlit forbids writing a widget's own key once the
+    # widget has been instantiated, and every such request comes from a
+    # control rendered *below* this one — so the request cannot be the
+    # key itself, and it cannot be applied any later than this.
+    if "goto_view" in st.session_state:
+        _requested = st.session_state.pop("goto_view")
+        if _requested in _VIEWS:
+            st.session_state["view"] = _requested
     _view = st.radio(
         "Views", _VIEWS, label_visibility="collapsed", key="view",
     )
@@ -1704,7 +1715,7 @@ if _view == "Model":
         "in its own browser tab and zoom complex models more easily."
     )
 
-    d1, d2, d3 = st.columns(3)
+    d1, d2, d3, d4 = st.columns(4)
     with d1:
         _open_image_in_tab_button(_b64)
     d2.download_button(
@@ -1717,6 +1728,35 @@ if _view == "Model":
         file_name=_safe_download_name(Path(log_name).stem, ".jucm"),
         mime="application/xml",
     )
+    with d4.popover("Pin to dashboard ▦", use_container_width=True):
+        st.caption(
+            "Adds the model to the Dashboards view as a widget. The pin "
+            "is live: it renders whatever the model currently is, so it "
+            "follows a re-mine rather than freezing today's picture."
+        )
+        _pin_title = st.text_input(
+            "Widget title", value=f"Mined model — {Path(log_name).stem}",
+            key="pin_title",
+        )
+        if st.button("Pin ▦", type="primary", key="pin_go"):
+            # The island cannot be reached directly — components.html is
+            # one-way — so the request travels in its config on the next
+            # rerun. The id must be fresh per click: the config is re-sent
+            # on every rerun, and the island skips ids it has applied.
+            st.session_state["pending_pin"] = {
+                "id": uuid.uuid4().hex,
+                "spec": {
+                    "id": f"pin-{uuid.uuid4().hex[:8]}",
+                    "title": _pin_title or "Mined model",
+                    # A model widget carries no measurement of its own;
+                    # the metric is required by the spec shape, and the
+                    # renderer short-circuits before computing it.
+                    "metric": "duration",
+                    "viz": "model",
+                },
+            }
+            st.session_state["goto_view"] = "Dashboards"
+            st.rerun()
 
 # ===== Scenarios view =====================================================
 if _view == "Scenarios":
@@ -2701,6 +2741,20 @@ if _view == "Dashboards":
         _ft, _specs_json, "Ops overview",
         tuple(sorted(_renders.items())), file_hash, False, _theme,
     )
+
+    # A pin carries a fresh id per click, so it must not reach the cache
+    # key — it would miss every time and rebuild a 1 MB document for
+    # nothing. Splice it into the cached config instead. The island skips
+    # ids it has already applied, so re-sending the same one across
+    # reruns is harmless; it stays until the log or the theme changes.
+    _pin = st.session_state.get("pending_pin")
+    if _pin:
+        _html = _html.replace(
+            '"pendingPin":null',
+            '"pendingPin":' + _json.dumps(_pin, separators=(",", ":"))
+                              .replace("</", "<\\/"),
+            1,
+        )
 
     # The island owns its own scrolling; a fixed height keeps the page
     # from growing an outer scrollbar around an inner one.
