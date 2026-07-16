@@ -156,6 +156,47 @@ class TestPartition:
         assert tokens == ["_30_60", "_60_90"]  # digit-leading → underscore
         assert sum(c.n_cases for c in part.cells) == 22
 
+    @staticmethod
+    def _priority_log(levels):
+        """One-activity log with an integer ``case:priority`` column;
+        ``levels`` = [(value, n_cases), ...]."""
+        rows = []
+        ts = pd.Timestamp("2026-01-01")
+        i = 0
+        for val, n in levels:
+            for _ in range(n):
+                rows.append({
+                    "case:concept:name": f"c{i:04d}",
+                    "concept:name": "Act",
+                    "time:timestamp": ts,
+                    "case:priority": val,
+                })
+                i += 1
+        return pd.DataFrame(rows)
+
+    def test_discrete_integer_one_bin_per_value(self):
+        # Priority levels 1..5 with 5 bins requested: each level is its
+        # own bin (labelled by the value), not a "1-2"/"2-3" range.
+        df = self._priority_log([(1, 4), (2, 3), (3, 5), (4, 2), (5, 6)])
+        part = partition_log(df, ["priority"], bins=5)
+        assert part.attributes[0].binned
+        values = part.attributes[0].values
+        assert [v.label for v in values] == ["1", "2", "3", "4", "5"]
+        assert [(v.lo, v.hi) for v in values] == [
+            (1.0, 1.0), (2.0, 2.0), (3.0, 3.0), (4.0, 4.0), (5.0, 5.0)]
+        assert [c.n_cases for c in part.cells] == [4, 3, 5, 2, 6]
+        assert part.covered_cases == 20
+
+    def test_discrete_integer_falls_back_to_ranges_when_bins_fewer(self):
+        # Asking for fewer bins than distinct values keeps quantile
+        # ranges — the value-per-bin path only fires when it can honour
+        # every level.
+        df = self._priority_log([(1, 4), (2, 3), (3, 5), (4, 2), (5, 6)])
+        part = partition_log(df, ["priority"], bins=2)
+        labels = [v.label for v in part.attributes[0].values]
+        assert all("-" in l for l in labels)
+        assert sum(c.n_cases for c in part.cells) == 20
+
     def test_other_bucket_merges_low_count_values(self):
         rows = []
         ts = pd.Timestamp("2026-01-01")

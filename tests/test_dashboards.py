@@ -482,6 +482,71 @@ class TestSegmentation:
 
 
 # ---------------------------------------------------------------------------
+# Discrete-integer (single-value) bins
+# ---------------------------------------------------------------------------
+
+def _priority_log(levels):
+    """Log with an integer ``case:priority`` attribute; ``levels`` is
+    ``[(value, n_cases), ...]``. One A→B→C case per id."""
+    rows = []
+    i = 0
+    base = pd.Timestamp("2026-01-05", tz="UTC")
+    for val, n in levels:
+        for _ in range(n):
+            cid = f"c{i:04d}"
+            for k, act in enumerate(("A", "B", "C")):
+                rows.append({
+                    "case:concept:name": cid,
+                    "concept:name": act,
+                    "time:timestamp": base + pd.Timedelta(days=k),
+                    "org:resource": "R1",
+                    "case:priority": val,
+                })
+            i += 1
+    return pd.DataFrame(rows)
+
+
+class TestDiscreteIntegerBins:
+    """A small set of whole-number values (e.g. priority levels) gets one
+    bin per value, not quantile ranges — mirrors the family partitioner's
+    _discrete_integer_values."""
+
+    def test_bins_are_single_values(self):
+        t = build_fact_table(
+            _priority_log([(1, 2), (2, 3), (3, 2), (4, 1), (5, 2)]), bins=5)
+        attr = t.attribute("case:priority")
+        assert attr.type == "integer"
+        assert [b.label for b in attr.bins] == ["1", "2", "3", "4", "5"]
+        assert [(b.lo, b.hi) for b in attr.bins] == [
+            (1.0, 1.0), (2.0, 2.0), (3.0, 3.0), (4.0, 4.0), (5.0, 5.0)]
+
+    def test_segment_assigns_each_case_to_its_value(self):
+        t = build_fact_table(_priority_log([(1, 2), (3, 1), (5, 2)]), bins=5)
+        codes, labels = segment_keys(t, "attr:case:priority")
+        assert labels == ["1", "3", "5"]
+        assert [labels[c] for c in codes] == ["1", "1", "3", "5", "5"]
+
+    def test_fewer_bins_than_values_keeps_ranges(self):
+        t = build_fact_table(
+            _priority_log([(1, 2), (2, 2), (3, 2), (4, 2), (5, 2)]), bins=2)
+        attr = t.attribute("case:priority")
+        assert len(attr.bins) <= 2
+        assert any("–" in b.label for b in attr.bins)
+
+    def test_js_parity_on_single_value_bins(self, tmp_path):
+        t = build_fact_table(_priority_log([(1, 2), (3, 1), (5, 2)]), bins=5)
+        spec = {"id": "prio", "metric": "eventCount", "viz": "bar",
+                "agg": "sum", "segment": {"rows": "attr:case:priority"}}
+        py = compute_widget(spec, t)
+        js = _run_js(t.to_payload(), [spec], [[]],
+                     catalog_json(interval_log=t.interval_log), tmp_path)[0]
+        assert "error" not in js, js.get("error")
+        assert [s["label"] for s in py["series"]] == ["1", "3", "5"]
+        assert json.dumps(_norm(js["series"])) == \
+            json.dumps(_norm(py["series"]))
+
+
+# ---------------------------------------------------------------------------
 # Widgets
 # ---------------------------------------------------------------------------
 

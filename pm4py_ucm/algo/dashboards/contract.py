@@ -360,6 +360,21 @@ def _numeric_bins(numeric, bins: int) -> List[NumericBin]:
     clean = pd.to_numeric(numeric, errors="coerce").dropna()
     if clean.empty:
         return []
+
+    def fmt(x: float) -> str:
+        return f"{x:.0f}" if float(x).is_integer() else f"{x:.4g}"
+
+    # Few distinct whole-number values (e.g. priority levels 1..5 with 5
+    # bins requested): one bin per value, so a reader sees "3" rather
+    # than a "2–3" range that merges or splits the levels. Degenerate
+    # [v, v] bins segment correctly — both engines threshold on the next
+    # bin's ``lo``, so the last bin absorbs the maximum. Mirrors the
+    # family partitioner's _discrete_integer_values.
+    uniq = np.unique(clean.to_numpy())
+    if 0 < uniq.size <= max(1, bins) and bool(np.all(uniq == np.round(uniq))):
+        return [NumericBin(label=fmt(float(v)), lo=float(v), hi=float(v))
+                for v in uniq]
+
     try:
         _, edges = pd.qcut(clean, q=max(1, bins), retbins=True,
                            duplicates="drop")
@@ -368,9 +383,6 @@ def _numeric_bins(numeric, bins: int) -> List[NumericBin]:
         edges = [float(clean.min()), float(clean.max())]
     if len(edges) < 2:
         edges = [float(clean.min()), float(clean.max()) + 1.0]
-
-    def fmt(x: float) -> str:
-        return f"{x:.0f}" if float(x).is_integer() else f"{x:.4g}"
 
     return [
         NumericBin(label=f"{fmt(edges[i])}–{fmt(edges[i + 1])}",

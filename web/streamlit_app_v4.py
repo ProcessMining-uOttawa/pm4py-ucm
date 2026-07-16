@@ -2317,7 +2317,9 @@ if _view == "Family":
             value=4, step=1, disabled=not _any_numeric,
             help=(
                 "Numeric attributes (e.g. age) are partitioned into "
-                "this many quantile ranges."
+                "this many quantile ranges. A column with at most this "
+                "many distinct whole-number values (e.g. priority levels "
+                "1-5) gets one bin per value instead of ranges."
             ),
         )
 
