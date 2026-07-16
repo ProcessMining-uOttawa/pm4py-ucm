@@ -595,6 +595,15 @@
   border-top: 1px solid var(--border);
 }
 
+/* The "dashboard loaded" report: what bound, what didn't. */
+.pm-load-report p { margin: 8px 0; font-size: 13px; color: var(--ink); }
+.pm-load-report__list {
+  margin: 4px 0 8px; padding-left: 18px; font-size: 13px;
+}
+.pm-load-report__list li { margin: 3px 0; color: var(--ink); }
+.pm-load-report__miss { color: var(--muted); font-family: var(--f-mono); font-size: 11px; }
+.pm-load-report__note { color: var(--muted); font-size: 12px; }
+
 /* Labelled rows: a 86px label column, controls to its right. */
 .pm-row {
   display: flex;

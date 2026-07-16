@@ -244,7 +244,11 @@ watch the **scorecard**, and write custom metrics in the **ƒ formula
 language** (`duration() where attr("Claim_Value") > 500`, …). **Export**
 the whole dashboard as one self-contained interactive HTML file, or a
 multi-section **session report** (scorecard + dashboards + the model as
-SVG + a Family section). The exact metric definitions, the ƒ grammar, and
+SVG + a Family section). **Save** the dashboard's definition (its widgets
+and filters) as a small reusable JSON file and **Load** it back later or
+onto another log — widgets that name activities or attributes the target
+log lacks are reported up front rather than shown as misleading zeros. The
+exact metric definitions, the ƒ grammar, and
 the engine's rounding / weighting decisions are documented in
 [`docs/dashboards.md`](../docs/dashboards.md); a runnable walkthrough is
 [`demo/dashboards_tutorial.ipynb`](../demo/dashboards_tutorial.ipynb).

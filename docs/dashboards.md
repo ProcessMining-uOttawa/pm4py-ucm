@@ -399,6 +399,44 @@ instead of theirs.
 The export carries the current widgets *and the current filters*, so a
 dashboard sent to answer a specific question opens on that question.
 
+### Save and load a definition
+
+⬇ Export ships the *data* — the whole fact table, so the file runs
+offline. ⬇ Save ships only the *recipe*: a few-kilobyte JSON file holding
+the dashboard's name, its widgets, its filters, and the name of the log
+it was built on.
+
+```json
+{
+  "pm4pyUcmDashboard": 1,
+  "name": "Ops overview",
+  "log": "ClaimsPaymentLog",
+  "specs": [ … widget specs … ],
+  "filters": [ … dashboard filters … ]
+}
+```
+
+⬆ Load reads such a file and *replaces* the current widgets (it does not
+merge). Widget ids are re-minted on load, so a file with blank or
+colliding ids — or the same file loaded twice — never breaks reorder or
+edit, which key off the id.
+
+A definition names activities and attributes, so it is portable across
+logs that share them. When one is loaded against a log that lacks a name
+a widget uses, that widget cannot bind — the engine renders it as a bare
+`0` or *No data.*, which reads like a real measurement. So the loader
+runs `unboundRefs(spec, table)` over every widget first — a static walk
+of the metric params, the segment axes, the custom formula, and the
+widget's own filters — and reports which widgets could not bind and what
+each is missing, rather than letting them masquerade as answers. Filters
+are exploration state tied to the loaded log's values, so they are
+carried only when the definition came from that same log; otherwise they
+are dropped and noted.
+
+Save/Load lives in the island, next to Export, for the same reason Export
+does: `components.html` is one-way, so the widgets live in the browser and
+only the browser can serialise them.
+
 ### Light and dark
 
 The handoff specifies only a light palette, so the dark one is derived

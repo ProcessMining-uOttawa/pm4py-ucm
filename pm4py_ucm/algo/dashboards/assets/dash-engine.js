@@ -1077,6 +1077,58 @@ export function compileFormula(text, activities = [], attributes = []) {
     unknown: formulaUnknownNames(ast, activities, attributes) };
 }
 
+/**
+ * The activities and attributes a widget spec names that this log lacks.
+ *
+ * A saved dashboard definition references activities and attributes by
+ * name, so loading it against a different log can leave widgets that
+ * cannot bind. This is a static walk of every place a spec can name one
+ * — the metric params, the custom formula, the segment axes, and the
+ * widget's own filters — so a loader can report "N widgets couldn't
+ * bind" before the engine quietly renders them as "—". It is a
+ * UI-support check, not a metric, so it has no engine.py mirror.
+ *
+ * @returns {{activities: string[], attributes: string[]}} sorted, unique
+ */
+export function unboundRefs(spec, table) {
+  const acts = new Set(table.activities);
+  const attrNames = new Set();
+  for (const a of table.attributes) { attrNames.add(a.name); attrNames.add(a.label); }
+  const missAct = new Set(), missAttr = new Set();
+
+  const act = (name) => { if (name && !acts.has(name)) missAct.add(name); };
+  const attr = (name) => { if (name && !attrNames.has(name)) missAttr.add(name); };
+  const axis = (a) => {
+    if (typeof a === "string" && a.startsWith("attr:")) attr(a.slice(5));
+  };
+
+  const p = spec.params || {};
+  act(p.activity); act(p.from); act(p.to);
+
+  if (spec.metric === "custom" && p.formula) {
+    // compileFormula already resolves the names against this log; its
+    // `unknown` list prefixes attributes with "attr:".
+    for (const m of compileFormula(p.formula, table.activities, [...attrNames]).unknown) {
+      if (m.startsWith("attr:")) missAttr.add(m.slice(5)); else missAct.add(m);
+    }
+  }
+
+  const seg = spec.segment || {};
+  axis(seg.rows); axis(seg.cols);
+
+  for (const f of spec.filter || []) {
+    const field = f.field || "";
+    if (field === "contains") act(f.value);
+    else if (field === "segment") axis((f.value || [])[0]);
+    else if (field.startsWith("attr:")) attr(field.slice(5));
+  }
+
+  return {
+    activities: [...missAct].sort(),
+    attributes: [...missAttr].sort(),
+  };
+}
+
 /** The per-case primitives the ƒ functions resolve to — mirror of
  *  engine._formula_base. Reuses perCaseValues so a formula and a catalog
  *  widget agree on what each function means. */
