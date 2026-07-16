@@ -178,8 +178,14 @@ once. The performance **overlays** on the model
 The two agree whenever an activity occurs at most once per case, and
 diverge on rework. Neither is wrong — they answer different questions
 ("how long does this activity take *for a case*" vs "how long does an
-execution of this activity take"). The composer surfaces this on the
-affected metrics.
+execution of this activity take").
+
+**Decided: the dashboard activity-time metrics stay case-weighted.** One
+number per case is the natural unit for a case-level dashboard, and it is
+what composes with the per-case targets, segmentation, and scorecard
+built on top. The model overlays stay event-weighted, by design. The
+divergence is intentional and documented — not a discrepancy to
+reconcile — and the composer surfaces it on the affected metrics.
 
 ---
 
