@@ -309,6 +309,17 @@ export class Dashboard {
         filters: (opts.filters || []).slice(),
       }] };
     };
+    // An "export all" bundle carries the whole set in the config; the
+    // read-only viewer switches between them but cannot edit. This wins
+    // over the localStorage registry and the single-dashboard fallback.
+    if (Array.isArray(opts.dashboards) && opts.dashboards.length) {
+      this._reg = { active: opts.active,
+        dashboards: JSON.parse(JSON.stringify(opts.dashboards)) };
+      if (!this._reg.dashboards.some((d) => d.id === this._reg.active)) {
+        this._reg.active = this._reg.dashboards[0].id;
+      }
+      return;
+    }
     if (!this._multi) { this._reg = seed(); return; }
 
     let reg = null;
@@ -435,20 +446,28 @@ export class Dashboard {
     setTimeout(() => input.focus(), 0);
   }
 
-  /** The dashboard switcher shown in the header (editable mode only). */
+  /**
+   * The dashboard switcher shown in the header. Editing (new / rename /
+   * delete) is dropped in read-only mode — an "export all" bundle can be
+   * switched between but not restructured.
+   */
   _dashSwitcher() {
     const sel = h("select", {
       class: "pm-select pm-dashsel", title: "Switch dashboard",
       onchange: (e) => this._switchTo(e.target.value),
     }, ...this._reg.dashboards.map((d) =>
       h("option", { value: d.id, selected: d.id === this.activeId }, d.name)));
-    const icon = (title, glyph, fn) => h("button", {
-      class: "pm-btn pm-btn--ghost pm-btn--icon", title, onclick: fn,
-    }, glyph);
-    return h("span", { class: "pm-dashbar" }, sel,
-      icon("New dashboard", "+", () => this._newDashboard()),
-      icon("Rename dashboard", "✎", () => this._renameDashboard()),
-      icon("Delete dashboard", "✕", () => this._deleteDashboard()));
+    const kids = [sel];
+    if (!this.readOnly) {
+      const icon = (title, glyph, fn) => h("button", {
+        class: "pm-btn pm-btn--ghost pm-btn--icon", title, onclick: fn,
+      }, glyph);
+      kids.push(
+        icon("New dashboard", "+", () => this._newDashboard()),
+        icon("Rename dashboard", "✎", () => this._renameDashboard()),
+        icon("Delete dashboard", "✕", () => this._deleteDashboard()));
+    }
+    return h("span", { class: "pm-dashbar" }, ...kids);
   }
 
   exportSpecs() { return JSON.parse(JSON.stringify(this.specs)); }
@@ -497,6 +516,42 @@ export class Dashboard {
     a.click();
     URL.revokeObjectURL(a.href);
     toast("Exported — interactive, offline, no server needed", this._theme());
+  }
+
+  /**
+   * Every named dashboard for this log in one standalone file — the same
+   * self-contained page, but its config carries the whole registry
+   * instead of one dashboard, so the read-only viewer's header switcher
+   * moves between them. Nothing new to build: the page already renders any
+   * dashboard from a config.
+   */
+  exportAllHtml() {
+    const doc = document.documentElement.cloneNode(true);
+    const root = doc.querySelector("#pm-root");
+    if (root) root.replaceChildren();
+    doc.querySelectorAll(".pm-toast, .pm-scrim").forEach((e) => e.remove());
+
+    this._save();   // fold the active dashboard's live edits into the registry
+    const cfg = JSON.parse(document.getElementById("pm-data").textContent);
+    cfg.dashboards = JSON.parse(JSON.stringify(this._reg.dashboards));
+    cfg.active = this.activeId;
+    cfg.readOnly = true;
+    delete cfg.specs;    // dashboards[] supersedes the single-dashboard config
+    delete cfg.filters;
+    doc.querySelector("#pm-data").textContent = scriptJson(cfg);
+    return "<!DOCTYPE html>\n" + doc.outerHTML;
+  }
+
+  downloadAllExport() {
+    const blob = new Blob([this.exportAllHtml()], { type: "text/html" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${(this.table.logName || "dashboards")
+      .replace(/[^\w.-]+/g, "_")}-dashboards.html`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast(`Exported all ${this._reg.dashboards.length} dashboards`,
+      this._theme());
   }
 
   downloadReport() {
@@ -705,10 +760,12 @@ export class Dashboard {
     const total = this.table.nCases;
     const kids = [
       // The switcher (name dropdown + new/rename/delete) stands in for the
-      // plain title when the dashboard is editable; a read-only export
-      // shows just its name.
-      this.readOnly ? h("span", { class: "pm-title" }, this.name)
-        : this._dashSwitcher(),
+      // plain title when the dashboard is editable, and also in a
+      // read-only "export all" bundle (dropdown only) so its dashboards
+      // are switchable; a single read-only export shows just its name.
+      (!this.readOnly || this._reg.dashboards.length > 1)
+        ? this._dashSwitcher()
+        : h("span", { class: "pm-title" }, this.name),
       ...this.filters.map((f, i) =>
         h("span", { class: "pm-chip" },
           describeFilter(f, this.table),
@@ -763,6 +820,15 @@ export class Dashboard {
              + "file — works offline, no server.",
         onclick: () => this.downloadExport(),
       }, "⬇ Export"));
+      if (this._reg && this._reg.dashboards.length > 1) {
+        kids.push(h("button", {
+          class: "pm-btn pm-btn--ghost",
+          title: `All ${this._reg.dashboards.length} dashboards in one `
+               + "offline HTML file, switchable — a read-only viewer of "
+               + "the whole set.",
+          onclick: () => this.downloadAllExport(),
+        }, "⬇ Export all"));
+      }
       kids.push(h("button", {
         class: "pm-btn pm-btn--ghost",
         title: "The full session report — scorecard, this dashboard, and "
