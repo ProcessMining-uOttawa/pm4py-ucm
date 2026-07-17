@@ -324,6 +324,110 @@ export function aggregate(values, kind) {
   }
 }
 
+//: A histogram of ≤ this many equal-width bins for continuous data; an
+//: integer metric with a span no wider than HIST_INT_MAX gets one bar per
+//: value instead. Kept identical in engine.py so the two agree.
+const HIST_BINS = 20;
+const HIST_INT_MAX = 40;
+
+/**
+ * A histogram of the finite per-case values — mirrors engine._histogram.
+ *
+ * Returns ``{bins: [{lo, hi, count}], min, max, n, integer}``. Small
+ * whole-number metrics (a count with a narrow range) get one bar per
+ * value (``lo === hi``); everything else gets ``HIST_BINS`` equal-width
+ * bins. All arithmetic is plain IEEE double and the bin index is a
+ * ``floor``, so the Python and JS results are identical.
+ */
+export function histogram(values) {
+  const v = Array.from(values).filter(Number.isFinite);
+  const n = v.length;
+  if (!n) return { bins: [], min: null, max: null, n: 0, integer: false };
+  let mn = v[0], mx = v[0];
+  for (const x of v) { if (x < mn) mn = x; if (x > mx) mx = x; }
+  const allInt = v.every((x) => Number.isInteger(x));
+
+  if (mn === mx) {
+    return { bins: [{ lo: mn, hi: mx, count: n }], min: mn, max: mx,
+             n, integer: allInt };
+  }
+  if (allInt && (mx - mn) <= HIST_INT_MAX) {
+    const bins = [];
+    for (let k = mn; k <= mx; k++) {
+      bins.push({ lo: k, hi: k, count: v.filter((x) => x === k).length });
+    }
+    return { bins, min: mn, max: mx, n, integer: true };
+  }
+  const binw = (mx - mn) / HIST_BINS;
+  const counts = new Array(HIST_BINS).fill(0);
+  for (const x of v) {
+    let idx = Math.floor((x - mn) / binw);
+    if (idx < 0) idx = 0;
+    if (idx >= HIST_BINS) idx = HIST_BINS - 1;
+    counts[idx]++;
+  }
+  const bins = counts.map((c, i) => ({
+    lo: mn + i * binw, hi: mn + (i + 1) * binw, count: c,
+  }));
+  return { bins, min: mn, max: mx, n, integer: false };
+}
+
+//: Outliers beyond this count are summarised rather than each shipped —
+//: a box plot with 4,000 dots is a smear, not a chart.
+const BOX_OUTLIER_CAP = 100;
+
+/**
+ * Tukey box-plot statistics for the finite per-case values — mirrors
+ * engine._box_stats.
+ *
+ * Returns the five-number summary plus 1.5·IQR fences, the whisker ends
+ * (the extreme values *inside* the fences) and the outliers beyond them
+ * (capped, with a full count). Quartiles use :func:`percentile`, so they
+ * match everywhere the engine reports a median or p90.
+ */
+export function boxStats(values) {
+  const v = Array.from(values).filter(Number.isFinite).sort((a, b) => a - b);
+  const n = v.length;
+  const empty = {
+    n: 0, min: null, q1: null, median: null, q3: null, max: null,
+    whiskerLo: null, whiskerHi: null, outliers: [], nOutliers: 0,
+  };
+  if (!n) return empty;
+
+  const q1 = percentile(v, 0.25), median = percentile(v, 0.5),
+        q3 = percentile(v, 0.75);
+  const iqr = q3 - q1;
+  const loF = q1 - 1.5 * iqr, hiF = q3 + 1.5 * iqr;
+
+  let whiskerLo = v[n - 1], whiskerHi = v[0];
+  for (const x of v) if (x >= loF) { whiskerLo = x; break; }
+  for (let i = n - 1; i >= 0; i--) if (v[i] <= hiF) { whiskerHi = v[i]; break; }
+
+  const outliers = v.filter((x) => x < loF || x > hiF);
+  return {
+    n, min: v[0], q1, median, q3, max: v[n - 1],
+    whiskerLo, whiskerHi,
+    outliers: outliers.slice(0, BOX_OUTLIER_CAP), nOutliers: outliers.length,
+  };
+}
+
+/**
+ * ``[minISODate, maxISODate]`` over the case start timestamps — the
+ * bounds the date-range filter's inputs open with. A UI helper (no
+ * engine.py mirror): the date *filter* itself already exists in both
+ * engines; this only seeds sensible min/max/value for the picker.
+ */
+export function dateSpan(t) {
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < t.nCases; i++) {
+    const s = t.starts[i];
+    if (Number.isFinite(s)) { if (s < lo) lo = s; if (s > hi) hi = s; }
+  }
+  if (!Number.isFinite(lo)) return [null, null];
+  const iso = (sec) => new Date(sec * 1000).toISOString().slice(0, 10);
+  return [iso(lo), iso(hi)];
+}
+
 // ---------------------------------------------------------------------
 // Targets
 // ---------------------------------------------------------------------
@@ -1228,7 +1332,12 @@ export function computeWidget(spec, t, catalog, dashboardFilters) {
   const target = spec.target;
 
   if (rowsAx === "none" && colsAx === "none") {
-    return Object.assign(out, kpi(values, aggKind, unit, target, nCases));
+    Object.assign(out, kpi(values, aggKind, unit, target, nCases));
+    // hist/box keep the KPI headline (aggregate + sub) and add the shape
+    // of the distribution beneath it — only meaningful unsegmented.
+    if (out.viz === "hist") out.hist = histogram(values);
+    else if (out.viz === "box") out.box = boxStats(values);
+    return out;
   }
   if (rowsAx === "none" || colsAx === "none") {
     const axis = rowsAx !== "none" ? rowsAx : colsAx;

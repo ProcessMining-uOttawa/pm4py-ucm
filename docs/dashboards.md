@@ -305,6 +305,34 @@ one per detected case attribute (`attr:<name>`).
 Segmentation arity picks the visualisation: 0 axes → KPI, 1 → bar/line,
 2 → heatmap table.
 
+### Distribution shapes (histogram / box plot)
+
+Without a segment axis a per-case metric is one aggregate, but its whole
+distribution can be shown instead of a single number — `viz: "hist"` or
+`viz: "box"` (offered in the composer's *Chart* row only when unsegmented,
+and never for a series metric, which is a time series rather than a bag of
+per-case values). Both keep the aggregate as a headline and draw the
+shape beneath it.
+
+* **Histogram** — `histogram(values)` returns `{bins: [{lo, hi, count}],
+  min, max, n, integer}`. A whole-number metric spanning no more than 40
+  gets one bar per value; everything else gets 20 equal-width bins. The
+  bin index is a `floor` of plain IEEE-double arithmetic, computed the
+  same way in Python and JS so the two never disagree on a boundary.
+* **Box plot** — `box_stats(values)` returns the five-number summary plus
+  1.5·IQR Tukey fences, the whisker ends (the extreme values *inside* the
+  fences) and the outliers beyond them (capped at 100, with a full count).
+  Quartiles reuse the same linear-interpolation `percentile` the
+  aggregations do.
+
+### Filtering by date
+
+The `date` filter — `{field: "date", value: [from, to]}`, ISO dates,
+either end nullable for an open range, the final period inclusive — has
+always been in the engine; the filter picker now offers a **Date range**
+option that produces it, its inputs seeded from the log's first and last
+case-start dates (`dateSpan` in the browser engine).
+
 ---
 
 ## 6. Targets

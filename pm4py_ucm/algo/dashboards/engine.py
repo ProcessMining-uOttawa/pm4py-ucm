@@ -447,6 +447,102 @@ def aggregate(values, kind: str) -> Optional[float]:
 
 
 # ---------------------------------------------------------------------------
+# Distribution shapes (histogram / box plot)
+# ---------------------------------------------------------------------------
+
+#: A histogram is ``HIST_BINS`` equal-width bins, unless the metric is a
+#: whole-number one spanning no more than ``HIST_INT_MAX`` — then it gets
+#: one bar per value. Mirrored in dash-engine.js so the two agree.
+HIST_BINS = 20
+HIST_INT_MAX = 40
+#: Outliers past this count are summarised, not each shipped to the client.
+BOX_OUTLIER_CAP = 100
+
+
+def _histogram(values) -> Dict[str, Any]:
+    """A histogram of the finite per-case values — mirror of
+    :func:`histogram` in ``dash-engine.js``.
+
+    Returns ``{bins: [{lo, hi, count}], min, max, n, integer}``. Computed
+    in plain Python floats (not numpy reductions) so the bin index — a
+    ``floor`` of IEEE-double arithmetic — is bit-for-bit what the browser
+    computes.
+    """
+    import math
+    import numpy as np
+
+    v = [float(x) for x in np.asarray(values, dtype=np.float64)
+         if np.isfinite(x)]
+    n = len(v)
+    if not n:
+        return {"bins": [], "min": None, "max": None, "n": 0,
+                "integer": False}
+    mn = min(v)
+    mx = max(v)
+    all_int = all(x == math.floor(x) for x in v)
+
+    if mn == mx:
+        return {"bins": [{"lo": mn, "hi": mx, "count": n}],
+                "min": mn, "max": mx, "n": n, "integer": all_int}
+    if all_int and (mx - mn) <= HIST_INT_MAX:
+        bins = [{"lo": float(k), "hi": float(k),
+                 "count": sum(1 for x in v if x == k)}
+                for k in range(int(mn), int(mx) + 1)]
+        return {"bins": bins, "min": mn, "max": mx, "n": n, "integer": True}
+
+    binw = (mx - mn) / HIST_BINS
+    counts = [0] * HIST_BINS
+    for x in v:
+        idx = math.floor((x - mn) / binw)
+        idx = 0 if idx < 0 else HIST_BINS - 1 if idx >= HIST_BINS else idx
+        counts[idx] += 1
+    bins = [{"lo": mn + i * binw, "hi": mn + (i + 1) * binw, "count": counts[i]}
+            for i in range(HIST_BINS)]
+    return {"bins": bins, "min": mn, "max": mx, "n": n, "integer": False}
+
+
+def _box_stats(values) -> Dict[str, Any]:
+    """Tukey box-plot statistics for the finite per-case values — mirror
+    of :func:`boxStats` in ``dash-engine.js``.
+
+    The five-number summary plus 1.5·IQR fences, the whisker ends (the
+    extreme values *inside* the fences) and the outliers beyond them
+    (capped, with a full count). Quartiles reuse :func:`percentile`.
+    """
+    import numpy as np
+
+    v = sorted(float(x) for x in np.asarray(values, dtype=np.float64)
+               if np.isfinite(x))
+    n = len(v)
+    if not n:
+        return {"n": 0, "min": None, "q1": None, "median": None, "q3": None,
+                "max": None, "whiskerLo": None, "whiskerHi": None,
+                "outliers": [], "nOutliers": 0}
+
+    q1 = percentile(v, 0.25)
+    median = percentile(v, 0.5)
+    q3 = percentile(v, 0.75)
+    iqr = q3 - q1
+    lo_f, hi_f = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+
+    whisker_lo = v[-1]
+    for x in v:
+        if x >= lo_f:
+            whisker_lo = x
+            break
+    whisker_hi = v[0]
+    for x in reversed(v):
+        if x <= hi_f:
+            whisker_hi = x
+            break
+
+    outliers = [x for x in v if x < lo_f or x > hi_f]
+    return {"n": n, "min": v[0], "q1": q1, "median": median, "q3": q3,
+            "max": v[-1], "whiskerLo": whisker_lo, "whiskerHi": whisker_hi,
+            "outliers": outliers[:BOX_OUTLIER_CAP], "nOutliers": len(outliers)}
+
+
+# ---------------------------------------------------------------------------
 # Targets
 # ---------------------------------------------------------------------------
 
@@ -988,7 +1084,14 @@ def compute_widget(spec: Dict[str, Any], table: FactTable, *,
     target = spec.get("target")
 
     if rows_ax == "none" and cols_ax == "none":
-        return {**out, **_kpi(values, agg_kind, unit, target, n_cases)}
+        res = {**out, **_kpi(values, agg_kind, unit, target, n_cases)}
+        # hist/box keep the KPI headline and add the distribution's shape;
+        # both are only meaningful for an unsegmented per-case metric.
+        if out["viz"] == "hist":
+            res["hist"] = _histogram(values)
+        elif out["viz"] == "box":
+            res["box"] = _box_stats(values)
+        return res
 
     if cols_ax == "none" or rows_ax == "none":
         axis = rows_ax if rows_ax != "none" else cols_ax

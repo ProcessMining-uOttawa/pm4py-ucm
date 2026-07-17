@@ -444,6 +444,28 @@
 .pm-kpi__dist > i.risk { background: var(--warn-bar); }
 .pm-kpi__dist > i.missed { background: var(--garnet); }
 
+/* -- distribution charts (histogram / box plot) ---------------------- */
+
+/* A distribution widget keeps the aggregate as a smaller headline and
+   gives the chart the room. */
+.pm-kpi__value--sm { font-size: 18px; margin-top: 0; }
+.pm-chart { display: block; width: 100%; height: auto; margin-top: 8px; overflow: visible; }
+.pm-chart__axis { stroke: var(--border); stroke-width: 1; }
+.pm-chart__lab { fill: var(--muted); font-family: var(--f-mono); font-size: 9px; }
+.pm-chart__empty { color: var(--muted); font-size: 12px; margin-top: 8px; }
+
+.pm-hist__bar { fill: var(--garnet); }
+.pm-hist__bar:hover { fill: var(--garnet-hover); }
+
+.pm-box__box { fill: var(--garnet); fill-opacity: 0.2; stroke: var(--garnet); stroke-width: 1.5; }
+.pm-box__median { stroke: var(--garnet); stroke-width: 2; }
+.pm-box__whisker { stroke: var(--ink); stroke-width: 1; }
+.pm-box__outlier { fill: var(--muted); }
+
+/* The filter picker's controls sit inline and wrap on a narrow modal. */
+.pm-filter-ctl { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.pm-date { min-width: 130px; }
+
 /* -- bar / series ---------------------------------------------------- */
 
 .pm-bars {
