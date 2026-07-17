@@ -38,6 +38,8 @@ from pm4py_ucm.algo.dashboards import (
     worst_state,
 )
 from pm4py_ucm.algo.dashboards.engine import (
+    _box_stats,
+    _histogram,
     fmt_days,
     percentile,
     round_half_away,
@@ -941,6 +943,9 @@ class TestView:
         """No network of any kind: the export has to open from a USB
         stick with no server and no CDN."""
         html = dashboard_html(table)
+        # The SVG XML namespace is an identifier `createElementNS` needs,
+        # not a URL the page ever fetches — the one allowed `http://`.
+        html = html.replace("http://www.w3.org/2000/svg", "")
         for bad in ("<script src=", "<link rel=\"stylesheet\"",
                     "http://", "https://", "import(", "fetch("):
             assert bad not in html, bad
@@ -1438,12 +1443,25 @@ _PARITY_SPECS = [
      "segment": {"rows": "attr:case:country", "cols": "resource"}},
     {"id": "cust-broken", "metric": "custom", "viz": "kpi",
      "params": {"formula": "duration( >"}},
+    # Distribution shapes: the continuous path (duration) and the
+    # whole-number path (a count) for both the histogram and the box plot.
+    {"id": "hist-duration", "metric": "duration", "viz": "hist",
+     "agg": "avg", "params": {}},
+    {"id": "box-duration", "metric": "duration", "viz": "box",
+     "agg": "avg", "params": {}},
+    {"id": "hist-count", "metric": "actFreq", "viz": "hist", "agg": "avg",
+     "params": {"activity": "A"}},
+    {"id": "box-count", "metric": "actFreq", "viz": "box", "agg": "avg",
+     "params": {"activity": "A"}},
 ]
 
 _PARITY_DASHBOARD_FILTERS = [
     [],
     [{"field": "attr:case:country", "op": "is", "value": "AUS"}],
     [{"field": "contains", "op": "not", "value": "B"}],
+    # The date-range filter the new picker produces — parity across the
+    # whole widget set, not just the standalone filter test.
+    [{"field": "date", "op": "is", "value": ["2026-01-01", "2026-12-31"]}],
 ]
 
 _RUNNER = r"""
@@ -1558,6 +1576,13 @@ class TestJsParity:
             assert json.dumps(_norm(js[k])) == json.dumps(_norm(py[k])), \
                 f"{label}: {k}"
 
+        # Distribution shapes travel as their own sub-objects (bins /
+        # five-number summary + whiskers + outliers) and must match too.
+        for k in ("hist", "box"):
+            if k in py or k in js:
+                assert json.dumps(_norm(js.get(k))) == \
+                    json.dumps(_norm(py.get(k))), f"{label}: {k}"
+
     def test_scorecard_matches(self, js_results):
         t = build_fact_table(_log(), log_name="t")
         py = scorecard(_PARITY_SPECS, t)
@@ -1670,6 +1695,112 @@ class TestSaveLoadDefinition:
     def test_load_report_uses_unbound_refs(self):
         ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
         assert "E.unboundRefs(" in ui
+
+
+_DATESPAN_RUNNER = r"""
+import * as E from %(engine)s;
+import { readFileSync } from "node:fs";
+const inp = JSON.parse(readFileSync(process.argv[2], "utf8"));
+const t = E.decodePayload(inp.payload);
+process.stdout.write(JSON.stringify(E.dateSpan(t)));
+"""
+
+
+class TestDistributionShapes:
+    """The histogram and box-plot statistics behind the ``hist`` / ``box``
+    visualisations. Small hand-computable inputs, so a failure names the
+    broken rule rather than a shifted number."""
+
+    def test_histogram_per_value_for_small_integers(self):
+        h = _histogram(np.array([1.0, 1.0, 1.0, 2.0, 3.0, 3.0]))
+        assert h["integer"] is True
+        assert h["min"] == 1 and h["max"] == 3 and h["n"] == 6
+        assert [(b["lo"], b["hi"], b["count"]) for b in h["bins"]] == \
+            [(1, 1, 3), (2, 2, 1), (3, 3, 2)]
+
+    def test_histogram_equal_width_for_continuous(self):
+        h = _histogram(np.array([0.0, 2.5, 5.0, 10.0]))
+        assert h["integer"] is False
+        assert len(h["bins"]) == 20        # HIST_BINS equal-width bins
+        assert h["bins"][0]["lo"] == 0.0 and h["bins"][-1]["hi"] == 10.0
+        assert sum(b["count"] for b in h["bins"]) == 4
+        # binw = 0.5: 0 -> bin 0, 2.5 -> bin 5, 5.0 -> bin 10, 10.0 -> clamp 19
+        assert h["bins"][0]["count"] == 1
+        assert h["bins"][5]["count"] == 1
+        assert h["bins"][10]["count"] == 1
+        assert h["bins"][19]["count"] == 1
+
+    def test_histogram_single_value_is_one_bin(self):
+        h = _histogram(np.array([5.0, 5.0, 5.0]))
+        assert h["bins"] == [{"lo": 5.0, "hi": 5.0, "count": 3}]
+
+    def test_histogram_empty(self):
+        h = _histogram(np.array([np.nan, np.nan]))
+        assert h == {"bins": [], "min": None, "max": None, "n": 0,
+                     "integer": False}
+
+    def test_box_stats_five_number_summary_and_whiskers(self):
+        b = _box_stats(np.array([1.0, 2.0, 3.0, 4.0, 5.0]))
+        assert (b["min"], b["q1"], b["median"], b["q3"], b["max"]) == \
+            (1.0, 2.0, 3.0, 4.0, 5.0)
+        assert b["whiskerLo"] == 1.0 and b["whiskerHi"] == 5.0
+        assert b["outliers"] == [] and b["nOutliers"] == 0
+
+    def test_box_stats_flags_tukey_outliers(self):
+        b = _box_stats(np.array([1.0, 2.0, 3.0, 4.0, 5.0, 20.0]))
+        assert b["q1"] == pytest.approx(2.25)
+        assert b["median"] == pytest.approx(3.5)
+        assert b["q3"] == pytest.approx(4.75)
+        # 1.5*IQR fence at 8.5 -> 20 is an outlier; whisker stops at 5.
+        assert b["whiskerHi"] == 5.0
+        assert b["outliers"] == [20.0] and b["nOutliers"] == 1
+
+    def test_box_stats_empty(self):
+        b = _box_stats(np.array([np.nan]))
+        assert b["n"] == 0 and b["median"] is None and b["outliers"] == []
+
+
+class TestDateAndDistributionUI:
+    """The date-range filter picker and the hist/box composer controls
+    exist and wire to the engine the way the engine expects."""
+
+    def test_date_span_matches_python(self, tmp_path):
+        node = shutil.which("node")
+        if node is None:
+            pytest.skip("node is not available")
+        t = build_fact_table(_log(), log_name="t")
+        inp = tmp_path / "input.json"
+        inp.write_text(json.dumps({"payload": t.to_payload()}), encoding="utf8")
+        runner = tmp_path / "runner.mjs"
+        runner.write_text(
+            _DATESPAN_RUNNER % {"engine": json.dumps(ENGINE_JS.resolve().as_uri())},
+            encoding="utf8")
+        proc = subprocess.run([node, str(runner), str(inp)],
+                              capture_output=True, text=True,
+                              encoding="utf8", timeout=120)
+        assert proc.returncode == 0, proc.stderr
+        # Every case in the fixture starts 2026-01-05 (a Monday).
+        assert json.loads(proc.stdout) == ["2026-01-05", "2026-01-05"]
+
+    def test_filter_picker_offers_a_date_range(self):
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        assert 'const DATE_AXIS = "__date"' in ui
+        assert "Date range" in ui
+        assert 'field: "date"' in ui        # the filter it produces
+        assert "E.dateSpan(this.table)" in ui
+
+    def test_composer_offers_histogram_and_box(self):
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        assert "Histogram" in ui and "Box plot" in ui
+        assert "_histSvg(" in ui and "_boxSvg(" in ui
+        # hist/box are suppressed for series metrics (they are time series).
+        assert "E.SERIES_METRICS.includes(metricSel.value)" in ui
+
+    def test_svg_helper_uses_the_svg_namespace(self):
+        """SVG marks built with `document.createElement` draw nothing —
+        they must use the SVG namespace."""
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        assert "createElementNS" in ui
 
 
 def _norm(obj):

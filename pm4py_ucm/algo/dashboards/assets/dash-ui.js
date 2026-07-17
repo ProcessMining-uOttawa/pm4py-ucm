@@ -43,12 +43,33 @@ export const h = (tag, attrs = {}, ...kids) => {
   return el;
 };
 
+//: SVG sibling of `h`: elements must be in the SVG namespace or the
+//: browser renders an inert HTML `<rect>` that draws nothing.
+const SVGNS = "http://www.w3.org/2000/svg";
+export const svgEl = (tag, attrs = {}, ...kids) => {
+  const el = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
+    if (k === "class") el.setAttribute("class", v);
+    else el.setAttribute(k, v === true ? "" : String(v));
+  }
+  for (const kid of kids.flat()) {
+    if (kid == null || kid === false) continue;
+    el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  }
+  return el;
+};
+
 export const STATE_LABEL = { met: "MET", risk: "AT RISK", missed: "MISSED" };
 
 //: Most bars a categorical axis draws before the renderer keeps only the
 //: largest and says so. Sized so each bar stays wide enough to hover in
 //: a 2-column card.
 const BAR_CAP = 24;
+
+//: Sentinel axis id for the filter picker's "Date range" option — not a
+//: real segment axis (it produces a `date` filter, not a `segment` one).
+const DATE_AXIS = "__date";
 
 //: Aggregations offered per result type — mirror of catalog.AGGS_BY_TYPE,
 //: needed here because a ƒ custom metric has no catalog entry to read
@@ -740,6 +761,10 @@ export class Dashboard {
       body.append(this._tableBody(w, spec));
     } else if (w.series) {
       body.append(...this._barBody(w));
+    } else if (w.viz === "hist" && w.hist) {
+      body.append(...this._histBody(w));
+    } else if (w.viz === "box" && w.box) {
+      body.append(...this._boxBody(w));
     } else {
       body.append(...this._kpiBody(w, spec));
     }
@@ -774,6 +799,112 @@ export class Dashboard {
         h("i", { style: `width:${pct}%;background:${colour}` })));
     }
     return out;
+  }
+
+  // -- distribution charts (histogram / box plot) --------------------
+
+  /** The aggregate headline both distribution charts keep above them. */
+  _distHead(w) {
+    return [
+      h("div", { class: "pm-kpi__value pm-kpi__value--sm" }, w.text),
+      h("div", { class: "pm-kpi__sub" }, w.sub || ""),
+    ];
+  }
+
+  _histBody(w) {
+    const out = this._distHead(w);
+    const hh = w.hist;
+    out.push(hh && hh.bins.length
+      ? this._histSvg(hh, w.unit)
+      : h("div", { class: "pm-chart__empty" }, "No data to plot."));
+    return out;
+  }
+
+  _histSvg(hh, unit) {
+    const W = 300, H = 132, padL = 6, padR = 6, padT = 6, padB = 20;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const bins = hh.bins;
+    const maxC = Math.max(1, ...bins.map((b) => b.count));
+    const bw = plotW / bins.length;
+    const bars = bins.map((b, i) => {
+      const barH = (b.count / maxC) * plotH;
+      const label = hh.integer && b.lo === b.hi
+        ? String(b.lo)
+        : `${E.fmt(b.lo, unit)}–${E.fmt(b.hi, unit)}`;
+      return svgEl("rect", {
+        x: padL + i * bw + 0.5, y: padT + plotH - barH,
+        width: Math.max(0.5, bw - 1), height: barH, class: "pm-hist__bar",
+      }, svgEl("title", {}, `${label}: ` +
+        `${b.count.toLocaleString("en-US")} case` +
+        `${b.count === 1 ? "" : "s"}`));
+    });
+    return svgEl("svg", {
+      viewBox: `0 0 ${W} ${H}`, class: "pm-chart pm-hist",
+      role: "img", "aria-label": `Histogram of ${hh.n} cases`,
+    },
+      svgEl("line", { x1: padL, y1: padT + plotH, x2: padL + plotW,
+        y2: padT + plotH, class: "pm-chart__axis" }),
+      ...bars,
+      svgEl("text", { x: padL, y: H - 6, class: "pm-chart__lab" },
+        E.fmt(hh.min, unit)),
+      svgEl("text", { x: padL + plotW, y: H - 6, "text-anchor": "end",
+        class: "pm-chart__lab" }, E.fmt(hh.max, unit)));
+  }
+
+  _boxBody(w) {
+    const out = this._distHead(w);
+    const bx = w.box;
+    out.push(bx && bx.n
+      ? this._boxSvg(bx, w.unit)
+      : h("div", { class: "pm-chart__empty" }, "No data to plot."));
+    return out;
+  }
+
+  _boxSvg(bx, unit) {
+    const W = 300, H = 74, padL = 6, padR = 6, padT = 8, padB = 20;
+    const plotW = W - padL - padR;
+    const yMid = padT + (H - padT - padB) / 2;
+    const bh = 22;
+    const span = (bx.max - bx.min) || 1;
+    const x = (v) => padL + ((v - bx.min) / span) * plotW;
+    const els = [
+      // whiskers, with end caps
+      svgEl("line", { x1: x(bx.whiskerLo), y1: yMid, x2: x(bx.q1), y2: yMid,
+        class: "pm-box__whisker" }),
+      svgEl("line", { x1: x(bx.q3), y1: yMid, x2: x(bx.whiskerHi), y2: yMid,
+        class: "pm-box__whisker" }),
+      svgEl("line", { x1: x(bx.whiskerLo), y1: yMid - 6, x2: x(bx.whiskerLo),
+        y2: yMid + 6, class: "pm-box__whisker" }),
+      svgEl("line", { x1: x(bx.whiskerHi), y1: yMid - 6, x2: x(bx.whiskerHi),
+        y2: yMid + 6, class: "pm-box__whisker" }),
+      // the interquartile box + median
+      svgEl("rect", { x: x(bx.q1), y: yMid - bh / 2,
+        width: Math.max(1, x(bx.q3) - x(bx.q1)), height: bh,
+        class: "pm-box__box" }),
+      svgEl("line", { x1: x(bx.median), y1: yMid - bh / 2, x2: x(bx.median),
+        y2: yMid + bh / 2, class: "pm-box__median" }),
+    ];
+    for (const o of bx.outliers) {
+      els.push(svgEl("circle", { cx: x(o), cy: yMid, r: 2,
+        class: "pm-box__outlier" }, svgEl("title", {}, E.fmt(o, unit))));
+    }
+    const summary =
+      `min ${E.fmt(bx.min, unit)} · Q1 ${E.fmt(bx.q1, unit)} · ` +
+      `median ${E.fmt(bx.median, unit)} · Q3 ${E.fmt(bx.q3, unit)} · ` +
+      `max ${E.fmt(bx.max, unit)}` +
+      (bx.nOutliers ? ` · ${bx.nOutliers} outlier` +
+        `${bx.nOutliers === 1 ? "" : "s"}` : "");
+    return svgEl("svg", {
+      viewBox: `0 0 ${W} ${H}`, class: "pm-chart pm-box",
+      role: "img", "aria-label": summary,
+    },
+      svgEl("title", {}, summary), ...els,
+      svgEl("text", { x: padL, y: H - 6, class: "pm-chart__lab" },
+        E.fmt(bx.min, unit)),
+      svgEl("text", { x: x(bx.median), y: H - 6, "text-anchor": "middle",
+        class: "pm-chart__lab" }, E.fmt(bx.median, unit)),
+      svgEl("text", { x: padL + plotW, y: H - 6, "text-anchor": "end",
+        class: "pm-chart__lab" }, E.fmt(bx.max, unit)));
   }
 
   _barBody(w) {
@@ -918,26 +1049,57 @@ export class Dashboard {
   _filterPicker() {
     const axes = E.segmentAxes(this.table);
     const axisSel = h("select", { class: "pm-select" },
-      ...axes.map((a) => h("option", { value: a.id }, a.label)));
+      ...axes.map((a) => h("option", { value: a.id }, a.label)),
+      // A date range is not a segment axis (it is continuous, not a set of
+      // labels), so it is its own option that swaps the value control for
+      // two date inputs. The engine already understands the `date` filter
+      // it produces.
+      h("option", { value: DATE_AXIS }, "Date range"));
+
     const valSel = h("select", { class: "pm-select" });
+    const [dmin, dmax] = E.dateSpan(this.table);
+    const dateAttrs = { class: "pm-input pm-date", type: "date",
+      style: "width:auto" };
+    if (dmin) { dateAttrs.min = dmin; dateAttrs.max = dmax; }
+    const fromIn = h("input", { ...dateAttrs, value: dmin || "" });
+    const toIn = h("input", { ...dateAttrs, value: dmax || "" });
+    const opWord = h("span", { class: "pm-row__hint" }, "is");
+    const toWord = h("span", { class: "pm-row__hint" }, "to");
+
+    const isDate = () => axisSel.value === DATE_AXIS;
     const fill = () => {
       const { labels } = E.segmentKeys(this.table, axisSel.value);
       valSel.replaceChildren(...labels.map((l) => h("option", { value: l }, l)));
     };
-    axisSel.addEventListener("change", fill);
-    fill();
+    const sync = () => {
+      const d = isDate();
+      valSel.style.display = d ? "none" : "";
+      opWord.textContent = d ? "from" : "is";
+      for (const el of [fromIn, toWord, toIn]) el.style.display = d ? "" : "none";
+      if (!d) fill();
+    };
+    axisSel.addEventListener("change", sync);
+    sync();
+
+    const control = h("span", { class: "pm-filter-ctl" },
+      axisSel, opWord, valSel, fromIn, toWord, toIn);
+
     return {
-      axisSel, valSel,
-      get: () => ({ field: "segment", op: "is",
-                    value: [axisSel.value, valSel.value] }),
+      axisSel, valSel, control,
+      get: () => isDate()
+        // An empty end is left open — "from March" and "up to March" are
+        // both useful; the engine treats null as unbounded on that side.
+        ? { field: "date", op: "is",
+            value: [fromIn.value || null, toIn.value || null] }
+        : { field: "segment", op: "is",
+            value: [axisSel.value, valSel.value] },
     };
   }
 
   _openFilter() {
     const p = this._filterPicker();
     const body = h("div", {}, h("div", { class: "pm-row" },
-      h("span", { class: "pm-row__label" }, "Where"), p.axisSel,
-      h("span", { class: "pm-row__hint" }, "is"), p.valSel));
+      h("span", { class: "pm-row__label" }, "Where"), p.control));
 
     modal({
       theme: this._theme(),
@@ -1166,6 +1328,14 @@ export class Dashboard {
       for (const a of axes) sel.append(h("option", { value: a.id }, a.label));
     }
     const vizNote = h("span", { class: "pm-row__hint" });
+    // Without a segment axis a per-case metric is one number, but its
+    // distribution can be shown instead — a histogram or a box plot.
+    // (With an axis, the visualisation follows the axis count: bar/table.)
+    const chartSel = h("select", { class: "pm-select" },
+      h("option", { value: "kpi" }, "KPI card"),
+      h("option", { value: "hist" }, "Histogram"),
+      h("option", { value: "box" }, "Box plot"));
+    const chartNote = h("span", { class: "pm-row__hint" });
 
     const targetToggle = h("button", {
       class: "pm-toggle", "aria-pressed": "false", type: "button",
@@ -1253,10 +1423,26 @@ export class Dashboard {
       spec.segment = { rows: rowsSel.value || undefined,
                        cols: colsSel.value || undefined };
       const n = (rowsSel.value ? 1 : 0) + (colsSel.value ? 1 : 0);
-      spec.viz = n === 0 ? "kpi" : n === 1 ? "bar" : "table";
+      // A series metric (WIP, arrival rate) is a time series, not a bag of
+      // per-case numbers, so a histogram/box of it would be meaningless —
+      // it only ever gets the KPI headline. Others may pick their unsegmented
+      // shape.
+      const seriesMetric = !isCustom() &&
+        E.SERIES_METRICS.includes(metricSel.value);
+      const canShape = n === 0 && !seriesMetric;
+      rows.chart.style.display = canShape ? "" : "none";
+      if (n === 0) {
+        spec.viz = seriesMetric ? "kpi" : chartSel.value;
+      } else {
+        spec.viz = n === 1 ? "bar" : "table";
+      }
       spec.statusColors = n === 2 && spec.target.on;
+      chartNote.textContent = spec.viz === "hist"
+        ? "distribution as a histogram"
+        : spec.viz === "box" ? "distribution as a box plot"
+          : "a single headline number";
       vizNote.textContent = n === 0
-        ? "no axes → KPI card"
+        ? "no axes → single value or its distribution"
         : n === 1 ? "one axis → bar chart"
           : "two axes → heatmap table";
     };
@@ -1302,10 +1488,12 @@ export class Dashboard {
         preview.append(h("span", { class: "pm-preview__err" }, w.error));
         return;
       }
-      if (w.viz === "kpi") {
+      if (w.viz === "kpi" || w.viz === "hist" || w.viz === "box") {
         preview.append(h("span", { class: "pm-preview__value" }, w.text));
       }
       const shape = w.viz === "kpi" ? "a KPI card"
+        : w.viz === "hist" ? `a histogram of ${(w.hist || {}).n || 0} cases`
+        : w.viz === "box" ? `a box plot of ${(w.box || {}).n || 0} cases`
         : w.viz === "bar" ? `a bar chart of ${(w.series || []).length} segments`
           : `a ${w.rows.length} × ${w.cols.length} heatmap table`;
       preview.append(h("span", { class: "pm-preview__note" },
@@ -1329,6 +1517,7 @@ export class Dashboard {
     aggSel.addEventListener("change", refresh);
     rowsSel.addEventListener("change", refresh);
     colsSel.addEventListener("change", refresh);
+    chartSel.addEventListener("change", refresh);
     targetToggle.addEventListener("click", () => {
       spec.target.on = !spec.target.on; refresh();
     });
@@ -1353,8 +1542,7 @@ export class Dashboard {
       h("span", { class: "pm-row__label" }, "Title"), titleInput);
     rows.filter = h("div", { class: "pm-row" },
       h("span", { class: "pm-row__label" }, "Filter"),
-      fPick.axisSel, h("span", { class: "pm-row__hint" }, "is"),
-      fPick.valSel, fAdd, fChips,
+      fPick.control, fAdd, fChips,
       h("span", { class: "pm-row__note" },
         "Applies to this widget only. The dashboard's filters stack on "
         + "top of it."));
@@ -1362,6 +1550,8 @@ export class Dashboard {
       h("span", { class: "pm-row__label" }, "Segment"),
       h("span", { class: "pm-row__hint" }, "rows"), rowsSel,
       h("span", { class: "pm-row__hint" }, "cols"), colsSel, vizNote);
+    rows.chart = h("div", { class: "pm-row" },
+      h("span", { class: "pm-row__label" }, "Chart"), chartSel, chartNote);
     rows.target = h("div", { class: "pm-row" },
       h("span", { class: "pm-row__label" }, "Target"),
       targetToggle, dirSel, valInput,
@@ -1369,7 +1559,8 @@ export class Dashboard {
       modeSel, shareLabel, shareInput, targetNote);
 
     body.append(rows.metric, rows.title, rows.params, rows.formula,
-                rows.filter, rows.segment, rows.target, helpNote, preview);
+                rows.filter, rows.segment, rows.chart, rows.target,
+                helpNote, preview);
 
     // Set every control from the spec, then compute. For a fresh widget
     // the spec is the defaults; for an edit it is the saved widget, so
@@ -1381,6 +1572,10 @@ export class Dashboard {
     rebuildAggs(spec.agg);
     rowsSel.value = spec.segment.rows || "";
     colsSel.value = spec.segment.cols || "";
+    // Restore the unsegmented shape when editing a hist/box widget; a
+    // segmented one has no chart choice (the axes decide), so default kpi.
+    chartSel.value = (spec.viz === "hist" || spec.viz === "box")
+      ? spec.viz : "kpi";
     dirSel.value = spec.target.dir;
     valInput.value = spec.target.value;
     warnInput.value = spec.target.warn;
