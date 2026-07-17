@@ -220,26 +220,25 @@ def _arg_fingerprint(*args) -> str:
 # ---------------------------------------------------------------------------
 
 @st.cache_data(show_spinner=False)
-def _mine(
+def _log_and_tree(
     log_bytes: bytes,
     log_kind: str,
     csv_columns,
-    decomposition_spec,
-    resource_attribute: str,
-    min_support: float,
     noise_threshold: float,
-    overlay_nodes: Tuple[str, ...],
-    overlay_edges: Tuple[str, ...],
     _file_hash: str,
     _status=None,
-    _progress=None,
-) -> Dict[str, Any]:
-    """Read the event log and mine a UCM. Returns .jucm bytes + metadata.
+):
+    """Read the event log and discover its inductive process tree.
 
-    Decomposition is honoured here (the model preview reflects it), but
-    the scenarios tab always re-mines internally with decomposition=None
-    so OR-fork conditions can land on every XOR (see the limitation
-    documented on :func:`pm4py_ucm.discover_scenarios`).
+    Split out of :func:`_mine` and cached on the log and the noise
+    threshold **only**. The process tree depends on neither the
+    decomposition nor the resource / overlay settings, so changing those —
+    in particular the decomposition, a live Model-view control — reuses the
+    parsed log and the mined tree rather than re-reading a large log and
+    re-running inductive mining, which dominate the cost on complex logs.
+
+    Returns ``(log, tree)``. ``log`` is a DataFrame (CSV import, or modern
+    ``pm4py.read_xes``) or a pm4py ``EventLog`` (older pm4py releases).
     """
     def _phase(label: str) -> None:
         if _status is not None:
@@ -286,23 +285,6 @@ def _mine(
             _phase("Reading XES...")
             log = pm4py.read_xes(str(xes_path))
 
-        params: Dict[str, Any] = {}
-        attrs = [a.strip() for a in resource_attribute.replace(",", " ").split()
-                 if a.strip()]
-        if not attrs:
-            params["resource_attribute"] = False
-        elif len(attrs) == 1:
-            params["resource_attribute"] = attrs[0]
-        else:
-            params["resource_attribute"] = attrs
-        if attrs:
-            params["resource_parameters"] = {"min_support": float(min_support)}
-
-        if decomposition_spec == "off":
-            decomp_arg = "off"
-        else:
-            decomp_arg = dict(decomposition_spec)
-
         _phase(
             "Discovering process tree "
             f"(noise threshold {noise_threshold:.2f})..."
@@ -310,50 +292,106 @@ def _mine(
         tree = pm4py.discover_process_tree_inductive(
             log, noise_threshold=float(noise_threshold),
         )
-        params["process_tree"] = tree
+        return log, tree
 
-        _phase("Mining performers & converting tree to UCM...")
-        ucm = pm4py_ucm.discover_ucm_inductive(
-            log, parameters=params, decomposition=decomp_arg,
+
+@st.cache_data(show_spinner=False)
+def _mine(
+    log_bytes: bytes,
+    log_kind: str,
+    csv_columns,
+    decomposition_spec,
+    resource_attribute: str,
+    min_support: float,
+    noise_threshold: float,
+    overlay_nodes: Tuple[str, ...],
+    overlay_edges: Tuple[str, ...],
+    _file_hash: str,
+    _status=None,
+    _progress=None,
+) -> Dict[str, Any]:
+    """Mine a UCM from the event log. Returns .jucm bytes + metadata.
+
+    The log read and the process-tree discovery are delegated to
+    :func:`_log_and_tree`, which is cached on the log + noise threshold
+    alone — so changing the decomposition (or the resource / overlay
+    settings) here rebuilds only the tree→UCM conversion, not the tree.
+
+    Decomposition is honoured here (the model preview reflects it), but
+    the scenarios tab always re-mines internally with decomposition=None
+    so OR-fork conditions can land on every XOR (see the limitation
+    documented on :func:`pm4py_ucm.discover_scenarios`).
+    """
+    def _phase(label: str) -> None:
+        if _status is not None:
+            _status.update(label=label)
+
+    log, tree = _log_and_tree(
+        log_bytes, log_kind, csv_columns, noise_threshold, _file_hash,
+        _status=_status,
+    )
+
+    params: Dict[str, Any] = {"process_tree": tree}
+    attrs = [a.strip() for a in resource_attribute.replace(",", " ").split()
+             if a.strip()]
+    if not attrs:
+        params["resource_attribute"] = False
+    elif len(attrs) == 1:
+        params["resource_attribute"] = attrs[0]
+    else:
+        params["resource_attribute"] = attrs
+    if attrs:
+        params["resource_parameters"] = {"min_support": float(min_support)}
+
+    if decomposition_spec == "off":
+        decomp_arg = "off"
+    else:
+        decomp_arg = dict(decomposition_spec)
+
+    _phase("Mining performers & converting tree to UCM...")
+    ucm = pm4py_ucm.discover_ucm_inductive(
+        log, parameters=params, decomposition=decomp_arg,
+    )
+
+    if overlay_nodes or overlay_edges:
+        _phase("Computing performance overlay...")
+        pm4py_ucm.annotate_performance(
+            ucm, log,
+            node_metrics=list(overlay_nodes),
+            edge_metrics=list(overlay_edges),
         )
 
-        if overlay_nodes or overlay_edges:
-            _phase("Computing performance overlay...")
-            pm4py_ucm.annotate_performance(
-                ucm, log,
-                node_metrics=list(overlay_nodes),
-                edge_metrics=list(overlay_edges),
-            )
-
-        _phase("Writing .jucm...")
-        jucm_path = td / "model.jucm"
+    _phase("Writing .jucm...")
+    with tempfile.TemporaryDirectory() as td:
+        jucm_path = Path(td) / "model.jucm"
         pm4py_ucm.write_ucm(ucm, str(jucm_path))
+        jucm_bytes = jucm_path.read_bytes()
 
-        # Case / activity counts for the metrics row. ``log`` here is
-        # either a DataFrame (CSV path, or modern pm4py.read_xes) or a
-        # pm4py EventLog (older pm4py releases).
-        try:
-            n_cases = int(log["case:concept:name"].nunique())
-            n_activities = int(log["concept:name"].nunique())
-            n_events = int(len(log))
-        except (KeyError, TypeError, AttributeError):
-            n_cases = len(log)
-            activities: set = set()
-            n_events = 0
-            for trace in log:
-                for event in trace:
-                    activities.add(event.get("concept:name"))
-                    n_events += 1
-            n_activities = len(activities)
+    # Case / activity counts for the metrics row. ``log`` here is
+    # either a DataFrame (CSV path, or modern pm4py.read_xes) or a
+    # pm4py EventLog (older pm4py releases).
+    try:
+        n_cases = int(log["case:concept:name"].nunique())
+        n_activities = int(log["concept:name"].nunique())
+        n_events = int(len(log))
+    except (KeyError, TypeError, AttributeError):
+        n_cases = len(log)
+        activities: set = set()
+        n_events = 0
+        for trace in log:
+            for event in trace:
+                activities.add(event.get("concept:name"))
+                n_events += 1
+        n_activities = len(activities)
 
-        return {
-            "jucm": jucm_path.read_bytes(),
-            "n_maps": len(ucm.maps),
-            "n_nodes": sum(len(m.nodes) for m in ucm.maps),
-            "n_cases": n_cases,
-            "n_events": n_events,
-            "n_activities": n_activities,
-        }
+    return {
+        "jucm": jucm_bytes,
+        "n_maps": len(ucm.maps),
+        "n_nodes": sum(len(m.nodes) for m in ucm.maps),
+        "n_cases": n_cases,
+        "n_events": n_events,
+        "n_activities": n_activities,
+    }
 
 
 @st.cache_data(show_spinner=False)
