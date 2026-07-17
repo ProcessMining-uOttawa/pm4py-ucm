@@ -343,7 +343,9 @@
 /* Charts (bar/line/table and the hist/box distributions) need room to be
    read: a KPI-sized tile clips the plot and its axis labels. */
 .pm-w--bar, .pm-w--line, .pm-w--table,
-.pm-w--hist, .pm-w--box { grid-column: span 2; grid-row: span 2; }
+.pm-w--hist, .pm-w--box, .pm-w--pie, .pm-w--gauge {
+  grid-column: span 2; grid-row: span 2;
+}
 .pm-w--model { grid-column: span 4; grid-row: span 2; }
 /* A table wider than five data columns needs the full grid to stay
    readable rather than scrolling in a 2-column box. */
@@ -801,6 +803,25 @@
 .pm-vizpick__tile--on .pm-vizpick__fill { fill: var(--garnet); }
 .pm-vizpick__tile--on .pm-vizpick__box,
 .pm-vizpick__tile--on .pm-vizpick__stroke { stroke: var(--garnet); }
+
+/* -- line / gauge / pie ---------------------------------------------- */
+
+.pm-line__path { fill: none; stroke: var(--garnet); stroke-width: 2;
+  stroke-linejoin: round; stroke-linecap: round; }
+.pm-line__dot { fill: var(--garnet); }
+
+.pm-gauge__track { fill: none; stroke: var(--desk); stroke-width: 10;
+  stroke-linecap: round; }
+.pm-gauge__value { fill: none; stroke-width: 10; stroke-linecap: round; }
+.pm-gauge__tick { stroke: var(--ink); stroke-width: 2; }
+.pm-gauge__text { fill: var(--ink); font-family: var(--f-head);
+  font-weight: 700; font-size: 15px; }
+
+.pm-pie__slice { stroke: var(--card); stroke-width: 1; }
+.pm-pie__total { fill: var(--ink); font-family: var(--f-head);
+  font-weight: 700; font-size: 11px; }
+.pm-pie__legend { fill: var(--muted); font-family: var(--f-mono); font-size: 8px; }
+.pm-pie__swatch { stroke: none; }
 
 /* =====================================================================
    Scorecard
