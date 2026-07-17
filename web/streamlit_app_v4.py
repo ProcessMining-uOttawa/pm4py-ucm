@@ -454,12 +454,13 @@ def _render_png(ucm, style: str, out_path: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _read_log_for_scenarios(log_bytes: bytes, log_kind: str, csv_columns):
-    """Materialise the log in the form ``discover_scenarios`` expects.
+    """Materialise the log as a DataFrame / EventLog, without mining.
 
-    Mirrors the log-loading branch of :func:`_mine` but stops at the
-    DataFrame / EventLog so the scenarios pipeline can do its own
-    process-tree discovery (it pins the same tree to both the UCM
-    builder and the clustering pass).
+    The log-loading branch of :func:`_log_and_tree` minus the tree step,
+    for the one caller that wants just the parsed log: the family
+    partitioner's :func:`_load_log_df`. The model and scenarios paths take
+    their log (and tree) from the cached :func:`_log_and_tree` instead.
+    (Name kept for history; it is no longer scenarios-specific.)
     """
     if log_kind == "csv":
         case_col, activity_col, ts_col, role_col, resource_col = csv_columns
@@ -528,12 +529,16 @@ def _synthesize(
         if _status is not None:
             _status.update(label=label)
 
-    _phase("Loading event log...")
-    log = _read_log_for_scenarios(log_bytes, log_kind, csv_columns)
-
-    _phase("Discovering process tree...")
-    tree = pm4py.discover_process_tree_inductive(
-        log, noise_threshold=float(noise_threshold),
+    # Same cached (log, tree) the Model view's _mine uses — keyed on the log
+    # + noise threshold alone (see _log_and_tree). So re-synthesizing after
+    # only the decomposition / strategy / loop settings changed reuses the
+    # parsed log and the mined tree rather than re-reading and re-mining; and
+    # if the Model view already mined this log at this noise, the tree is
+    # already cached and this is a straight hit. The tree is pinned to both
+    # the UCM builder and the clustering pass, exactly as before.
+    log, tree = _log_and_tree(
+        log_bytes, log_kind, csv_columns, noise_threshold, _file_hash,
+        _status=_status,
     )
 
     # Resolve resource params + decomposition argument the same way
