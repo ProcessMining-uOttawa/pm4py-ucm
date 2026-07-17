@@ -124,10 +124,15 @@ export class Dashboard {
     this.headless = !!opts.headless;
     this.renders = opts.renders || {};
 
-    this.specs = this._load(opts.specs);
-    // An export carries the filters it was taken under, so it opens on
-    // the question it was sent to answer.
-    this.filters = (opts.filters || []).slice();
+    // Multiple named dashboards persist in one registry entry per log; the
+    // active one's name/specs/filters are the live fields the rest of the
+    // class reads. A read-only / headless instance (an export, a report
+    // section) is a single ephemeral dashboard from opts — no registry,
+    // no switcher. An export carries the filters it was taken under, so it
+    // opens on the question it was sent to answer.
+    this._multi = !this.readOnly && !this.headless;
+    this._loadRegistry(opts);
+    this._activate();
     this.notation = Object.keys(this.renders)[0] || "ucm";
 
     root.classList.add("pm-dash");
@@ -283,26 +288,167 @@ export class Dashboard {
   // specs baked into view.py's payload.
 
   _key() { return `pm4py-ucm:dash:${this.opts.storageKey || this.table.logName}`; }
-
-  _load(fallback) {
-    if (this.readOnly) return (fallback || []).slice();
-    try {
-      const raw = localStorage.getItem(this._key());
-      if (raw) return JSON.parse(raw);
-    } catch (e) {
-      // A corrupt or blocked store must not take the whole view down.
-      console.warn("dashboard: could not read saved widgets", e);
-    }
-    return (fallback || []).slice();
+  _regKey() { return this._key() + ":set"; }
+  _uid() {
+    return "d" + Date.now().toString(36) +
+      Math.random().toString(36).slice(2, 6);
   }
 
-  _save() {
-    if (this.readOnly) return;
+  /**
+   * Load this log's dashboard registry (all named dashboards + the active
+   * one), migrating a legacy single-dashboard store on first run. A
+   * read-only / headless instance is a single ephemeral dashboard from
+   * opts — no storage.
+   */
+  _loadRegistry(opts) {
+    const seed = () => {
+      const id = this._uid();
+      return { active: id, dashboards: [{
+        id, name: opts.name || "Dashboard",
+        specs: (opts.specs || []).slice(),
+        filters: (opts.filters || []).slice(),
+      }] };
+    };
+    if (!this._multi) { this._reg = seed(); return; }
+
+    let reg = null;
     try {
-      localStorage.setItem(this._key(), JSON.stringify(this.specs));
+      const raw = localStorage.getItem(this._regKey());
+      if (raw) reg = JSON.parse(raw);
     } catch (e) {
-      console.warn("dashboard: could not save widgets", e);
+      console.warn("dashboard: could not read the dashboard set", e);
     }
+    if (reg && Array.isArray(reg.dashboards) && reg.dashboards.length) {
+      this._reg = reg;
+    } else {
+      this._reg = seed();
+      // Migrate a legacy single-dashboard store into the first dashboard.
+      try {
+        const raw = localStorage.getItem(this._key());
+        const legacy = raw ? JSON.parse(raw) : null;
+        if (Array.isArray(legacy) && legacy.length) {
+          this._reg.dashboards[0].specs = legacy;
+        }
+      } catch (e) { /* no legacy store */ }
+    }
+    if (!this._reg.dashboards.some((d) => d.id === this._reg.active)) {
+      this._reg.active = this._reg.dashboards[0].id;
+    }
+  }
+
+  /** Make the registry's active dashboard the live name/specs/filters. */
+  _activate() {
+    const d = this._reg.dashboards.find((x) => x.id === this._reg.active)
+      || this._reg.dashboards[0];
+    this.activeId = d.id;
+    this.name = d.name || "Dashboard";
+    this.specs = (d.specs || []).slice();
+    this.filters = (d.filters || []).slice();
+  }
+
+  /** Write the live fields back into the active entry and persist. */
+  _save() {
+    if (!this._multi) return;
+    const d = this._reg.dashboards.find((x) => x.id === this.activeId);
+    if (d) { d.name = this.name; d.specs = this.specs; d.filters = this.filters; }
+    try {
+      localStorage.setItem(this._regKey(), JSON.stringify(this._reg));
+    } catch (e) {
+      console.warn("dashboard: could not save the dashboard set", e);
+    }
+  }
+
+  // -- multiple named dashboards -------------------------------------
+
+  _switchTo(id) {
+    if (id === this.activeId) return;
+    this._save();               // persist the one we are leaving
+    this._reg.active = id;
+    this._activate();
+    this._save();
+    this.render();
+  }
+
+  _newDashboard() {
+    this._nameDialog("New dashboard", "", (name) => {
+      this._save();
+      const id = this._uid();
+      this._reg.dashboards.push(
+        { id, name: name || "Dashboard", specs: [], filters: [] });
+      this._reg.active = id;
+      this._activate();
+      this._save();
+      this.render();
+      toast(`Created “${this.name}”`, this._theme());
+    });
+  }
+
+  _renameDashboard() {
+    this._nameDialog("Rename dashboard", this.name, (name) => {
+      if (!name) return;
+      this.name = name;
+      this._save();
+      this.render();
+    });
+  }
+
+  _deleteDashboard() {
+    const only = this._reg.dashboards.length <= 1;
+    const gone = this.name;
+    modal({
+      theme: this._theme(),
+      title: only ? "Clear dashboard" : "Delete dashboard",
+      sub: `→ ${this.name}`,
+      body: h("div", { class: "pm-empty" }, only
+        ? `Remove all widgets from “${gone}”?`
+        : `Delete “${gone}” and its widgets? This cannot be undone.`),
+      confirm: only ? "Clear" : "Delete",
+      onConfirm: () => {
+        if (only) { this.specs = []; this.filters = []; }
+        else {
+          this._reg.dashboards =
+            this._reg.dashboards.filter((d) => d.id !== this.activeId);
+          this._reg.active = this._reg.dashboards[0].id;
+          this._activate();
+        }
+        this._save();
+        this.render();
+        toast(only ? "Cleared the dashboard" : `Deleted “${gone}”`,
+          this._theme());
+        return true;
+      },
+    });
+  }
+
+  /** A one-field modal for naming / renaming a dashboard. */
+  _nameDialog(title, initial, onOk) {
+    const input = h("input", {
+      class: "pm-input", type: "text", value: initial,
+      placeholder: "Dashboard name", style: "width:100%",
+    });
+    const body = h("div", { class: "pm-row" },
+      h("span", { class: "pm-row__label" }, "Name"), input);
+    modal({
+      theme: this._theme(), title, body, confirm: "OK",
+      onConfirm: () => { onOk(input.value.trim()); return true; },
+    });
+    setTimeout(() => input.focus(), 0);
+  }
+
+  /** The dashboard switcher shown in the header (editable mode only). */
+  _dashSwitcher() {
+    const sel = h("select", {
+      class: "pm-select pm-dashsel", title: "Switch dashboard",
+      onchange: (e) => this._switchTo(e.target.value),
+    }, ...this._reg.dashboards.map((d) =>
+      h("option", { value: d.id, selected: d.id === this.activeId }, d.name)));
+    const icon = (title, glyph, fn) => h("button", {
+      class: "pm-btn pm-btn--ghost pm-btn--icon", title, onclick: fn,
+    }, glyph);
+    return h("span", { class: "pm-dashbar" }, sel,
+      icon("New dashboard", "+", () => this._newDashboard()),
+      icon("Rename dashboard", "✎", () => this._renameDashboard()),
+      icon("Delete dashboard", "✕", () => this._deleteDashboard()));
   }
 
   exportSpecs() { return JSON.parse(JSON.stringify(this.specs)); }
@@ -558,7 +704,11 @@ export class Dashboard {
     const n = this._liveCount();
     const total = this.table.nCases;
     const kids = [
-      h("span", { class: "pm-title" }, this.name),
+      // The switcher (name dropdown + new/rename/delete) stands in for the
+      // plain title when the dashboard is editable; a read-only export
+      // shows just its name.
+      this.readOnly ? h("span", { class: "pm-title" }, this.name)
+        : this._dashSwitcher(),
       ...this.filters.map((f, i) =>
         h("span", { class: "pm-chip" },
           describeFilter(f, this.table),

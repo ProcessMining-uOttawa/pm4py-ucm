@@ -197,6 +197,15 @@
   margin-right: 4px;
 }
 
+/* The multiple-dashboard switcher: a name dropdown plus new/rename/delete,
+   in place of the plain title when editable. */
+.pm-dashbar { display: inline-flex; align-items: center; gap: 3px; margin-right: 4px; }
+.pm-dashsel {
+  font-family: var(--f-head); font-weight: 600; font-size: 14px;
+  padding: 2px 4px; max-width: 220px;
+}
+.pm-btn--icon { padding: 2px 7px; line-height: 1.1; }
+
 .pm-count {
   font-family: var(--f-mono);
   font-size: 10.5px;
