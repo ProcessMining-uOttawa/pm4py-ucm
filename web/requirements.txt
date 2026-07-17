@@ -1,9 +1,11 @@
-# Upper bound: st.components.v1.html (Dashboards island, SVG viewer,
-# open-image-in-tab) is deprecated for st.iframe. Cap the major so a
-# Streamlit Cloud rebuild can't pull a release that removes it out from
-# under the deployed app before the migration lands (see the tracking
-# issue). Raise the cap once _embed_html moves to st.iframe.
-streamlit>=1.32,<2
+# Floor: the islands embed through st.iframe (added in Streamlit 1.57),
+# which replaced the deprecated st.components.v1.html — see _embed_html.
+# Upper bound: cap the major. The original reason (a rebuild dropping the
+# deprecated API) is gone now that we use st.iframe, but a Streamlit 2.0
+# is an untested major for a carefully theme/sidebar-tuned app, and Cloud
+# auto-rebuilds; the cap keeps the deployed app on validated 1.x. Relax
+# to <3 once 2.x is verified against this app.
+streamlit>=1.57,<2
 pm4py>=2.7
 scikit-learn>=1.3
 -e .
