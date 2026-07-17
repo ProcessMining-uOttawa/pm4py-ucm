@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-07-17
+
+Finishes the dashboards UI: the composer picks a visualisation by
+thumbnail, a breached target says which segments broke it, and a log can
+hold several named dashboards — exportable together as one file.
+
+### Added
+
+- **Multiple named dashboards** — a log can hold several, switched from a
+  header dropdown with **New / Rename / Delete**. Each keeps its own
+  widgets and filters; the whole set persists per log in the browser. (The
+  switcher lives in the Dashboards view rather than the app rail because
+  the embedded island owns its own state — the host cannot read it back.)
+- **Export all dashboards in one file** — ⬇ Export all bundles every
+  dashboard into a single self-contained, offline HTML file whose header
+  switcher moves between them, read-only.
+- **Scorecard breach drill-down** — a segmented target's scorecard row
+  expands to the segments that broke it (worst first); clicking one filters
+  the whole dashboard to that segment.
+- **Viz thumbnail picker** — the composer's Chart row is now clickable
+  tiles, each a small glyph of the visualisation, instead of a dropdown.
+
 ## [0.6.1] — 2026-07-16
 
 A dashboards-refinement release on top of 0.6.0: new distribution and
