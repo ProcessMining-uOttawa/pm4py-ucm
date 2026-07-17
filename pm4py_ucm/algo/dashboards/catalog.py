@@ -53,8 +53,13 @@ WEIGHTING_NOTE = (
 )
 
 #: Aggregations by result type — drives which pills the composer enables.
+#:
+#: ``sum`` is offered for times as well as counts: a total duration is a
+#: real quantity ("28 case-years spent in Assess"), and it is what a pie
+#: needs — slices only add to a whole when the aggregation is additive. It
+#: stays off ``rate``, where a sum of rates means nothing.
 AGGS_BY_TYPE: Dict[str, Tuple[str, ...]] = {
-    "time": ("avg", "median", "p90", "min", "max"),
+    "time": ("avg", "median", "p90", "sum", "min", "max"),
     "count": ("avg", "median", "p90", "sum", "min", "max"),
     "percent": ("share",),
     "rate": ("avg", "median", "p90", "max"),
