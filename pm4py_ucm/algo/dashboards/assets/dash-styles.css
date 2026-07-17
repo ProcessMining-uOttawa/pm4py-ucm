@@ -354,7 +354,24 @@
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
+  position: relative;   /* anchors the resize handle */
 }
+
+/* Drag to reorder (grip) and drag to resize (corner handle). */
+.pm-w__grip { cursor: grab; }
+.pm-w__grip:active { cursor: grabbing; }
+.pm-w--dragging { opacity: .45; }
+.pm-w--dropzone { outline: 2px dashed var(--garnet); outline-offset: -2px; }
+.pm-w__resize {
+  position: absolute; right: 2px; bottom: 2px;
+  width: 15px; height: 15px; z-index: 2;
+  cursor: nwse-resize; touch-action: none; opacity: 0;
+  clip-path: polygon(100% 0, 100% 100%, 0 100%);
+  background: repeating-linear-gradient(135deg,
+    transparent 0 2px, var(--faint) 2px 3px);
+}
+.pm-w:hover .pm-w__resize { opacity: .5; }
+.pm-w__resize:hover { opacity: .95; }
 
 .pm-w__head {
   display: flex;
