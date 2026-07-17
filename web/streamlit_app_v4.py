@@ -21,11 +21,11 @@ the family members and compare any two side by side), and
 filters, segmentation, targets, scorecard — see
 :doc:`docs/dashboards.md </dashboards>`).
 
-The Dashboards view is an HTML/JS island embedded via
-``components.html``. It is the *same artifact* the HTML export writes,
-built by :func:`pm4py_ucm.algo.dashboards.dashboard_html`, so the app
-and the export cannot drift. Its widgets are computed in the browser
-and its state lives there — ``components.html`` is one-way, so widget
+The Dashboards view is an HTML/JS island embedded via ``st.iframe``
+(see :func:`_embed_html`). It is the *same artifact* the HTML export
+writes, built by :func:`pm4py_ucm.algo.dashboards.dashboard_html`, so
+the app and the export cannot drift. Its widgets are computed in the
+browser and its state lives there — the embedding is one-way, so widget
 specs persist to the browser's storage rather than to session state.
 
 Run locally:
@@ -58,7 +58,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as _components
 
 # Make the in-repo package win over any environment-installed copy.
 # The main-file shim launches this app with ``sys.path[0]`` set to the
@@ -92,18 +91,23 @@ _PILImage.MAX_IMAGE_PIXELS = 1_000_000_000
 def _embed_html(html: str, *, height: int, scrolling: bool = False) -> None:
     """Embed a self-contained HTML document in a sandboxed iframe.
 
-    THE single seam for ``st.components.v1.html`` — every island (the
-    Dashboards view, the SVG model viewer, the open-image-in-tab button)
-    goes through here. ``st.components.v1.html`` is deprecated in favour
-    of ``st.iframe`` (see the tracking issue): ``st.iframe`` takes a
-    URL/Path rather than an HTML string, so migrating means serving each
-    artifact from a file — a change confined to THIS function instead of
-    scattered across the app. ``st.html`` is not an option for these:
-    they need the iframe's isolated JS realm (and, for the open-in-tab
-    button, its sandboxed popup escape), which inline ``st.html`` does
-    not give.
+    THE single seam every island (the Dashboards view, the SVG model
+    viewer, the open-image-in-tab button) goes through.
+
+    Uses ``st.iframe``, which replaced the deprecated
+    ``st.components.v1.html``. The two are behaviourally identical for an
+    HTML string: both marshal it to the same ``IFrame`` element with
+    ``srcdoc`` set, so the frontend renders the same sandboxed,
+    same-origin iframe — which is what the islands rely on (the Dashboards
+    island reads ``window.parent`` for live theming and clones itself to
+    export; the open-in-tab button escapes the sandbox with a popup).
+    ``st.iframe`` always enables scrolling, so ``scrolling`` is now
+    vestigial — kept only so the call sites read unchanged; a fixed height
+    with content that fits shows no scrollbar regardless. ``st.html`` is
+    not an option: it renders inline in the main DOM, with no isolated JS
+    realm or popup escape.
     """
-    _components.html(html, height=height, scrolling=scrolling)
+    st.iframe(html, height=height)
 
 
 _SAMPLES_DIR = Path(__file__).resolve().parent / "samples"
@@ -1091,8 +1095,7 @@ def _open_image_in_tab_button(png_b64: str, label: str = "Open image "
     URL **at render time** and sets it as a plain anchor ``href``
     with ``target="_blank"`` — ordinary link navigation, so no popup
     blocker is involved (unlike ``window.open``). Runs inside the
-    ``components.html`` iframe, whose sandbox allows popups escaping
-    to a new tab.
+    ``st.iframe`` sandbox, which allows popups escaping to a new tab.
 
     The component also installs — once per page, in the PARENT page's
     own JS realm so it survives component reloads — a delegated
@@ -1150,7 +1153,7 @@ def _svg_viewer(svg: str, *, height: int = 620, key: str = "svgview") -> None:
     """Show an SVG model inline with wheel-zoom and drag-to-pan.
 
     SVG is the on-screen default: it stays crisp at any zoom and its text
-    is selectable. It is embedded through ``components.html`` (Streamlit's
+    is selectable. It is embedded through ``st.iframe`` (Streamlit's
     markdown sanitiser strips raw ``<svg>``) and carried base64-encoded so
     nothing in the diagram — a stray ``</script>`` in a label, a non-ASCII
     map name — can break the surrounding HTML. The SVG fits the width on
@@ -2078,8 +2081,8 @@ if _view == "Model":
             key="pin_title",
         )
         if st.button("Pin ▦", type="primary", key="pin_go"):
-            # The island cannot be reached directly — components.html is
-            # one-way — so the request travels in its config on the next
+            # The island cannot be reached directly — the iframe embedding
+            # is one-way — so the request travels in its config on the next
             # rerun. The id must be fresh per click: the config is re-sent
             # on every rerun, and the island skips ids it has applied.
             st.session_state["pending_pin"] = {
