@@ -1123,44 +1123,106 @@ export class Dashboard {
 
   _openScorecard() {
     const rows = E.scorecard(this.specs, this.table, this.catalog, this.filters);
+    let close;   // assigned by modal() below; the drill handlers close it
     const body = h("div", {});
     if (!rows.length) {
       body.append(h("div", { class: "pm-empty" },
         "No widget on this dashboard has a target."));
     } else {
-      const t = h("table", { class: "pm-score" },
+      const tbody = h("tbody", {});
+      for (const r of rows) {
+        const spec = this.specs.find((s) => s.id === r.id) || {};
+        // In per_case mode the value is a share, so the bar must measure
+        // against the share goal, not the per-case threshold.
+        const goal = E.targetGoalValue(spec);
+        const perCase = spec.target && spec.target.mode === "per_case";
+        const dir = perCase ? ">=" : (spec.target || {}).dir;
+        let pct = 0;
+        if (r.value != null && goal) {
+          pct = dir === ">=" ? r.value / goal : goal / r.value;
+        }
+        pct = Math.max(0, Math.min(1, pct)) * 100;
+        const colour = r.state === "met" ? "var(--positive)"
+          : r.state === "risk" ? "var(--warn-bar)" : "var(--garnet)";
+
+        // Drill-down: a segmented target rolls up to a worst-state pill,
+        // hiding *which* segments broke it. Expand the row to list the
+        // breaching segments; clicking one filters the whole dashboard to
+        // it (the same drill a table-cell click does).
+        const breaches = this._breachingSegments(this._compute(spec));
+        const drillable = breaches.length > 0;
+        const caret = h("span", { class: "pm-score__caret" },
+          drillable ? "▸" : "");
+        const detail = h("tr", { class: "pm-score__detail" },
+          h("td", { colspan: 6 }, drillable && h("div", { class: "pm-score__segs" },
+            h("span", { class: "pm-score__segs-lab" },
+              `${breaches.length} segment${breaches.length === 1 ? "" : "s"} ` +
+              `breached — click to filter the dashboard:`),
+            ...breaches.map((b) => h("button", {
+              class: `pm-score__seg pm-score__seg--${b.state}`,
+              title: `${STATE_LABEL[b.state]} · ${b.text}`,
+              onclick: () => { this._drillBreach(b); if (close) close(); },
+            }, `${b.label} · ${b.text}`)))));
+
+        tbody.append(h("tr", {
+          class: "pm-score__row" + (drillable ? " pm-score__row--drill" : ""),
+          title: drillable ? "Show the segments that breached" : undefined,
+          onclick: drillable ? () => {
+            const open = detail.classList.toggle("pm-score__detail--open");
+            caret.textContent = open ? "▾" : "▸";
+          } : undefined,
+        },
+          h("td", {}, caret, " ", r.title),
+          h("td", {}, r.goal),
+          h("td", {}, r.actual),
+          h("td", {}, h("div", { class: "pm-score__ach" },
+            h("i", { style: `width:${pct}%;background:${colour}` }))),
+          h("td", {}, r.nCases.toLocaleString("en-US")),
+          h("td", {}, h("span", {
+            class: `pm-pill pm-pill--${r.state || "met"}`,
+          }, STATE_LABEL[r.state] || "—"))), detail);
+      }
+      body.append(h("table", { class: "pm-score" },
         h("thead", {}, h("tr", {},
           ...["Target", "Goal", "Actual", "Achievement", "Cases", "State"]
             .map((x) => h("th", {}, x)))),
-        h("tbody", {}, ...rows.map((r) => {
-          const spec = this.specs.find((s) => s.id === r.id) || {};
-          // In per_case mode the value is a share, so the bar must
-          // measure against the share goal, not the per-case threshold.
-          const goal = E.targetGoalValue(spec);
-          const perCase = spec.target && spec.target.mode === "per_case";
-          const dir = perCase ? ">=" : (spec.target || {}).dir;
-          let pct = 0;
-          if (r.value != null && goal) {
-            pct = dir === ">=" ? r.value / goal : goal / r.value;
-          }
-          pct = Math.max(0, Math.min(1, pct)) * 100;
-          const colour = r.state === "met" ? "var(--positive)"
-            : r.state === "risk" ? "var(--warn-bar)" : "var(--garnet)";
-          return h("tr", {},
-            h("td", {}, r.title),
-            h("td", {}, r.goal),
-            h("td", {}, r.actual),
-            h("td", {}, h("div", { class: "pm-score__ach" },
-              h("i", { style: `width:${pct}%;background:${colour}` }))),
-            h("td", {}, r.nCases.toLocaleString("en-US")),
-            h("td", {}, h("span", {
-              class: `pm-pill pm-pill--${r.state || "met"}`,
-            }, STATE_LABEL[r.state] || "—")));
-        })));
-      body.append(t);
+        tbody));
     }
-    modal({ theme: this._theme(), title: "Scorecard", sub: `→ ${this.name}`, body,
-            confirm: null, cancel: "Close" });
+    close = modal({ theme: this._theme(), title: "Scorecard",
+                    sub: `→ ${this.name}`, body, confirm: null, cancel: "Close" });
+  }
+
+  /**
+   * The segments of a targeted, segmented widget that broke its target —
+   * the bar points or table cells whose state is *at risk* or *missed*,
+   * worst first, each carrying the axis/label drill it maps to.
+   */
+  _breachingSegments(w) {
+    const bad = (s) => s === "missed" || s === "risk";
+    const out = [];
+    if (w.series && w.axis) {
+      for (const p of w.series) {
+        if (bad(p.state)) out.push({ label: p.label, text: p.text,
+          state: p.state, drill: [[w.axis, p.label]] });
+      }
+    } else if (w.cells && w.rows && w.cols) {
+      for (let ri = 0; ri < w.rows.length; ri++) {
+        for (let ci = 0; ci < w.cols.length; ci++) {
+          const c = w.cells[ri][ci];
+          if (c && bad(c.state)) out.push({
+            label: `${w.rows[ri]} · ${w.cols[ci]}`, text: c.text, state: c.state,
+            drill: [[w.rowsAxis, w.rows[ri]], [w.colsAxis, w.cols[ci]]] });
+        }
+      }
+    }
+    out.sort((a, b) => (a.state === "missed" ? 0 : 1) - (b.state === "missed" ? 0 : 1));
+    return out;
+  }
+
+  /** Filter the dashboard to a breaching segment (each of its axes). */
+  _drillBreach(b) {
+    b.drill.forEach(([axis, label], k) =>
+      this._drill(axis, label, k < b.drill.length - 1));  // toast on the last only
   }
 
   // -- drag to reorder, drag to resize -------------------------------

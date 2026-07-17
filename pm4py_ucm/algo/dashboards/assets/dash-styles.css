@@ -815,6 +815,25 @@
 }
 .pm-score__ach > i { display: block; height: 100%; }
 
+/* Breach drill-down: a segmented target's row expands to the segments
+   that broke it; each chip filters the dashboard to that segment. */
+.pm-score__row--drill { cursor: pointer; }
+.pm-score__row--drill:hover td { background: var(--paper); }
+.pm-score__caret { display: inline-block; width: 1em; color: var(--muted); }
+.pm-score__detail { display: none; }
+.pm-score__detail--open { display: table-row; }
+.pm-score__detail td { padding: 6px 8px 10px; }
+.pm-score__segs { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.pm-score__segs-lab { font-size: 11px; color: var(--muted); margin-right: 2px; }
+.pm-score__seg {
+  font: inherit; font-size: 11px; cursor: pointer;
+  padding: 2px 9px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--paper); color: var(--ink);
+}
+.pm-score__seg:hover { border-color: var(--garnet); }
+.pm-score__seg--missed { border-left: 3px solid var(--garnet); }
+.pm-score__seg--risk { border-left: 3px solid var(--warn-bar); }
+
 /* =====================================================================
    Toast
    ===================================================================== */
