@@ -360,10 +360,10 @@ The reasons, one guard at a time:
   chart per segment, which is what the bar already is).
 
 These guards are contextual — they depend on the segmentation, the
-aggregation, the axis kind and whether a target is set — so they live in
-the composer (`syncViz`), not in a per-metric list. `Metric.vizzes`
-records only the coarser question of which shapes a *result type* can
-ever take.
+aggregation, the axis kind and whether a target is set — none of which is
+a property of the metric. So they live in the composer (`syncViz`), and
+there is deliberately no per-metric or per-result-type viz list to drift
+out of step with them.
 
 ### What the extra-data shapes return
 
