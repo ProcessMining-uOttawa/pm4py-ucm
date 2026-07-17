@@ -1492,6 +1492,12 @@ _PARITY_SPECS = [
      "segment": {"rows": "attr:case:country", "cols": "resource"}},
     {"id": "cust-broken", "metric": "custom", "viz": "kpi",
      "params": {"formula": "duration( >"}},
+    # A summed time — the aggregation a pie needs, now offered for times
+    # as well as counts.
+    {"id": "kpi-duration-sum", "metric": "duration", "viz": "kpi",
+     "agg": "sum", "params": {}},
+    {"id": "bar-duration-sum", "metric": "duration", "viz": "bar",
+     "agg": "sum", "segment": {"rows": "attr:case:country"}},
     # Distribution shapes: the continuous path (duration) and the
     # whole-number path (a count) for both the histogram and the box plot.
     {"id": "hist-duration", "metric": "duration", "viz": "hist",

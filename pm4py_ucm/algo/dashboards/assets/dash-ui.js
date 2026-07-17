@@ -103,7 +103,7 @@ const PIE_CAP = 8;
 //: needed here because a ƒ custom metric has no catalog entry to read
 //: them from.
 const AGGS_BY_TYPE = {
-  time: ["avg", "median", "p90", "min", "max"],
+  time: ["avg", "median", "p90", "sum", "min", "max"],
   count: ["avg", "median", "p90", "sum", "min", "max"],
   percent: ["share"],
   rate: ["avg", "median", "p90", "max"],
