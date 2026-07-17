@@ -241,17 +241,95 @@ An embedded, self-contained dashboard island over the log's per-case
 bars, two-axis tables), choose an **aggregation**, add per-widget or
 dashboard-level **filters** and **segmentation** axes, set **targets** and
 watch the **scorecard**, and write custom metrics in the **ƒ formula
-language** (`duration() where attr("Claim_Value") > 500`, …). **Export**
+language** (`duration() where attr("Claim_Value") > 500`, … — full grammar
+below). **Export**
 the whole dashboard as one self-contained interactive HTML file, or a
 multi-section **session report** (scorecard + dashboards + the model as
 SVG + a Family section). **Save** the dashboard's definition (its widgets
 and filters) as a small reusable JSON file and **Load** it back later or
 onto another log — widgets that name activities or attributes the target
 log lacks are reported up front rather than shown as misleading zeros. The
-exact metric definitions, the ƒ grammar, and
-the engine's rounding / weighting decisions are documented in
-[`docs/dashboards.md`](../docs/dashboards.md); a runnable walkthrough is
+exact metric definitions and the engine's rounding / weighting decisions
+are documented in [`docs/dashboards.md`](../docs/dashboards.md); a runnable
+walkthrough is
 [`demo/dashboards_tutorial.ipynb`](../demo/dashboards_tutorial.ipynb).
+
+#### The ƒ custom-formula language
+
+When the catalog doesn't name what you want to measure, write it as a
+**custom formula**: a per-case expression, optionally narrowed by a
+`where` clause, that the dashboard then aggregates (avg / median / share /
+…) exactly like any built-in metric. Choose **ƒ Custom formula…** in the
+widget composer's metric list; a live chip validates as you type and shows
+the inferred result type, and function chips insert the calls below.
+
+**Functions** — each returns one number per case:
+
+| Function | Returns |
+| --- | --- |
+| `duration()` | case length, in days |
+| `contains("act")` | `1` if the case contains activity *act*, else `0` |
+| `count("act")` | how many times *act* occurs in the case |
+| `time_between("a", "b")` | days from the first *a* to the first *b* after it; null if that never happens |
+| `timestamp("act")` | epoch seconds of the first *act*; null if absent |
+| `attr("name")` | a **numeric** case attribute; null if absent or non-numeric |
+
+**Operators**, from lowest to highest precedence: the trailing `where` <
+`or` < `and` < `not` < comparisons (`==` `!=` `>` `>=` `<` `<=`) < `+` `-`
+< `*` `/` < unary `-`. Group with `(` … `)`. A comparison or a logical
+yields `1` / `0`, so it reads as a percentage after aggregation.
+
+**`where`** — a trailing `where <predicate>` keeps only the cases the
+predicate holds for and sets the rest to null (which aggregation drops), so
+`duration() where contains("Appeal")` measures duration over appealed
+cases only.
+
+**Grammar** (EBNF):
+
+```ebnf
+formula    := orExpr [ "where" orExpr ]
+orExpr     := andExpr ( "or" andExpr )*
+andExpr    := notExpr ( "and" notExpr )*
+notExpr    := "not" notExpr | comparison
+comparison := additive ( ("=="|"!="|">"|">="|"<"|"<=") additive )?
+additive   := term ( ("+"|"-") term )*
+term       := unary ( ("*"|"/") unary )*
+unary      := "-" unary | primary
+primary    := number | call | "(" orExpr ")"
+call       := IDENT "(" [ arg ( "," arg )* ] ")"
+```
+
+**Examples**:
+
+| Formula | Measures |
+| --- | --- |
+| `duration() where attr("Claim_Value") > 500` | case duration, over claims above 500 |
+| `contains("Appeal")` | share of cases that were appealed → *percent* |
+| `count("Rework") / count("Assess")` | rework ratio per case |
+| `time_between("Register", "Pay") where attr("Claim_Value") > 1000` | register → pay days, high-value claims only |
+
+**One value type, and no `eval`.** Every expression evaluates, per case, to
+a **number or null** — there are no strings at runtime; a string only ever
+*names* an activity or attribute inside a call, fixed when the formula is
+written. The text is parsed to an explicit syntax tree and never handed to
+a language `eval`, so the only operations are the ones above, over the only
+data the fact table holds — nothing you type can reach the host. `null` (a
+missing time, an absent attribute) propagates through arithmetic and
+comparison and is dropped by aggregation. Categorical attributes aren't
+values here — filter them with the widget's **Filter** row; that is what
+keeps the grammar single-typed and identical between the Python evaluator
+and the in-browser one.
+
+**Result type** is inferred from the expression and picks the unit and the
+aggregations offered: a comparison, a logical, or a bare `contains()` is a
+0/1 indicator → **percent** (aggregate with *share*); anything mentioning a
+time function → **time**; otherwise → **count** — exactly as a catalog
+metric's type does.
+
+The canonical specification is the module docstring of
+[`formula.py`](../pm4py_ucm/algo/dashboards/formula.py); see
+[`docs/dashboards.md`](../docs/dashboards.md) for how it fits the rest of
+the engine.
 
 ## Deploy to Streamlit Community Cloud
 
