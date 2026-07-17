@@ -1237,6 +1237,23 @@ class TestSessionReport:
         css = (ASSETS / "dash-styles.css").read_text(encoding="utf8")
         assert ".pm-score__seg" in css and ".pm-score__detail--open" in css
 
+    def test_multiple_named_dashboards(self):
+        """Several named dashboards persist in one per-log registry, with a
+        header switcher (new / rename / delete). A read-only or headless
+        instance is a single ephemeral dashboard — no registry."""
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        assert "_loadRegistry(" in ui and "_regKey()" in ui
+        assert "_switchTo(" in ui and "_newDashboard(" in ui \
+            and "_renameDashboard(" in ui and "_deleteDashboard(" in ui
+        assert "_dashSwitcher(" in ui
+        # A legacy single-dashboard store migrates into the first dashboard.
+        assert "Migrate a legacy single-dashboard store" in ui
+        # Read-only / headless bypass the registry (single dashboard).
+        assert "this._multi = !this.readOnly && !this.headless" in ui
+        assert "if (!this._multi) { this._reg = seed(); return; }" in ui
+        css = (ASSETS / "dash-styles.css").read_text(encoding="utf8")
+        assert ".pm-dashbar" in css and ".pm-dashsel" in css
+
     def test_headless_dashboard_has_no_header(self):
         ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
         assert "this.headless = !!opts.headless" in ui
