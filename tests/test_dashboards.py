@@ -1226,6 +1226,17 @@ class TestSessionReport:
         assert "new Dashboard(mount, {" in report
         assert "headless: true" in report
 
+    def test_scorecard_breach_drilldown(self):
+        """A segmented target's scorecard row expands to the breaching
+        segments; clicking one filters the dashboard to it."""
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        assert "_breachingSegments(" in ui and "_drillBreach(" in ui
+        # A breach chip reuses the same _drill a table cell uses.
+        assert "this._drillBreach(b)" in ui
+        assert 's === "missed" || s === "risk"' in ui
+        css = (ASSETS / "dash-styles.css").read_text(encoding="utf8")
+        assert ".pm-score__seg" in css and ".pm-score__detail--open" in css
+
     def test_headless_dashboard_has_no_header(self):
         ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
         assert "this.headless = !!opts.headless" in ui
