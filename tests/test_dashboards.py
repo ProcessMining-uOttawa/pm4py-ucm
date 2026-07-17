@@ -1809,6 +1809,15 @@ class TestDateAndDistributionUI:
         # hist/box are suppressed for series metrics (they are time series).
         assert "E.SERIES_METRICS.includes(metricSel.value)" in ui
 
+    def test_composer_uses_a_viz_thumbnail_picker(self):
+        """The Chart row is clickable thumbnail tiles (each a glyph of the
+        visualisation), not a plain dropdown."""
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        assert "_chartPicker(" in ui and "_vizIcon(" in ui
+        assert "chartPick.value" in ui and "chartPick.select(" in ui
+        css = (ASSETS / "dash-styles.css").read_text(encoding="utf8")
+        assert ".pm-vizpick__tile" in css
+
     def test_svg_helper_uses_the_svg_namespace(self):
         """SVG marks built with `document.createElement` draw nothing —
         they must use the SVG namespace."""

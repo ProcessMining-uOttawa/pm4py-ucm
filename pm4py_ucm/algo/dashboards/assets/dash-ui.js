@@ -1279,6 +1279,63 @@ export class Dashboard {
     return { w: 2, h: 2 };   // bar / line / table / hist / box
   }
 
+  // -- composer viz thumbnail picker ---------------------------------
+
+  /** A small SVG glyph of a visualisation, for the thumbnail picker. */
+  _vizIcon(viz) {
+    const bar = (x, y, w, hh, cls) =>
+      svgEl("rect", { x, y, width: w, height: hh, rx: 1, class: cls });
+    let marks;
+    if (viz === "kpi") {
+      marks = [bar(9, 7, 22, 6, "pm-vizpick__fill"),
+               bar(9, 17, 13, 3, "pm-vizpick__mut")];
+    } else if (viz === "hist") {
+      marks = [9, 15, 21, 13, 8].map((hh, k) =>
+        bar(7 + k * 6, 24 - hh, 4, hh, "pm-vizpick__fill"));
+    } else { // box plot: whisker line, IQR box, median
+      marks = [
+        svgEl("line", { x1: 6, y1: 14, x2: 34, y2: 14, class: "pm-vizpick__stroke" }),
+        bar(13, 8, 14, 12, "pm-vizpick__box"),
+        svgEl("line", { x1: 20, y1: 8, x2: 20, y2: 20, class: "pm-vizpick__stroke" }),
+      ];
+    }
+    return svgEl("svg", { viewBox: "0 0 40 28", class: "pm-vizpick__icon" },
+      ...marks);
+  }
+
+  /**
+   * A thumbnail picker for the unsegmented visualisation — clickable tiles
+   * that show each shape (KPI / histogram / box plot), in place of a plain
+   * dropdown so the choice reads at a glance. Returns the element plus a
+   * `value` getter and a `select` setter, so it drops into the composer
+   * where the old `<select>` was.
+   */
+  _chartPicker(onChange) {
+    const opts = [["kpi", "KPI card"], ["hist", "Histogram"], ["box", "Box plot"]];
+    let current = "kpi";
+    const tiles = {};
+    const paint = () => {
+      for (const k of Object.keys(tiles))
+        tiles[k].classList.toggle("pm-vizpick__tile--on", k === current);
+    };
+    const el = h("div", { class: "pm-vizpick", role: "radiogroup" });
+    for (const [v, label] of opts) {
+      const tile = h("button", {
+        type: "button", class: "pm-vizpick__tile", title: label,
+        "aria-label": label,
+        onclick: () => { current = v; paint(); if (onChange) onChange(); },
+      }, this._vizIcon(v), h("span", { class: "pm-vizpick__lab" }, label));
+      tiles[v] = tile;
+      el.append(tile);
+    }
+    paint();
+    return {
+      el,
+      get value() { return current; },
+      select(v) { current = v; paint(); },
+    };
+  }
+
   // -- composer -------------------------------------------------------
 
   /**
@@ -1445,10 +1502,10 @@ export class Dashboard {
     // Without a segment axis a per-case metric is one number, but its
     // distribution can be shown instead — a histogram or a box plot.
     // (With an axis, the visualisation follows the axis count: bar/table.)
-    const chartSel = h("select", { class: "pm-select" },
-      h("option", { value: "kpi" }, "KPI card"),
-      h("option", { value: "hist" }, "Histogram"),
-      h("option", { value: "box" }, "Box plot"));
+    // Thumbnail picker (KPI / histogram / box) instead of a dropdown, so
+    // the choice reads at a glance. `refresh` is defined further down and
+    // only called on click, so referencing it here is safe.
+    const chartPick = this._chartPicker(() => refresh());
     const chartNote = h("span", { class: "pm-row__hint" });
 
     const targetToggle = h("button", {
@@ -1546,7 +1603,7 @@ export class Dashboard {
       const canShape = n === 0 && !seriesMetric;
       rows.chart.style.display = canShape ? "" : "none";
       if (n === 0) {
-        spec.viz = seriesMetric ? "kpi" : chartSel.value;
+        spec.viz = seriesMetric ? "kpi" : chartPick.value;
       } else {
         spec.viz = n === 1 ? "bar" : "table";
       }
@@ -1641,7 +1698,6 @@ export class Dashboard {
     aggSel.addEventListener("change", refresh);
     rowsSel.addEventListener("change", refresh);
     colsSel.addEventListener("change", refresh);
-    chartSel.addEventListener("change", refresh);
     targetToggle.addEventListener("click", () => {
       spec.target.on = !spec.target.on; refresh();
     });
@@ -1675,7 +1731,7 @@ export class Dashboard {
       h("span", { class: "pm-row__hint" }, "rows"), rowsSel,
       h("span", { class: "pm-row__hint" }, "cols"), colsSel, vizNote);
     rows.chart = h("div", { class: "pm-row" },
-      h("span", { class: "pm-row__label" }, "Chart"), chartSel, chartNote);
+      h("span", { class: "pm-row__label" }, "Chart"), chartPick.el, chartNote);
     rows.target = h("div", { class: "pm-row" },
       h("span", { class: "pm-row__label" }, "Target"),
       targetToggle, dirSel, valInput,
@@ -1698,8 +1754,8 @@ export class Dashboard {
     colsSel.value = spec.segment.cols || "";
     // Restore the unsegmented shape when editing a hist/box widget; a
     // segmented one has no chart choice (the axes decide), so default kpi.
-    chartSel.value = (spec.viz === "hist" || spec.viz === "box")
-      ? spec.viz : "kpi";
+    chartPick.select((spec.viz === "hist" || spec.viz === "box")
+      ? spec.viz : "kpi");
     dirSel.value = spec.target.dir;
     valInput.value = spec.target.value;
     warnInput.value = spec.target.warn;
