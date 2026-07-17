@@ -1805,6 +1805,23 @@ class TestDateAndDistributionUI:
         ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
         assert "createElementNS" in ui
 
+    def test_hist_box_cards_are_chart_sized_not_kpi_sized(self):
+        """A KPI-sized (1×1) tile clips the chart and its axis labels;
+        hist/box must span like the other charts and the card chart must
+        fill the leftover height rather than overflow."""
+        css = (ASSETS / "dash-styles.css").read_text(encoding="utf8")
+        # The rule that sizes charts names hist/box alongside bar/table.
+        span = re.search(r"([^}]*)\{\s*grid-column: span 2; grid-row: span 2;",
+                         css)
+        assert span and ".pm-w--hist" in span.group(1) \
+            and ".pm-w--box" in span.group(1), \
+            "hist/box are not sized as 2×2 charts"
+        # The card chart fills the body and scales, so it cannot overflow.
+        assert ".pm-w__chart" in css
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        assert 'class: "pm-w__chart" }, this._histSvg' in ui
+        assert 'class: "pm-w__chart" }, this._boxSvg' in ui
+
 
 def _norm(obj):
     """Canonicalise for comparison: round away the last bits of IEEE

@@ -331,7 +331,10 @@
 /* Spans by visualisation: a KPI is a tile, a chart needs room to be
    read, a model is the width of the grid. */
 .pm-w--kpi { grid-column: span 1; grid-row: span 1; }
-.pm-w--bar, .pm-w--line, .pm-w--table { grid-column: span 2; grid-row: span 2; }
+/* Charts (bar/line/table and the hist/box distributions) need room to be
+   read: a KPI-sized tile clips the plot and its axis labels. */
+.pm-w--bar, .pm-w--line, .pm-w--table,
+.pm-w--hist, .pm-w--box { grid-column: span 2; grid-row: span 2; }
 .pm-w--model { grid-column: span 4; grid-row: span 2; }
 /* A table wider than five data columns needs the full grid to stay
    readable rather than scrolling in a 2-column box. */
@@ -450,6 +453,13 @@
    gives the chart the room. */
 .pm-kpi__value--sm { font-size: 18px; margin-top: 0; }
 .pm-chart { display: block; width: 100%; height: auto; margin-top: 8px; overflow: visible; }
+/* On a card, the chart fills the body's leftover height and scales to fit
+   (the SVG's viewBox + default preserveAspectRatio), so a tall plot never
+   overflows the card and loses its baseline/axis labels. The composer
+   preview uses its own sized slot (.pm-preview__chart), so this is scoped
+   to the card. */
+.pm-w__chart { flex: 1; min-height: 0; margin-top: 8px; }
+.pm-w__chart .pm-chart { width: 100%; height: 100%; margin-top: 0; }
 .pm-chart__axis { stroke: var(--border); stroke-width: 1; }
 .pm-chart__lab { fill: var(--muted); font-family: var(--f-mono); font-size: 9px; }
 .pm-chart__empty { color: var(--muted); font-size: 12px; margin-top: 8px; }

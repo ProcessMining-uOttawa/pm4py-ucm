@@ -814,8 +814,12 @@ export class Dashboard {
   _histBody(w) {
     const out = this._distHead(w);
     const hh = w.hist;
+    // Wrap the chart so it *fills* the body's leftover height and scales
+    // to fit (preserveAspectRatio) rather than deriving its height from
+    // the card width — otherwise a tall chart overflows the card, which
+    // clips its baseline and axis labels.
     out.push(hh && hh.bins.length
-      ? this._histSvg(hh, w.unit)
+      ? h("div", { class: "pm-w__chart" }, this._histSvg(hh, w.unit))
       : h("div", { class: "pm-chart__empty" }, "No data to plot."));
     return out;
   }
@@ -855,7 +859,7 @@ export class Dashboard {
     const out = this._distHead(w);
     const bx = w.box;
     out.push(bx && bx.n
-      ? this._boxSvg(bx, w.unit)
+      ? h("div", { class: "pm-w__chart" }, this._boxSvg(bx, w.unit))
       : h("div", { class: "pm-chart__empty" }, "No data to plot."));
     return out;
   }
