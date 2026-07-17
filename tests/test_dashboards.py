@@ -1793,6 +1793,9 @@ class TestDateAndDistributionUI:
         ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
         assert "Histogram" in ui and "Box plot" in ui
         assert "_histSvg(" in ui and "_boxSvg(" in ui
+        # The composer's live preview draws the real distribution, not just
+        # the aggregate — else a hist/box looks identical to a KPI there.
+        assert "pm-preview__chart" in ui
         # hist/box are suppressed for series metrics (they are time series).
         assert "E.SERIES_METRICS.includes(metricSel.value)" in ui
 

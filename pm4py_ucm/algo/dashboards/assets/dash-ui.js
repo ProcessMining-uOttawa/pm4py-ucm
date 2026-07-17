@@ -1491,6 +1491,16 @@ export class Dashboard {
       if (w.viz === "kpi" || w.viz === "hist" || w.viz === "box") {
         preview.append(h("span", { class: "pm-preview__value" }, w.text));
       }
+      // Preview the actual distribution, not just the headline — otherwise
+      // a histogram/box looks identical to a KPI here and its point is
+      // lost. Uses the same renderers the card does.
+      if (w.viz === "hist" && w.hist && w.hist.bins.length) {
+        preview.append(h("div", { class: "pm-preview__chart" },
+          this._histSvg(w.hist, w.unit)));
+      } else if (w.viz === "box" && w.box && w.box.n) {
+        preview.append(h("div", { class: "pm-preview__chart" },
+          this._boxSvg(w.box, w.unit)));
+      }
       const shape = w.viz === "kpi" ? "a KPI card"
         : w.viz === "hist" ? `a histogram of ${(w.hist || {}).n || 0} cases`
         : w.viz === "box" ? `a box plot of ${(w.box || {}).n || 0} cases`
