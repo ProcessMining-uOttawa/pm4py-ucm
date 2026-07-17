@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-07-17
+
+Three more ways to draw a widget. Each is a new *rendering* of a figure
+the engine already computes, so none of them changes a number.
+
+### Added
+
+- **Line charts** — the ordered series a bar draws, as a line with
+  hoverable points. Offered for a series metric (WIP, arrival rate) and
+  for a one-axis segmentation **over a time axis**: a line says the order
+  means something, which it does not on a categorical axis.
+- **Gauges** — a KPI against its target as a dial: a value arc coloured by
+  target state and a tick at the goal. Offered only when the widget has a
+  target — without one there is nothing to read the value against.
+- **Pie / donut charts** — each segment's share of the total, drawn as a
+  donut with the total in the hole and a legend. Offered only when the
+  aggregation is `sum`, the one case where slices add to a whole; the tail
+  past eight slices folds into one *Other* slice and says so.
+- **`sum` is offered for time metrics**, not just counts — a total
+  duration ("28,928 case-days") is a real quantity, and it is what a pie
+  needs. Still off `rate`, where a sum of rates means nothing.
+
+### Changed
+
+- The composer's **Chart picker is context-aware**: it offers only the
+  visualisations that say something true about the current metric and
+  segmentation, and disappears when there is no choice to make.
+
 ## [0.6.2] — 2026-07-17
 
 Finishes the dashboards UI: the composer picks a visualisation by
