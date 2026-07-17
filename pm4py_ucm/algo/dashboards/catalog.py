@@ -65,14 +65,27 @@ AGGS_BY_TYPE: Dict[str, Tuple[str, ...]] = {
     "rate": ("avg", "median", "p90", "max"),
 }
 
-#: Visualisations by result type. The composer picks the viz from the
-#: segmentation arity (0 axes → kpi, 1 → bar/line, 2 → table) and
-#: intersects with this.
+#: The visualisations a result type can *ever* take — the coarse half of
+#: the question only.
+#:
+#: Whether a shape is actually offered is contextual: it depends on the
+#: widget's segmentation arity, its aggregation, the kind of axis and
+#: whether it carries a target. None of that is a property of the result
+#: type, so the real guards live in the composer (``syncViz`` in
+#: ``assets/dash-ui.js``) and are specified in ``docs/dashboards.md`` §6.
+#: This map is catalog metadata for a caller that wants the coarse answer;
+#: the engine does not read it.
+#:
+#: ``model`` is absent on purpose: a model widget is pinned, not composed
+#: from a metric, so no result type owns it.
 VIZ_BY_TYPE: Dict[str, Tuple[str, ...]] = {
-    "time": ("kpi", "bar", "line", "table", "hist", "box", "model"),
-    "count": ("kpi", "bar", "line", "table", "hist", "model"),
-    "percent": ("kpi", "bar", "line", "table", "model"),
-    "rate": ("kpi", "bar", "line"),
+    "time": ("kpi", "gauge", "hist", "box", "bar", "line", "pie", "table"),
+    "count": ("kpi", "gauge", "hist", "box", "bar", "line", "pie", "table"),
+    # A percent aggregates with `share`, never `sum`, so it is never a pie.
+    "percent": ("kpi", "gauge", "hist", "box", "bar", "line", "table"),
+    # A series metric is a run of ordered points, not a bag of per-case
+    # values: no headline, no distribution — only a bar or a line.
+    "rate": ("bar", "line"),
 }
 
 

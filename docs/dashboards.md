@@ -302,17 +302,70 @@ one per detected case attribute (`attr:<name>`).
 * **Empty segments are omitted, not zeroed.** A segment with no surviving
   case is not a zero bar.
 
-Segmentation arity picks the visualisation: 0 axes → KPI, 1 → bar/line,
-2 → heatmap table.
+Segmentation arity is the first thing that decides the visualisation — see
+the next section.
 
-### Distribution shapes (histogram / box plot)
+### Filtering by date
 
-Without a segment axis a per-case metric is one aggregate, but its whole
-distribution can be shown instead of a single number — `viz: "hist"` or
-`viz: "box"` (offered in the composer's *Chart* row only when unsegmented,
-and never for a series metric, which is a time series rather than a bag of
-per-case values). Both keep the aggregate as a headline and draw the
-shape beneath it.
+The `date` filter — `{field: "date", value: [from, to]}`, ISO dates,
+either end nullable for an open range, the final period inclusive — has
+always been in the engine; the filter picker now offers a **Date range**
+option that produces it, its inputs seeded from the log's first and last
+case-start dates (`dateSpan` in the browser engine).
+
+---
+
+## 6. Visualisations and their guards
+
+`spec.viz` says how a widget's figure is **drawn**. Most shapes are a
+rendering choice over a figure the engine already returns — only `hist`
+and `box` add data — so adding one costs a renderer, not a metric.
+
+The composer offers a shape only when it would say something **true**
+about this widget. Those guards are not decoration: an unguarded pie of
+averages, or a line over an alphabetical axis, states a relationship the
+data does not have.
+
+| `viz` | Offered when | Reads |
+| --- | --- | --- |
+| `kpi` | no segment axis | `value`, `text` |
+| `gauge` | no axis **and the widget has a target** | `value` + the target |
+| `hist` | no axis, non-series metric | `hist` |
+| `box` | no axis, non-series metric | `box` |
+| `bar` | one axis — or any series metric | `series` |
+| `line` | one **time** axis — or any series metric | `series` |
+| `pie` | one axis **and `agg` is `sum`** | `series` |
+| `table` | two axes | `rows`/`cols`/`cells` |
+| `model` | pinned from the Model view; not composed | `renders` |
+
+The reasons, one guard at a time:
+
+* **A gauge needs a target.** A dial reads a value *against* a threshold;
+  with no target there is nothing to read it against and the needle is
+  decoration. The dial spans value and target with headroom, so the arc
+  never pins to an end and the target tick always lands on the scale.
+* **A line needs an order.** A line says "this moved from here to there",
+  which is true along time and false along an alphabetical list of
+  countries. So `line` is offered on a time axis (and for series metrics,
+  which are ordered by construction) and never on a categorical one.
+* **A pie needs a whole.** Slices only mean anything when they add up:
+  that is a `sum`, not an average — "average duration by country" sums to
+  nothing. Hence `agg == "sum"`. `sum` is offered for times as well as
+  counts (a total duration is a real quantity), so "case-days by country"
+  is pie-able but "average days by country" is not.
+* **A distribution needs per-case values.** `hist` and `box` bin the bag
+  of per-case numbers, which a **series** metric (WIP, arrival rate) does
+  not have — it is a run of ordered points. So they are offered only for
+  non-series metrics, unsegmented (a segmented distribution would be one
+  chart per segment, which is what the bar already is).
+
+These guards are contextual — they depend on the segmentation, the
+aggregation, the axis kind and whether a target is set — so they live in
+the composer (`syncViz`), not in a per-metric list. `Metric.vizzes`
+records only the coarser question of which shapes a *result type* can
+ever take.
+
+### What the extra-data shapes return
 
 * **Histogram** — `histogram(values)` returns `{bins: [{lo, hi, count}],
   min, max, n, integer}`. A whole-number metric spanning no more than 40
@@ -325,17 +378,20 @@ shape beneath it.
   Quartiles reuse the same linear-interpolation `percentile` the
   aggregations do.
 
-### Filtering by date
+### Caps, and saying so
 
-The `date` filter — `{field: "date", value: [from, to]}`, ISO dates,
-either end nullable for an open range, the final period inclusive — has
-always been in the engine; the filter picker now offers a **Date range**
-option that produces it, its inputs seeded from the log's first and last
-case-start dates (`dateSpan` in the browser engine).
+A chart that silently drops data lies about being complete, so both caps
+are announced:
 
----
+* **Bars** keep the largest `BAR_CAP` (24) of a categorical axis and say
+  "top 24 of 164"; the target state still considers every segment. **Time
+  axes are exempt** — their order carries the meaning, and reordering by
+  value would destroy it.
+* **Pie** keeps the largest `PIE_CAP` (8) and folds the tail into one
+  *Other* slice, labelled with how many it swallowed. A pie stops being
+  readable long before a bar does.
 
-## 6. Targets
+## 7. Targets
 
 A target is `{on, dir, value, warn, mode}`. `warn` is the threshold
 between *at risk* and *missed*, on the far side of `value`: a `<=` target
@@ -357,7 +413,7 @@ state would hide exactly the cell the reader needs.
 
 ---
 
-## 7. Widget specs
+## 8. Widget specs
 
 The core artifact, serialised as JSON. A dashboard is an ordered list of
 these plus a dashboard-level filter list.
@@ -390,7 +446,7 @@ computation, not two.
 
 ---
 
-## 8. The view
+## 9. The view
 
 ### Where state lives
 
