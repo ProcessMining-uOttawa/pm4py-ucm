@@ -237,21 +237,51 @@ and per-edge Δ tables, and aligned OR-fork branch shares.
 ### 8 · Dashboards
 
 An embedded, self-contained dashboard island over the log's per-case
-**fact table**. Add **widgets** from the metric catalog (KPIs, one-axis
-bars, two-axis tables), choose an **aggregation**, add per-widget or
-dashboard-level **filters** and **segmentation** axes, set **targets** and
-watch the **scorecard**, and write custom metrics in the **ƒ formula
-language** (`duration() where attr("Claim_Value") > 500`, … — full grammar
-below). **Export**
-the whole dashboard as one self-contained interactive HTML file, or a
-multi-section **session report** (scorecard + dashboards + the model as
-SVG + a Family section). **Save** the dashboard's definition (its widgets
-and filters) as a small reusable JSON file and **Load** it back later or
-onto another log — widgets that name activities or attributes the target
-log lacks are reported up front rather than shown as misleading zeros. The
-exact metric definitions and the engine's rounding / weighting decisions
-are documented in [`docs/dashboards.md`](../docs/dashboards.md); a runnable
-walkthrough is
+**fact table** — and the *same artifact* the HTML export writes, so what
+you build on screen is exactly what you ship.
+
+**Build a widget.** Pick a metric from the catalog (or write your own in
+the **ƒ formula language** — `duration() where attr("Claim_Value") > 500`,
+full grammar below), choose an **aggregation**, add per-widget or
+dashboard-level **filters** (including a **date range**), and **segment**
+by up to two axes. A live preview draws the real widget as you compose it.
+
+**Choose a shape.** The Chart row offers thumbnails of the visualisations
+that say something true about what you picked:
+
+| Segmentation | Shapes offered |
+| --- | --- |
+| no axes | **KPI card**, **histogram** or **box plot** (the distribution) — plus a **gauge** when the widget has a target |
+| one axis | **bar**; a **line** on a time axis; a **pie / donut** when the aggregation is a `sum` |
+| two axes | a **heatmap table** |
+
+**Targets and the scorecard.** Set a target and watch the **scorecard**. A
+segmented target rolls up to one state — so its row **expands to the
+segments that breached it**, and clicking one filters the whole dashboard
+to that segment.
+
+**Arrange.** Drag a widget's grip to reorder it, drag its corner to
+resize; the layout is remembered.
+
+**Several dashboards.** A log can hold several **named dashboards** —
+switch from the header dropdown (New / Rename / Delete). Each keeps its
+own widgets and filters.
+
+**Take it with you.**
+
+- **⬇ Export** — this dashboard as one self-contained interactive HTML
+  file: offline, no server, still filterable.
+- **⬇ Export all** — every dashboard in one file, switchable, read-only.
+- **⬇ Session report** — a multi-section report (scorecard + dashboards +
+  the model as SVG + a Family section).
+- **⬇ Save / ⬆ Load** — the dashboard's *definition* (widgets + filters)
+  as a small reusable JSON, reloadable here or on **another log**; widgets
+  naming activities or attributes the target log lacks are reported up
+  front rather than shown as misleading zeros.
+
+The exact metric definitions and the engine's rounding / weighting
+decisions are documented in [`docs/dashboards.md`](../docs/dashboards.md);
+a runnable walkthrough is
 [`demo/dashboards_tutorial.ipynb`](../demo/dashboards_tutorial.ipynb).
 
 #### The ƒ custom-formula language
