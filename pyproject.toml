@@ -48,9 +48,11 @@ dev = [
     "matplotlib>=3.5",
     "bandit>=1.7",          # local SAST: `bandit -r pm4py_ucm web -ll`
 ]
+docs = ["pdoc>=14"]         # API reference: `pdoc pm4py_ucm -o docs/api`
 
 [project.urls]
 Homepage = "https://github.com/ProcessMining-uOttawa/pm4py-ucm"
+Documentation = "https://processmining-uottawa.github.io/pm4py-ucm/"
 Issues = "https://github.com/ProcessMining-uOttawa/pm4py-ucm/issues"
 Changelog = "https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/CHANGELOG.md"
 

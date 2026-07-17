@@ -1,0 +1,83 @@
+name: docs
+
+# Build the pdoc API reference and publish it to GitHub Pages.
+#
+# The site is served at
+#   https://processmining-uottawa.github.io/pm4py-ucm/
+# and rebuilds on every push to main. Nothing generated is committed —
+# the HTML is produced fresh here from the package's docstrings.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Least privilege for the deploy: read the repo, write Pages, mint the
+# OIDC token deploy-pages exchanges.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One in-flight Pages deployment at a time; don't cancel a running one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Graphviz binary
+        # A few modules import the graphviz wrapper; the binary keeps any
+        # import-time probing happy during introspection.
+        run: sudo apt-get update && sudo apt-get install -y graphviz
+
+      - name: Install package with dev + docs extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,docs]"
+
+      - name: Build API docs
+        # pdoc honours the package's __all__, which lists only the public
+        # API — so passing just `pm4py_ucm` would document that one page.
+        # Passing the top package plus its direct children makes pdoc
+        # expand each subpackage to its full module tree (the landing page
+        # stays the curated public API; every submodule gets its own page).
+        run: |
+          MODULES=$(python -c "import pkgutil, pm4py_ucm; print(' '.join(['pm4py_ucm'] + [m.name for m in pkgutil.iter_modules(pm4py_ucm.__path__, 'pm4py_ucm.')]))")
+          echo "Documenting: $MODULES"
+          pdoc $MODULES -o docs/api --docformat numpy
+
+      - name: Configure Pages
+        # enablement: true turns the repository's Pages on (source =
+        # GitHub Actions) if it is not already, so no manual repo setting
+        # is needed for the first deploy.
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/api
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

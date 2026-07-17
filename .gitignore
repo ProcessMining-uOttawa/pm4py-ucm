@@ -70,6 +70,10 @@ docs/_build/
 docs/_autosummary/
 site/
 
+# pdoc API reference — generated fresh by the docs.yml workflow and
+# published to GitHub Pages; never committed.
+docs/api/
+
 # Jupyter Notebook
 .ipynb_checkpoints
 
