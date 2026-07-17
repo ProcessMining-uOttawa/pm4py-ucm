@@ -1254,6 +1254,17 @@ class TestSessionReport:
         css = (ASSETS / "dash-styles.css").read_text(encoding="utf8")
         assert ".pm-dashbar" in css and ".pm-dashsel" in css
 
+    def test_export_all_dashboards_in_one_file(self):
+        """'Export all' bundles the whole registry into one read-only,
+        switchable HTML file; the viewer loads dashboards[] and its
+        switcher drops the edit controls."""
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        assert "exportAllHtml(" in ui and "downloadAllExport(" in ui
+        assert "⬇ Export all" in ui
+        assert "cfg.dashboards = JSON.parse" in ui and "cfg.active = this.activeId" in ui
+        # The viewer loads a bundled set over the localStorage registry.
+        assert "Array.isArray(opts.dashboards)" in ui
+
     def test_headless_dashboard_has_no_header(self):
         ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
         assert "this.headless = !!opts.headless" in ui
