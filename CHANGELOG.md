@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-07-16
+
+A dashboards-refinement release on top of 0.6.0: new distribution and
+save/load features, direct-manipulation of the widget grid, the migration
+off Streamlit's deprecated HTML-embedding API, and a browsable API
+reference.
+
+### Added
+
+- **Histogram and box-plot widgets** — an unsegmented per-case metric can
+  now show its whole distribution instead of a single aggregate. New
+  `histogram` / `box_stats` engine functions (mirrored Python↔JS): a
+  histogram of equal-width bins, or one bar per value for a small
+  whole-number metric; and a Tukey box plot (five-number summary,
+  1.5·IQR whiskers, outliers). Chosen in the composer's **Chart** row,
+  which also previews the live distribution.
+- **Date-range filter** — the filter picker gains a "Date range" option
+  with two date inputs seeded from the log's span, producing the engine's
+  existing `date` filter.
+- **Save / Load dashboard definitions** — download a dashboard's recipe
+  (name, widgets, filters) as a small JSON file and reload it, on the same
+  or another log. A cross-log **binding report** names any widget that
+  references activities or attributes the target log lacks.
+- **Drag to reorder and drag to resize widgets** — a grip drags a widget
+  to a new position; a corner handle resizes its grid span, persisted per
+  widget so it travels with a saved / exported dashboard. Replaces the
+  ◄/► step buttons.
+
+### Changed
+
+- **Island embedding migrated from the deprecated `st.components.v1.html`
+  to `st.iframe`** in the V4 app (Dashboards island, SVG model viewer,
+  open-image-in-tab) — behaviourally identical (same `srcdoc` sandbox).
+  `web/requirements.txt` now pins `streamlit>=1.57,<2`.
+
+### Fixed
+
+- Histogram / box-plot widgets are no longer **clipped** on the dashboard:
+  they span like the other charts and the chart fills its card, so the
+  baseline and axis labels stay visible.
+
+### Documentation
+
+- **API reference** built with [pdoc](https://pdoc.dev) and published to
+  **GitHub Pages** (<https://processmining-uottawa.github.io/pm4py-ucm/>)
+  on each push to `main`, via a new `docs` workflow.
+- **`tests/README.md`** — a per-file map of the test suite, regenerable
+  with `tests/gen_readme.py`.
+- READMEs: corrected the deployed-app references from V3 to **V4**, and
+  added a full description of the **ƒ custom-formula grammar** to the web
+  README.
+
 ## [0.6.0] — 2026-07-16
 
 The dashboards release: user-defined interactive dashboards over a log,
