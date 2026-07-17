@@ -60,6 +60,18 @@ export const svgEl = (tag, attrs = {}, ...kids) => {
   return el;
 };
 
+/** One donut segment as an SVG path: outer arc, in to the inner radius,
+ *  back along the inner arc. Angles are radians, clockwise from 12
+ *  o'clock (SVG's y grows downward, so a growing angle turns clockwise). */
+function donutPath(cx, cy, rIn, rOut, a0, a1) {
+  const p = (r, a) => [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+  const large = (a1 - a0) > Math.PI ? 1 : 0;
+  const [x0, y0] = p(rOut, a0), [x1, y1] = p(rOut, a1);
+  const [x2, y2] = p(rIn, a1), [x3, y3] = p(rIn, a0);
+  return `M${x0} ${y0} A${rOut} ${rOut} 0 ${large} 1 ${x1} ${y1} ` +
+         `L${x2} ${y2} A${rIn} ${rIn} 0 ${large} 0 ${x3} ${y3} Z`;
+}
+
 export const STATE_LABEL = { met: "MET", risk: "AT RISK", missed: "MISSED" };
 
 //: Most bars a categorical axis draws before the renderer keeps only the
@@ -70,6 +82,22 @@ const BAR_CAP = 24;
 //: Sentinel axis id for the filter picker's "Date range" option — not a
 //: real segment axis (it produces a `date` filter, not a `segment` one).
 const DATE_AXIS = "__date";
+
+//: What each visualisation says, shown beside the composer's Chart picker.
+const VIZ_NOTE = {
+  kpi: "a single headline number",
+  gauge: "the value against its target, as a dial",
+  hist: "the distribution as a histogram",
+  box: "the distribution as a box plot",
+  bar: "one bar per segment",
+  line: "a line over the time axis",
+  pie: "each segment's share of the total",
+  table: "a heatmap cell per row × column",
+};
+
+//: Most slices a pie draws before the rest are folded into "Other" — a pie
+//: stops being readable long before a bar does.
+const PIE_CAP = 8;
 
 //: Aggregations offered per result type — mirror of catalog.AGGS_BY_TYPE,
 //: needed here because a ƒ custom metric has no catalog entry to read
@@ -978,11 +1006,15 @@ export class Dashboard {
     } else if (w.viz === "table") {
       body.append(this._tableBody(w, spec));
     } else if (w.series) {
-      body.append(...this._barBody(w));
+      if (w.viz === "line") body.append(...this._lineBody(w));
+      else if (w.viz === "pie") body.append(...this._pieBody(w));
+      else body.append(...this._barBody(w));
     } else if (w.viz === "hist" && w.hist) {
       body.append(...this._histBody(w));
     } else if (w.viz === "box" && w.box) {
       body.append(...this._boxBody(w));
+    } else if (w.viz === "gauge") {
+      body.append(...this._gaugeBody(w, spec));
     } else {
       body.append(...this._kpiBody(w, spec));
     }
@@ -1128,6 +1160,175 @@ export class Dashboard {
         class: "pm-chart__lab" }, E.fmt(bx.median, unit)),
       svgEl("text", { x: padL + plotW, y: H - 6, "text-anchor": "end",
         class: "pm-chart__lab" }, E.fmt(bx.max, unit)));
+  }
+
+  // -- line / gauge / pie --------------------------------------------
+
+  /** The same ordered series a bar draws, as a line — for a time axis,
+   *  where the order is the point. */
+  _lineBody(w) {
+    const pts = w.series || [];
+    if (!pts.length) return [h("div", { class: "pm-kpi__sub" }, "No data.")];
+    return [
+      h("div", { class: "pm-w__chart" }, this._lineSvg(pts, w)),
+      h("div", { class: "pm-axis" },
+        h("span", {}, pts[0].label),
+        pts.length > 2 && h("span", { class: "pm-axis__mid" },
+          `${pts.length} × ${axisLabel(w.axis) || "points"} · hover for values`),
+        pts.length > 1 && h("span", {}, pts[pts.length - 1].label)),
+    ];
+  }
+
+  _lineSvg(pts, w) {
+    const W = 300, H = 120, padL = 6, padR = 6, padT = 8, padB = 6;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const max = Math.max(1, ...pts.map((p) => p.value).filter((v) => v != null));
+    const x = (i) => (pts.length < 2 ? padL + plotW / 2
+      : padL + (i / (pts.length - 1)) * plotW);
+    const y = (v) => padT + plotH - ((v == null ? 0 : v) / max) * plotH;
+    const dots = pts.map((p, i) => svgEl("circle", {
+      cx: x(i), cy: y(p.value), r: 2.5, class: "pm-line__dot",
+    }, svgEl("title", {}, `${p.label}: ${p.text || E.fmt(p.value, w.unit)}` +
+      (p.nCases != null
+        ? ` (${p.nCases.toLocaleString("en-US")} cases)` : ""))));
+    return svgEl("svg", {
+      viewBox: `0 0 ${W} ${H}`, class: "pm-chart pm-line",
+      role: "img", "aria-label": `Line chart of ${pts.length} points`,
+    },
+      svgEl("line", { x1: padL, y1: padT + plotH, x2: padL + plotW,
+        y2: padT + plotH, class: "pm-chart__axis" }),
+      svgEl("polyline", {
+        points: pts.map((p, i) => `${x(i)},${y(p.value)}`).join(" "),
+        class: "pm-line__path",
+      }),
+      ...dots);
+  }
+
+  /** A KPI against its target, as a dial. */
+  _gaugeBody(w, spec) {
+    if (w.value == null) return [h("div", { class: "pm-kpi__sub" }, "No data.")];
+    return [
+      h("div", { class: "pm-w__chart" }, this._gaugeSvg(w, spec)),
+      h("div", { class: "pm-kpi__sub" }, w.sub || ""),
+    ];
+  }
+
+  _gaugeSvg(w, spec) {
+    const W = 200, H = 112, cx = 100, cy = 94, r = 76;
+    // The dial spans the value and its target with headroom, so the arc
+    // never pins to an end and the target tick always lands on the scale.
+    const goal = E.targetGoalValue(spec);
+    const hi = Math.max(w.value, goal || 0, 1) * 1.25;
+    const frac = (v) => Math.max(0, Math.min(1, v / hi));
+    // 0 = 9 o'clock, 1 = 3 o'clock, sweeping over the top.
+    const pt = (f, rad) => {
+      const a = Math.PI * (1 - f);
+      return [cx + rad * Math.cos(a), cy - rad * Math.sin(a)];
+    };
+    const arc = (f0, f1, cls, colour) => {
+      const [x0, y0] = pt(f0, r), [x1, y1] = pt(f1, r);
+      // A half-dial never exceeds 180°, so the large-arc flag is always 0.
+      return svgEl("path", {
+        d: `M${x0} ${y0} A${r} ${r} 0 0 1 ${x1} ${y1}`,
+        class: cls, stroke: colour,
+      });
+    };
+    const colour = w.state === "met" ? "var(--positive)"
+      : w.state === "risk" ? "var(--warn-bar)" : "var(--garnet)";
+    const els = [arc(0, 1, "pm-gauge__track")];
+    const f = frac(w.value);
+    if (f > 0.002) els.push(arc(0, f, "pm-gauge__value", colour));
+    if (goal) {
+      const [tx, ty] = pt(frac(goal), r + 7);
+      const [ix, iy] = pt(frac(goal), r - 7);
+      els.push(svgEl("line", { x1: ix, y1: iy, x2: tx, y2: ty,
+        class: "pm-gauge__tick" },
+        svgEl("title", {}, `target ${E.fmt(goal, w.unit)}`)));
+    }
+    els.push(svgEl("text", { x: cx, y: cy - 6, "text-anchor": "middle",
+      class: "pm-gauge__text" }, w.text));
+    return svgEl("svg", {
+      viewBox: `0 0 ${W} ${H}`, class: "pm-chart pm-gauge", role: "img",
+      "aria-label": `Gauge: ${w.text}`
+        + (goal ? ` against a target of ${E.fmt(goal, w.unit)}` : ""),
+    }, ...els);
+  }
+
+  /**
+   * The slices a donut draws: only positive values, largest first, and —
+   * because a pie stops being readable long before a bar does — the tail
+   * folded into one "Other" rather than shaved into a ring of slivers.
+   */
+  _pieSlices(w) {
+    const all = (w.series || []).filter((p) => p.value != null && p.value > 0);
+    const sorted = all.slice().sort((a, b) => b.value - a.value);
+    if (sorted.length <= PIE_CAP) return { all, slices: sorted, folded: 0 };
+    const rest = sorted.slice(PIE_CAP - 1);
+    return {
+      all, folded: rest.length,
+      slices: sorted.slice(0, PIE_CAP - 1).concat([{
+        label: `Other (${rest.length})`,
+        value: rest.reduce((s, p) => s + p.value, 0),
+      }]),
+    };
+  }
+
+  /** Each segment's share of the total, as a donut. */
+  _pieBody(w) {
+    const { all, slices, folded } = this._pieSlices(w);
+    if (!slices.length) return [h("div", { class: "pm-kpi__sub" }, "No data.")];
+    return [
+      h("div", { class: "pm-w__chart" }, this._pieSvg(slices, w)),
+      h("div", { class: "pm-axis" }, h("span", { class: "pm-axis__mid" },
+        `${all.length} × ${axisLabel(w.axis) || "segments"}`
+        + (folded ? ` · smallest ${folded} folded into “Other”` : "")
+        + " · hover for values")),
+    ];
+  }
+
+  _pieSvg(slices, w) {
+    const W = 300, H = 132, cx = 68, cy = 66, rOut = 56, rIn = 30;
+    const total = slices.reduce((s, p) => s + p.value, 0) || 1;
+    // Largest slice hottest, down the ramp — the one palette the design
+    // system has, and it moves with the theme.
+    const steps = Math.max(1, slices.length - 1);
+    const hue = (i) => E.heat(1 - i / steps, this.dark).bg;
+    const label = (p) => (p.label.length > 16 ? p.label.slice(0, 15) + "…" : p.label);
+    const els = [];
+
+    if (slices.length === 1) {
+      // A single slice is the whole ring; an arc from a point to itself
+      // would collapse, so draw the ring directly.
+      els.push(svgEl("circle", { cx, cy, r: rOut, fill: hue(0),
+        class: "pm-pie__slice" },
+        svgEl("title", {}, `${slices[0].label}: 100%`)));
+      els.push(svgEl("circle", { cx, cy, r: rIn, fill: "var(--card)" }));
+    } else {
+      let a0 = -Math.PI / 2;   // start at 12 o'clock
+      slices.forEach((p, i) => {
+        const a1 = a0 + (p.value / total) * Math.PI * 2;
+        els.push(svgEl("path", {
+          d: donutPath(cx, cy, rIn, rOut, a0, a1),
+          class: "pm-pie__slice", fill: hue(i),
+        }, svgEl("title", {}, `${p.label}: `
+          + `${p.text || E.fmt(p.value, w.unit)} `
+          + `(${(100 * p.value / total).toFixed(1)}%)`)));
+        a0 = a1;
+      });
+    }
+    els.push(svgEl("text", { x: cx, y: cy + 4, "text-anchor": "middle",
+      class: "pm-pie__total" }, E.fmt(total, w.unit)));
+    slices.forEach((p, i) => {
+      const y = 18 + i * 13;
+      els.push(svgEl("rect", { x: 142, y: y - 7, width: 8, height: 8, rx: 2,
+        fill: hue(i), class: "pm-pie__swatch" }));
+      els.push(svgEl("text", { x: 154, y, class: "pm-pie__legend" },
+        `${label(p)}  ${(100 * p.value / total).toFixed(0)}%`));
+    });
+    return svgEl("svg", {
+      viewBox: `0 0 ${W} ${H}`, class: "pm-chart pm-pie", role: "img",
+      "aria-label": `Donut of ${slices.length} segments`,
+    }, ...els);
   }
 
   _barBody(w) {
@@ -1570,6 +1771,30 @@ export class Dashboard {
     } else if (viz === "hist") {
       marks = [9, 15, 21, 13, 8].map((hh, k) =>
         bar(7 + k * 6, 24 - hh, 4, hh, "pm-vizpick__fill"));
+    } else if (viz === "bar") {
+      marks = [16, 10, 20, 13].map((hh, k) =>
+        bar(9 + k * 7, 24 - hh, 5, hh, "pm-vizpick__fill"));
+    } else if (viz === "line") {
+      marks = [
+        svgEl("polyline", { points: "7,20 15,11 23,16 33,6", fill: "none",
+          class: "pm-vizpick__stroke" }),
+        ...[[7, 20], [15, 11], [23, 16], [33, 6]].map(([cx, cy]) =>
+          svgEl("circle", { cx, cy, r: 1.8, class: "pm-vizpick__fill" })),
+      ];
+    } else if (viz === "gauge") {
+      marks = [
+        svgEl("path", { d: "M8 22 A12 12 0 0 1 32 22", fill: "none",
+          class: "pm-vizpick__stroke" }),
+        svgEl("line", { x1: 20, y1: 22, x2: 27, y2: 13,
+          class: "pm-vizpick__stroke" }),
+      ];
+    } else if (viz === "pie") {
+      marks = [
+        svgEl("circle", { cx: 20, cy: 14, r: 10, fill: "none",
+          class: "pm-vizpick__box" }),
+        svgEl("path", { d: "M20 14 L20 4 A10 10 0 0 1 28.66 19 Z",
+          class: "pm-vizpick__fill" }),
+      ];
     } else { // box plot: whisker line, IQR box, median
       marks = [
         svgEl("line", { x1: 6, y1: 14, x2: 34, y2: 14, class: "pm-vizpick__stroke" }),
@@ -1582,22 +1807,29 @@ export class Dashboard {
   }
 
   /**
-   * A thumbnail picker for the unsegmented visualisation — clickable tiles
-   * that show each shape (KPI / histogram / box plot), in place of a plain
-   * dropdown so the choice reads at a glance. Returns the element plus a
-   * `value` getter and a `select` setter, so it drops into the composer
-   * where the old `<select>` was.
+   * The visualisation thumbnail picker — clickable tiles that show each
+   * shape, in place of a plain dropdown so the choice reads at a glance.
+   *
+   * It carries every shape and `setAvailable` narrows it to the ones that
+   * make sense for the current metric and segmentation (the composer
+   * decides), falling back to the first when the current choice no longer
+   * applies.
    */
   _chartPicker(onChange) {
-    const opts = [["kpi", "KPI card"], ["hist", "Histogram"], ["box", "Box plot"]];
+    const ALL = [["kpi", "KPI card"], ["gauge", "Gauge"], ["hist", "Histogram"],
+                 ["box", "Box plot"], ["bar", "Bar"], ["line", "Line"],
+                 ["pie", "Pie"]];
     let current = "kpi";
+    let available = ALL.map(([v]) => v);
     const tiles = {};
     const paint = () => {
-      for (const k of Object.keys(tiles))
-        tiles[k].classList.toggle("pm-vizpick__tile--on", k === current);
+      for (const [v] of ALL) {
+        tiles[v].style.display = available.includes(v) ? "" : "none";
+        tiles[v].classList.toggle("pm-vizpick__tile--on", v === current);
+      }
     };
     const el = h("div", { class: "pm-vizpick", role: "radiogroup" });
-    for (const [v, label] of opts) {
+    for (const [v, label] of ALL) {
       const tile = h("button", {
         type: "button", class: "pm-vizpick__tile", title: label,
         "aria-label": label,
@@ -1610,7 +1842,12 @@ export class Dashboard {
     return {
       el,
       get value() { return current; },
-      select(v) { current = v; paint(); },
+      select(v) { if (v) current = v; paint(); },
+      setAvailable(list) {
+        available = list;
+        if (!list.includes(current)) current = list[0];
+        paint();
+      },
     };
   }
 
@@ -1872,27 +2109,42 @@ export class Dashboard {
       spec.segment = { rows: rowsSel.value || undefined,
                        cols: colsSel.value || undefined };
       const n = (rowsSel.value ? 1 : 0) + (colsSel.value ? 1 : 0);
-      // A series metric (WIP, arrival rate) is a time series, not a bag of
-      // per-case numbers, so a histogram/box of it would be meaningless —
-      // it only ever gets the KPI headline. Others may pick their unsegmented
-      // shape.
       const seriesMetric = !isCustom() &&
         E.SERIES_METRICS.includes(metricSel.value);
-      const canShape = n === 0 && !seriesMetric;
-      rows.chart.style.display = canShape ? "" : "none";
-      if (n === 0) {
-        spec.viz = seriesMetric ? "kpi" : chartPick.value;
+
+      // Offer only the shapes that say something true about this data.
+      let avail = null;
+      if (n === 2) {
+        spec.viz = "table";                       // two axes: only a heatmap
       } else {
-        spec.viz = n === 1 ? "bar" : "table";
+        if (seriesMetric) {
+          // A series metric (WIP, arrival rate) is a run of ordered points,
+          // not a bag of per-case numbers: a bar or a line, never a
+          // per-case distribution.
+          avail = ["bar", "line"];
+        } else if (n === 0) {
+          avail = ["kpi", "hist", "box"];
+          // A gauge reads a value against a threshold; without a target
+          // there is nothing to read it against.
+          if (spec.target.on) avail.splice(1, 0, "gauge");
+        } else {
+          avail = ["bar"];
+          // A line implies the order means something, so it is offered only
+          // on a time axis — never on a categorical one.
+          const axis = rowsSel.value || colsSel.value;
+          if (E.TIME_AXES.includes(axis)) avail.push("line");
+          // Pie slices must add up to a whole, and only a sum does.
+          if (aggSel.value === "sum") avail.push("pie");
+        }
+        chartPick.setAvailable(avail);
+        spec.viz = chartPick.value;
       }
+      rows.chart.style.display = (avail && avail.length > 1) ? "" : "none";
       spec.statusColors = n === 2 && spec.target.on;
-      chartNote.textContent = spec.viz === "hist"
-        ? "distribution as a histogram"
-        : spec.viz === "box" ? "distribution as a box plot"
-          : "a single headline number";
+      chartNote.textContent = VIZ_NOTE[spec.viz] || "";
       vizNote.textContent = n === 0
-        ? "no axes → single value or its distribution"
-        : n === 1 ? "one axis → bar chart"
+        ? "no axes → one value or its distribution"
+        : n === 1 ? "one axis → a value per segment"
           : "two axes → heatmap table";
     };
 
@@ -1937,23 +2189,35 @@ export class Dashboard {
         preview.append(h("span", { class: "pm-preview__err" }, w.error));
         return;
       }
-      if (w.viz === "kpi" || w.viz === "hist" || w.viz === "box") {
+      if (["kpi", "hist", "box"].includes(w.viz)) {
         preview.append(h("span", { class: "pm-preview__value" }, w.text));
       }
-      // Preview the actual distribution, not just the headline — otherwise
-      // a histogram/box looks identical to a KPI here and its point is
-      // lost. Uses the same renderers the card does.
+      // Preview the real shape, not just the headline — otherwise every
+      // chart looks identical to a KPI here and its point is lost. Uses
+      // the same renderers the card does.
+      const chart = h("div", { class: "pm-preview__chart" });
       if (w.viz === "hist" && w.hist && w.hist.bins.length) {
-        preview.append(h("div", { class: "pm-preview__chart" },
-          this._histSvg(w.hist, w.unit)));
+        chart.append(this._histSvg(w.hist, w.unit));
       } else if (w.viz === "box" && w.box && w.box.n) {
-        preview.append(h("div", { class: "pm-preview__chart" },
-          this._boxSvg(w.box, w.unit)));
+        chart.append(this._boxSvg(w.box, w.unit));
+      } else if (w.viz === "line" && (w.series || []).length) {
+        chart.append(this._lineSvg(w.series, w));
+      } else if (w.viz === "gauge" && w.value != null) {
+        chart.append(this._gaugeSvg(w, spec));
+      } else if (w.viz === "pie" && (w.series || []).length) {
+        const ps = this._pieSlices(w);
+        if (ps.slices.length) chart.append(this._pieSvg(ps.slices, w));
       }
+      if (chart.firstChild) preview.append(chart);
+
+      const nSeg = (w.series || []).length;
       const shape = w.viz === "kpi" ? "a KPI card"
+        : w.viz === "gauge" ? "a gauge against its target"
         : w.viz === "hist" ? `a histogram of ${(w.hist || {}).n || 0} cases`
         : w.viz === "box" ? `a box plot of ${(w.box || {}).n || 0} cases`
-        : w.viz === "bar" ? `a bar chart of ${(w.series || []).length} segments`
+        : w.viz === "bar" ? `a bar chart of ${nSeg} segments`
+        : w.viz === "line" ? `a line of ${nSeg} points`
+        : w.viz === "pie" ? `a donut of ${nSeg} segments`
           : `a ${w.rows.length} × ${w.cols.length} heatmap table`;
       preview.append(h("span", { class: "pm-preview__note" },
         `Adds as ${shape} over ${w.nCases.toLocaleString("en-US")} ` +

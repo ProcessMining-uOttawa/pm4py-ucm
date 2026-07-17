@@ -1848,6 +1848,27 @@ class TestDateAndDistributionUI:
         # hist/box are suppressed for series metrics (they are time series).
         assert "E.SERIES_METRICS.includes(metricSel.value)" in ui
 
+    def test_line_gauge_and_pie_widgets(self):
+        """Three shapes over data the engine already computes — a line and
+        a donut over a segmented `series`, a gauge over a KPI's value and
+        target. No new computation, so no engine/parity change."""
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        for fn in ("_lineBody(", "_lineSvg(", "_gaugeBody(", "_gaugeSvg(",
+                   "_pieBody(", "_pieSvg(", "_pieSlices("):
+            assert fn in ui, fn
+        # They are offered only where they say something true.
+        assert 'avail = ["bar", "line"]' in ui           # series metric
+        assert 'if (spec.target.on) avail.splice(1, 0, "gauge")' in ui
+        assert "E.TIME_AXES.includes(axis)" in ui        # line: ordered axis only
+        assert 'aggSel.value === "sum"' in ui            # pie: parts of a whole
+        # A donut folds its tail rather than shaving slivers.
+        assert "PIE_CAP" in ui
+        css = (ASSETS / "dash-styles.css").read_text(encoding="utf8")
+        assert ".pm-line__path" in css and ".pm-gauge__value" in css \
+            and ".pm-pie__slice" in css
+        # New chart cards are sized like the other charts, not KPI tiles.
+        assert ".pm-w--pie" in css and ".pm-w--gauge" in css
+
     def test_composer_uses_a_viz_thumbnail_picker(self):
         """The Chart row is clickable thumbnail tiles (each a glyph of the
         visualisation), not a plain dropdown."""
