@@ -151,6 +151,11 @@ export class Dashboard {
     // its own header and takes its filters from the report.
     this.headless = !!opts.headless;
     this.renders = opts.renders || {};
+    // Inline SVG per notation, the same the session report uses. A model
+    // widget prefers it over `renders` (an <img>) so the diagram stays
+    // crisp at any zoom and its stubs remain clickable. Absent (a page
+    // built with only `renders`) the widget falls back to the <img>.
+    this.modelSvg = opts.modelSvg || {};
 
     // Multiple named dashboards persist in one registry entry per log; the
     // active one's name/specs/filters are the live fields the rest of the
@@ -1437,10 +1442,24 @@ export class Dashboard {
   }
 
   _modelBody(w) {
+    const svg = this.modelSvg[this.notation];
     const src = this.renders[this.notation];
+    // A live, zoomable model: scroll to zoom, drag to pan, click a stub to
+    // jump to its sub-map — the same panZoom the Model view and the session
+    // report use. A bare <img> (the old widget) could do none of that.
+    if (svg || src) {
+      const stage = h("div", { class: "pm-model pm-model--live" });
+      const pan = h("div", { class: "pm-model__pan" });
+      if (svg) pan.innerHTML = svg;
+      else pan.append(h("img", { src, alt: `Mined ${this.notation} model` }));
+      stage.append(pan);
+      // Frame the whole diagram to the card on open — a widget viewport is
+      // small, so without a fit it would land on a corner at 100%.
+      panZoom(pan, { fit: true });
+      return stage;
+    }
     const box = h("div", { class: "pm-model" });
-    if (src) box.append(h("img", { src, alt: `Mined ${this.notation} model` }));
-    else box.append(h("span", { class: "pm-model__cap" },
+    box.append(h("span", { class: "pm-model__cap" },
       `${this.notation.toUpperCase()} render not available`));
     return box;
   }

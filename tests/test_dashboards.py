@@ -1098,6 +1098,25 @@ class TestView:
         ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
         assert 'if (w.viz !== "model")' in ui
 
+    def test_pinned_model_widget_is_zoomable(self):
+        """The model widget renders a live, pannable diagram — inline SVG
+        when the page carries it (crisp, stubs clickable), else the render
+        as an <img> — driven by the same panZoom the Model view and the
+        session report use. A bare <img> (the old widget) could not zoom,
+        pan, or navigate stubs."""
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        assert "this.modelSvg = opts.modelSvg" in ui   # inline SVG stored
+        assert "pm-model--live" in ui                   # pannable stage
+        assert "panZoom(pan, { fit: true })" in ui      # zoom/pan wired in
+        report = (ASSETS / "dash-report.js").read_text(encoding="utf8")
+        # panZoom grew a fit-to-box option (a small card would otherwise
+        # open on a corner), and the report hands modelSvg down to its
+        # embedded dashboard sections so their model widgets are crisp too.
+        assert "opts.fit" in report
+        assert "modelSvg: this.modelSvg" in report
+        css = (ASSETS / "dash-styles.css").read_text(encoding="utf8")
+        assert ".pm-model--live" in css
+
     def test_widgets_are_draggable_and_resizable(self):
         """Reorder by dragging the grip, resize by dragging the corner
         handle; the span persists on the spec so it survives save/export."""

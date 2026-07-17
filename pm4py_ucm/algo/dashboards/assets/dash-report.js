@@ -182,7 +182,8 @@ export class Report {
     const child = new Dashboard(mount, {
       table: this.table, payload: this.cfg.payload, catalog: this.catalog,
       specs: d.specs, name: d.name, readOnly: true, headless: true,
-      dark: this.dark, renders: this.renders, filters: this.filters,
+      dark: this.dark, renders: this.renders, modelSvg: this.modelSvg,
+      filters: this.filters,
       onDrill: (axis, label) => this._drill(axis, label),
     });
     this.children.push(child);
@@ -303,8 +304,15 @@ export class Report {
   }
 }
 
-/** Wheel-zoom + drag-pan a diagram box, offline and dependency-free. */
-function panZoom(box) {
+/**
+ * Wheel-zoom + drag-pan a diagram box, offline and dependency-free.
+ *
+ * `opts.fit` frames the whole diagram to the box on first layout (scaled
+ * down to fit, never up, and centred). The report's big model stage does
+ * not need it — a model roughly fills it at 100% — but a small dashboard
+ * widget would otherwise open on a corner.
+ */
+function panZoom(box, opts) {
   let scale = 1, tx = 0, ty = 0, dragging = false, px = 0, py = 0, moved = 0;
   const apply = () => {
     const inner = box.firstElementChild;
@@ -354,6 +362,36 @@ function panZoom(box) {
   box.style.cursor = "grab";
   const inner = box.firstElementChild;
   if (inner) { inner.style.transformOrigin = "0 0"; inner.style.maxWidth = "none"; }
+  if (opts && opts.fit && inner) {
+    const fit = () => {
+      const bw = box.clientWidth, bh = box.clientHeight;
+      const ir = inner.getBoundingClientRect();
+      const iw = ir.width, ih = ir.height;
+      if (!bw || !bh || !iw || !ih) return false;
+      // The rect is already scaled by the current transform; divide it out
+      // to recover the untransformed size before computing the fit scale.
+      const iw0 = iw / scale, ih0 = ih / scale;
+      scale = Math.min(1, bw / iw0, bh / ih0);
+      tx = Math.max(0, (bw - iw0 * scale) / 2);
+      ty = Math.max(0, (bh - ih0 * scale) / 2);
+      apply();
+      return true;
+    };
+    // The box is built detached and attached by the caller, so it has no
+    // size yet; fit on the next macrotask, by when it is laid out. setTimeout
+    // is used deliberately over rAF / ResizeObserver: those are paused in a
+    // backgrounded tab, which would leave the model unframed until the tab
+    // is focused, whereas setTimeout still fires (and layout is computed even
+    // while hidden). A short bounded retry covers a late layout pass.
+    if (!fit()) {
+      let tries = 0;
+      const retry = () => { if (!fit() && ++tries < 20) setTimeout(retry, 30); };
+      setTimeout(retry, 0);
+    }
+    // An <img> may not have measured until it loads, so refit on load too.
+    if (inner.tagName === "IMG" && !inner.complete)
+      inner.addEventListener("load", fit, { once: true });
+  }
 }
 
 /**

@@ -590,6 +590,16 @@
   border: 1px solid var(--border);
 }
 .pm-model img { max-width: 100%; max-height: 100%; object-fit: contain; }
+/* A live, pannable model widget: clip the transformed diagram to the card,
+   swallow touch gestures for pan/zoom, and drop the placeholder stripe. */
+.pm-model--live {
+  display: block;
+  padding: 0;
+  overflow: hidden;
+  touch-action: none;
+  cursor: grab;
+  background: var(--card);
+}
 .pm-model__cap {
   font-family: var(--f-mono);
   font-size: 10px;
