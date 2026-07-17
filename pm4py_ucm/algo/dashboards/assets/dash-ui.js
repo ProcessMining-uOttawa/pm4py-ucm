@@ -679,6 +679,13 @@ export class Dashboard {
     const card = h("div", {
       class: `pm-w pm-w--${w.viz}${wide ? " pm-w--wide" : ""}`,
     });
+    // A resized widget carries its own grid span, overriding the per-viz
+    // default (a KPI is 1×1, a chart 2×2, …). It rides on the spec, so it
+    // persists to storage and travels with a saved/exported dashboard.
+    if (spec.size && spec.size.w && spec.size.h) {
+      card.style.gridColumn = `span ${spec.size.w}`;
+      card.style.gridRow = `span ${spec.size.h}`;
+    }
 
     const tools = h("div", { class: "pm-w__tools" });
     if (w.viz === "table" && !w.error) {
@@ -704,24 +711,19 @@ export class Dashboard {
       }, "⬇"));
     }
     if (!this.readOnly) {
-      // Reorder by one position. The grid is grid-auto-flow:dense, so
-      // array order is the reading order left-to-right, top-to-bottom;
-      // moving a widget one step in the array moves it one cell. Kept to
-      // two buttons rather than drag-and-drop, which fights the dense
-      // reflow and the iframe's scroll.
-      tools.append(h("button", {
-        class: "pm-w__tool", title: "Move earlier",
-        disabled: i === 0,
-        onclick: () => this._move(i, -1),
-      }, "◄"));
-      tools.append(h("button", {
-        class: "pm-w__tool", title: "Move later",
-        disabled: i === this.specs.length - 1,
-        onclick: () => this._move(i, +1),
-      }, "►"));
+      // Reorder by dragging this grip; resize by dragging the corner
+      // handle added below. Array order is the reading order (the grid is
+      // grid-auto-flow:dense), so a reorder just moves the spec in the
+      // array and re-renders — the drop reflows the rest.
+      const grip = h("button", {
+        class: "pm-w__tool pm-w__grip", title: "Drag to reorder",
+        draggable: "true", "aria-label": "Drag to reorder widget",
+      }, "⠿");
+      this._wireReorder(grip, card, i);
+      tools.append(grip);
       // A model widget is pinned, not composed — it has no metric,
-      // segmentation or target to edit — so it gets move/remove but not
-      // the composer.
+      // segmentation or target to edit — so it gets reorder/resize/remove
+      // but not the composer.
       if (w.viz !== "model") {
         tools.append(h("button", {
           class: "pm-w__tool", title: "Edit widget",
@@ -769,6 +771,7 @@ export class Dashboard {
       body.append(...this._kpiBody(w, spec));
     }
     card.append(body);
+    if (!this.readOnly) card.append(this._resizeHandle(card, spec));
     return card;
   }
 
@@ -1160,13 +1163,120 @@ export class Dashboard {
             confirm: null, cancel: "Close" });
   }
 
-  _move(i, delta) {
-    const j = i + delta;
-    if (j < 0 || j >= this.specs.length) return;
-    const [s] = this.specs.splice(i, 1);
-    this.specs.splice(j, 0, s);
-    this._save();
-    this.render();
+  // -- drag to reorder, drag to resize -------------------------------
+
+  /**
+   * Wire a widget's grip for drag-to-reorder.
+   *
+   * The grip is the only drag source (dragging the whole card would fight
+   * the buttons and the resize handle), but every card is a drop target.
+   * On drop the moved spec is spliced to the target's position and the
+   * grid re-renders — the dense auto-flow reflows the rest, so there is no
+   * placeholder to animate.
+   */
+  _wireReorder(grip, card, i) {
+    grip.addEventListener("dragstart", (e) => {
+      this._dragFrom = i;
+      card.classList.add("pm-w--dragging");
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", String(i));  // Firefox needs a payload
+      e.dataTransfer.setDragImage(card, 24, 16);         // drag the card, not the grip
+    });
+    grip.addEventListener("dragend", () => {
+      card.classList.remove("pm-w--dragging");
+      this._clearDropzones();
+      this._dragFrom = null;
+    });
+    card.addEventListener("dragover", (e) => {
+      if (this._dragFrom == null || this._dragFrom === i) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      this._clearDropzones();
+      card.classList.add("pm-w--dropzone");
+    });
+    card.addEventListener("dragleave", (e) => {
+      // Ignore leaves into a child element.
+      if (!card.contains(e.relatedTarget)) card.classList.remove("pm-w--dropzone");
+    });
+    card.addEventListener("drop", (e) => {
+      e.preventDefault();
+      const from = this._dragFrom;
+      this._clearDropzones();
+      if (from == null || from === i) return;
+      const moved = this.specs[from], target = this.specs[i];
+      this.specs.splice(from, 1);
+      let ti = this.specs.indexOf(target);
+      if (from < i) ti += 1;   // dropping forward lands after the target
+      this.specs.splice(ti, 0, moved);
+      this._dragFrom = null;
+      this._save();
+      this.render();
+    });
+  }
+
+  _clearDropzones() {
+    this.root.querySelectorAll(".pm-w--dropzone")
+      .forEach((el) => el.classList.remove("pm-w--dropzone"));
+  }
+
+  /**
+   * The corner handle that resizes a widget's grid span, live.
+   *
+   * The pointer delta is converted to whole cell steps from the grid's own
+   * measured column/row size (so it tracks the pointer at any zoom), the
+   * card's span is set inline for immediate feedback, and on release the
+   * final span is stored on `spec.size` and the grid re-rendered.
+   */
+  _resizeHandle(card, spec) {
+    const MAX_W = 4, MAX_H = 4;
+    const handle = h("div", { class: "pm-w__resize", title: "Drag to resize" });
+    handle.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const grid = card.closest(".pm-grid");
+      const gs = getComputedStyle(grid);
+      const gap = parseFloat(gs.gap) || 0;
+      const nCols = gs.gridTemplateColumns.split(" ").filter(Boolean).length || 4;
+      const inner = grid.clientWidth - (parseFloat(gs.paddingLeft) || 0)
+                                     - (parseFloat(gs.paddingRight) || 0);
+      const colStep = (inner + gap) / nCols;
+      const rowStep = (parseFloat(gs.gridAutoRows) || 118) + gap;
+      const start = (spec.size && spec.size.w)
+        ? { w: spec.size.w, h: spec.size.h } : this._defaultSpan(card);
+      const startX = e.clientX, startY = e.clientY;
+      const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+      let last = { ...start };
+      // Capture keeps move/up flowing to the handle even when the pointer
+      // leaves it; guarded because some environments reject a stray id.
+      try { handle.setPointerCapture(e.pointerId); } catch (err) { /* fine */ }
+      const move = (ev) => {
+        last = {
+          w: clamp(start.w + Math.round((ev.clientX - startX) / colStep),
+                   1, Math.min(MAX_W, nCols)),
+          h: clamp(start.h + Math.round((ev.clientY - startY) / rowStep), 1, MAX_H),
+        };
+        card.style.gridColumn = `span ${last.w}`;
+        card.style.gridRow = `span ${last.h}`;
+      };
+      const up = () => {
+        handle.removeEventListener("pointermove", move);
+        handle.removeEventListener("pointerup", up);
+        spec.size = last;
+        this._save();
+        this.render();
+      };
+      handle.addEventListener("pointermove", move);
+      handle.addEventListener("pointerup", up);
+    });
+    return handle;
+  }
+
+  /** The default grid span for a widget that has never been resized. */
+  _defaultSpan(card) {
+    const cl = card.classList;
+    if (cl.contains("pm-w--model") || cl.contains("pm-w--wide")) return { w: 4, h: 2 };
+    if (cl.contains("pm-w--kpi")) return { w: 1, h: 1 };
+    return { w: 2, h: 2 };   // bar / line / table / hist / box
   }
 
   // -- composer -------------------------------------------------------

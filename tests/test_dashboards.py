@@ -1098,10 +1098,20 @@ class TestView:
         ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
         assert 'if (w.viz !== "model")' in ui
 
-    def test_reorder_moves_by_one_position(self):
+    def test_widgets_are_draggable_and_resizable(self):
+        """Reorder by dragging the grip, resize by dragging the corner
+        handle; the span persists on the spec so it survives save/export."""
         ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
-        assert "_move(i, delta)" in ui
-        assert "this.specs.splice(i, 1)" in ui and "this.specs.splice(j, 0" in ui
+        # Drag to reorder: a grip is the drag source, cards are drop targets.
+        assert "pm-w__grip" in ui and 'draggable: "true"' in ui
+        assert "setDragImage(card" in ui
+        assert "_wireReorder(" in ui
+        # Resize to a grid span stored on spec.size (persisted with the spec).
+        assert "pm-w__resize" in ui
+        assert "spec.size = last" in ui
+        assert "card.style.gridColumn" in ui
+        css = (ASSETS / "dash-styles.css").read_text(encoding="utf8")
+        assert ".pm-w__resize" in css and ".pm-w--dropzone" in css
 
     def test_filters_travel_into_the_page(self, table):
         f = [{"field": "contains", "op": "is", "value": "B"}]
