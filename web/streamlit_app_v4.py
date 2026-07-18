@@ -2021,6 +2021,9 @@ def _accept_log_bytes(name: str, payload: bytes) -> None:
     # detection fails on the new log).
     st.session_state.pop("family_fp", None)
     st.session_state.pop("family_result", None)
+    # The applied activity-rename map is keyed by the previous log's activity
+    # names; drop it so a new log starts un-renamed.
+    st.session_state.pop("rename_map_applied", None)
     if kind == "csv":
         for k, _, _ in _CSV_AUTOPICK:
             st.session_state.pop(k, None)
@@ -2035,7 +2038,9 @@ with st.sidebar:
     _repo_url = "https://github.com/ProcessMining-uOttawa/pm4py-ucm"
     _release_url = f"{_repo_url}/releases/tag/v{_version}"
     if _LOGO_PATH.is_file():
-        st.image(str(_LOGO_PATH), use_container_width=True)
+        # Compact brand mark — a fraction of the rail width so it doesn't
+        # push the controls down (was full-width, far too tall).
+        st.image(str(_LOGO_PATH), width=72)
     else:  # fallback to the wordmark if the asset is missing
         st.markdown(
             f'<div class="pm-brand">'
@@ -2387,59 +2392,93 @@ filter_spec: Tuple = ()
 # now/total metrics — only computed when filtering is on (the log is parsed
 # for the filter options anyway); None means "no filter, so now == total".
 _filter_totals = None
-with st.sidebar:
-    # ---- Activity rename (the FIRST pre-mining transform) -----------------
-    # A real relabel of the log, applied before every filter, mining and
-    # export, so the new names flow to all views. Independent of the filter
-    # toggle below; both fold into the one hashable ``filter_spec`` and so
-    # ride the same plumbing to every view.
-    rename_map: Dict[str, str] = {}
-    _rn_exp = st.expander("Rename activities", expanded=False)
-    _rename_on = _rn_exp.checkbox(
-        "Rename activities", value=False, key="rename_on",
-        help="Relabel activities before mining. Applies everywhere (Model, "
-             "Scenarios, Family, Compare, Dashboards) and to every export, "
-             "including the exported log. Two activities given the same new "
-             "name merge into one.")
-    if _rename_on:
+
+
+# Activity-rename editor, shown in a modal so it does not crowd the rail and
+# so edits only re-mine on "Apply" (re-mining on every keystroke is too slow).
+# The committed map lives in ``st.session_state["rename_map_applied"]``.
+@st.dialog("Rename activities", width="large")
+def _rename_dialog(orig_acts, applied_map, seed_suffix):
+    import json
+    st.caption(
+        "Relabel activities **before mining**. Applies to every view (Model, "
+        "Scenarios, Family, Compare, Dashboards) and every export, including "
+        "the exported log. Two activities given the same new name merge into "
+        "one. Blank = unchanged.")
+    up = st.file_uploader(
+        "Load a mapping (optional)", type=["csv", "json"],
+        key="rename_dialog_upload",
+        help="CSV rows of `original,new` (a header row is skipped) or a JSON "
+             "`{\"original\": \"new\"}` object. Seeds the table below.")
+    seed = dict(applied_map)
+    if up is not None:
         try:
-            _orig_acts = sorted(_activity_names(
-                log_bytes, log_kind, csv_columns, file_hash))
-        except Exception as _rn_exc:
-            _orig_acts = []
-            _rn_exp.warning(f"Could not read activities: {_rn_exc}")
-        _rn_up = _rn_exp.file_uploader(
-            "Load a mapping (optional)", type=["csv", "json"],
-            key=f"rename_upload::{file_hash}",
-            help="CSV rows of `original,new` (a header row is skipped), or a "
-                 "JSON `{\"original\": \"new\"}` object. Fills the table "
-                 "below; you can still edit it by hand.")
-        _rn_seed: Dict[str, str] = {}
-        if _rn_up is not None:
-            try:
-                _rn_seed = _parse_rename_upload(_rn_up)
-            except Exception as _up_exc:
-                _rn_exp.warning(f"Could not read mapping file: {_up_exc}")
-        # Re-key the editor on the uploaded file so a new upload re-seeds it;
-        # with no new upload the key is stable and manual edits persist.
-        _rn_up_id = (f"{_rn_up.name}:{_rn_up.size}"
-                     if _rn_up is not None else "none")
-        if _orig_acts:
-            _rn_seed_df = pd.DataFrame({
-                "activity": _orig_acts,
-                "new name": [_rn_seed.get(a, "") for a in _orig_acts]})
-            _rn_edited = _rn_exp.data_editor(
-                _rn_seed_df, hide_index=True, use_container_width=True,
-                disabled=["activity"],
-                key=f"rename_editor::{file_hash}::{_rn_up_id}")
-            for _a, _n in zip(_rn_edited["activity"], _rn_edited["new name"]):
-                _n = "" if _n is None else str(_n).strip()
-                if _n and _n != str(_a):
-                    rename_map[str(_a)] = _n
-        if rename_map:
-            _rn_exp.caption(
-                f"{len(rename_map)} activit"
-                f"{'y' if len(rename_map) == 1 else 'ies'} renamed.")
+            seed.update(_parse_rename_upload(up))
+        except Exception as exc:
+            st.warning(f"Could not read mapping file: {exc}")
+    up_id = f"{up.name}:{up.size}" if up is not None else "none"
+    seed_df = pd.DataFrame({
+        "activity": list(orig_acts),
+        "new name": [seed.get(a, "") for a in orig_acts]})
+    edited = st.data_editor(
+        seed_df, hide_index=True, use_container_width=True,
+        disabled=["activity"],
+        column_config={
+            "new name": st.column_config.TextColumn("new name", default="")},
+        key=f"rename_dialog_editor::{seed_suffix}::{up_id}")
+    # Build the map, treating a cleared cell (None / NaN / blank) as "no
+    # rename" so deleting a new name un-renames that activity.
+    new_map: Dict[str, str] = {}
+    for _a, _n in zip(edited["activity"], edited["new name"]):
+        if _n is None or (isinstance(_n, float) and pd.isna(_n)):
+            _n = ""
+        else:
+            _n = str(_n).strip()
+        if _n and _n != str(_a):
+            new_map[str(_a)] = _n
+    st.caption(
+        f"**{len(new_map)}** activit{'y' if len(new_map) == 1 else 'ies'} "
+        "will be renamed.")
+    st.download_button(
+        "⬇ Export mapping (JSON)",
+        data=json.dumps(new_map, indent=2, ensure_ascii=False),
+        file_name="activity_rename.json", mime="application/json",
+        disabled=not new_map, use_container_width=True,
+        help="The current map, in the same JSON format the loader accepts.")
+    a1, a2 = st.columns(2)
+    if a1.button("Apply", type="primary", use_container_width=True):
+        st.session_state["rename_map_applied"] = new_map
+        st.rerun()
+    if a2.button("Cancel", use_container_width=True):
+        st.rerun()
+
+
+with st.sidebar:
+    # ---- Activity rename (a pre-mining transform; edited in a modal) ------
+    # The committed map (from the dialog's Apply) drives mining. It folds into
+    # the one hashable ``filter_spec`` and so rides that plumbing to every
+    # view + export.
+    rename_map: Dict[str, str] = dict(
+        st.session_state.get("rename_map_applied", {}))
+    try:
+        _orig_acts = sorted(_activity_names(
+            log_bytes, log_kind, csv_columns, file_hash))
+    except Exception:
+        _orig_acts = []
+    _rn_label = (f"✎ Rename activities ({len(rename_map)})"
+                 if rename_map else "✎ Rename activities…")
+    if _orig_acts and st.button(_rn_label, use_container_width=True,
+                                key="open_rename"):
+        # A fresh editor key per open (seeded from the applied map), so a
+        # prior open's cell edits never linger under the new one.
+        st.session_state["rename_open_id"] = (
+            st.session_state.get("rename_open_id", 0) + 1)
+        _rename_dialog(
+            _orig_acts, rename_map, st.session_state["rename_open_id"])
+    if rename_map:
+        st.caption(
+            f"{len(rename_map)} activit"
+            f"{'y' if len(rename_map) == 1 else 'ies'} renamed before mining.")
     _rename_spec = tuple(sorted(rename_map.items()))
 
     # ---- Log filters ------------------------------------------------------
