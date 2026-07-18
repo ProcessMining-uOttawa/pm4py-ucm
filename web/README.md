@@ -45,10 +45,9 @@ loaded log:
 - **Model** — mine a UCM, preview it in UCM or BPMN notation as a zoom /
   pan **SVG** (click a stub to jump to its plug-in map), and download the
   SVG, a raster PNG, or the `.jucm`. Decomposition is honoured across all
-  maps. An optional **log filter** (keep the most frequent activities, drop
-  specific ones, keep the most frequent variants, restrict to a time window)
-  re-mines from the filtered log — and the Scenarios view mines the same
-  filtered log.
+  maps. An optional **log filter** (range sliders over the activity- and
+  variant-frequency ranks, an exclude list, and a date-range slider) re-mines
+  from the filtered log — and the Scenarios view mines the same filtered log.
 
   ![Model view](PM4Py-UCM-Model.png)
 
@@ -194,18 +193,27 @@ apply to every view. Pick a view in the left rail:
 
 ### 4 · Model
 
-**Log filters (optional).** Tick **Filter the event log** in the sidebar to
-pre-filter the log before mining: **keep the N most frequent activities**,
-**exclude** specific activities, **keep the K most frequent variants**, or
-restrict to a **time range** (cases intersecting the window). Each filter is
-a standard pm4py log filter applied before inductive mining, so the model
-(and the Scenarios view, which mines the same filtered log) reflects the
-filtered process — changing a filter re-mines. The Family and Compare views
-use the full log for now.
+**Log filters (optional).** Tick **Filter the event log** in the sidebar
+(under **Log filters**) to pre-filter the log before mining, using two-handled
+**range sliders** so you can keep the most frequent, the least frequent, or a
+middle band:
 
-Once mining completes, the **Model** view shows a metrics row (file name,
-notation, decomposition mode, maps, nodes) and the diagram as a **vector
-SVG** in a zoom / pan viewer — scroll to zoom, drag to pan, and for a
+- **Activities by frequency rank** — keep activities whose rank falls in the
+  selected band (rank 1 = most frequent); plus an **Exclude activities** list.
+- **Variants by frequency rank** — keep trace variants in the selected band.
+- **Date range** — a slider over the log's own span (fewer clicks than two
+  calendars), with a **cases in the window** choice (*intersecting* or *fully
+  inside*).
+
+Each is a standard pm4py log filter applied before inductive mining, so the
+model (and the Scenarios view, which mines the same filtered log) reflects the
+filtered process — changing a filter re-mines. The Model view's Activities,
+Cases, and Events metrics then read **selected / total**. The Family and
+Compare views use the full log for now.
+
+Once mining completes, the **Model** view shows a metrics row (activities,
+cases and events — selected/total when filtered — plus maps and nodes) and
+the diagram as a **vector SVG** in a zoom / pan viewer — scroll to zoom, drag to pan, and for a
 decomposed model **click a stub** to jump to its plug-in map (a dynamic
 stub opens a picker of its preconditioned plug-ins). Downloads:
 
