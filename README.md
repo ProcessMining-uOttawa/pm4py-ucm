@@ -60,18 +60,20 @@ superset of the earlier four-tab V3 app):
   executable jUCMNav `ScenarioDef` per variant. Both variant-driven
   and data-driven OR-fork encodings are exposed; the tab surfaces
   headline metrics (variant count, sequence variants, compression
-  ratio, fitness %, per-fork condition-mining accuracies) and offers
-  four downloads: the `.jucm` with the synthesized scenario group,
-  `variants.csv`, `case_variant_map.csv`, and (data-driven mode)
-  `condition_mining.csv`. Runs on flat and decomposed UCMs alike.
+  ratio, fitness %, per-fork condition-mining accuracies) and, behind a
+  single **Prepare downloads** button, offers four downloads: the `.jucm`
+  with the synthesized scenario group, `variants.csv`,
+  `case_variant_map.csv`, and (data-driven mode) `condition_mining.csv`.
+  Runs on flat and decomposed UCMs alike.
 
   ![Scenarios view](web/PM4Py-UCM-Scenarios.png)
 
 - **Family** — pick 1–2 case attributes (with per-value filters and a
-  pre-mining coverage heatmap), mine one model per combination, and
-  download the per-cell zip, the combined `.jucm`, the dynamic-stub
-  umbrella `.jucm`, the grid PNG, and the interactive HTML statistics
-  report.
+  pre-mining coverage heatmap) and mine one model per combination. A
+  single **Prepare downloads** button then builds the per-cell zip, the
+  combined `.jucm`, the dynamic-stub umbrella `.jucm`, the grid PNG, and
+  the interactive HTML statistics report — download-only artifacts built
+  on request, so browsing the grid stays fast.
 
   ![Family view](web/PM4Py-UCM-Family.png)
 
