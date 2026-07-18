@@ -53,6 +53,7 @@ import tempfile
 import traceback
 import uuid
 import zipfile
+from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -225,17 +226,19 @@ def _log_and_tree(
     log_kind: str,
     csv_columns,
     noise_threshold: float,
-    _file_hash: str,
+    filter_spec: Tuple = (),
+    _file_hash: str = "",
     _status=None,
 ):
-    """Read the event log and discover its inductive process tree.
+    """Read the event log, apply the log filters, and discover its tree.
 
-    Split out of :func:`_mine` and cached on the log and the noise
-    threshold **only**. The process tree depends on neither the
-    decomposition nor the resource / overlay settings, so changing those —
-    in particular the decomposition, a live Model-view control — reuses the
-    parsed log and the mined tree rather than re-reading a large log and
-    re-running inductive mining, which dominate the cost on complex logs.
+    Split out of :func:`_mine` and cached on the log, the noise threshold and
+    the log filters. The process tree depends on none of the decomposition,
+    resource or overlay settings, so changing those — in particular the
+    decomposition, a live Model-view control — reuses the parsed, filtered log
+    and the mined tree rather than re-reading and re-mining, which dominate
+    the cost on complex logs. Changing a *filter* does re-mine, because it
+    changes the log the model is mined from (see :func:`_apply_log_filters`).
 
     Returns ``(log, tree)``. ``log`` is a DataFrame (CSV import, or modern
     ``pm4py.read_xes``) or a pm4py ``EventLog`` (older pm4py releases).
@@ -285,6 +288,10 @@ def _log_and_tree(
             _phase("Reading XES...")
             log = pm4py.read_xes(str(xes_path))
 
+        if filter_spec:
+            _phase("Filtering the event log...")
+            log = _apply_log_filters(log, filter_spec)
+
         _phase(
             "Discovering process tree "
             f"(noise threshold {noise_threshold:.2f})..."
@@ -307,15 +314,17 @@ def _mine(
     overlay_nodes: Tuple[str, ...],
     overlay_edges: Tuple[str, ...],
     _file_hash: str,
+    filter_spec: Tuple = (),
     _status=None,
     _progress=None,
 ) -> Dict[str, Any]:
     """Mine a UCM from the event log. Returns .jucm bytes + metadata.
 
-    The log read and the process-tree discovery are delegated to
-    :func:`_log_and_tree`, which is cached on the log + noise threshold
-    alone — so changing the decomposition (or the resource / overlay
-    settings) here rebuilds only the tree→UCM conversion, not the tree.
+    The log read, the log filters and the process-tree discovery are
+    delegated to :func:`_log_and_tree`, which is cached on the log + noise
+    threshold + filters — so changing the decomposition (or the resource /
+    overlay settings) here rebuilds only the tree→UCM conversion, not the
+    tree, while changing a filter re-mines from the filtered log.
 
     Decomposition is honoured here (the model preview reflects it), but
     the scenarios tab always re-mines internally with decomposition=None
@@ -327,8 +336,8 @@ def _mine(
             _status.update(label=label)
 
     log, tree = _log_and_tree(
-        log_bytes, log_kind, csv_columns, noise_threshold, _file_hash,
-        _status=_status,
+        log_bytes, log_kind, csv_columns, noise_threshold, filter_spec,
+        _file_hash, _status=_status,
     )
 
     params: Dict[str, Any] = {"process_tree": tree}
@@ -506,6 +515,7 @@ def _synthesize(
     resource_attribute: str,
     min_support: float,
     _file_hash: str,
+    filter_spec: Tuple = (),
     _status=None,
     _progress=None,
 ) -> Dict[str, Any]:
@@ -537,8 +547,8 @@ def _synthesize(
     # already cached and this is a straight hit. The tree is pinned to both
     # the UCM builder and the clustering pass, exactly as before.
     log, tree = _log_and_tree(
-        log_bytes, log_kind, csv_columns, noise_threshold, _file_hash,
-        _status=_status,
+        log_bytes, log_kind, csv_columns, noise_threshold, filter_spec,
+        _file_hash, _status=_status,
     )
 
     # Resolve resource params + decomposition argument the same way
@@ -678,6 +688,75 @@ def _log_is_interval(log_bytes: bytes, log_kind: str, _file_hash: str) -> bool:
         return b"start_timestamp" in raw
     except Exception:
         return False
+
+
+# ---------------------------------------------------------------------------
+# Log filters (Model + Scenarios): a pre-mining transform of the event log.
+# ---------------------------------------------------------------------------
+
+def _apply_log_filters(log, filter_spec):
+    """Apply the sidebar log filters to a DataFrame log before mining.
+
+    ``filter_spec`` is a hashable, sorted tuple of ``(key, value)`` pairs (or
+    empty, which is a no-op) so it can be part of a ``@st.cache_data`` key.
+    Each filter is a standard pm4py log filter, applied in turn:
+
+    * ``keep_top_activities`` (int) — keep only the N most frequent activities;
+    * ``exclude_activities`` (tuple) — drop these activity names;
+    * ``top_variants`` (int) — keep only the K most frequent trace variants;
+    * ``time_from`` / ``time_to`` (``"%Y-%m-%d %H:%M:%S"`` strings) — keep
+      cases intersecting the window.
+
+    Activity filters remove the matching events from every trace (the process
+    then flows around them); the model is re-mined on the filtered log.
+    """
+    if not filter_spec:
+        return log
+    spec = dict(filter_spec)
+    df = log if isinstance(log, pd.DataFrame) else pm4py.convert_to_dataframe(log)
+
+    keep_k = spec.get("keep_top_activities")
+    exclude = spec.get("exclude_activities")
+    if keep_k is not None or exclude:
+        counts = df["concept:name"].value_counts()
+        keep = set(counts.index[:keep_k]) if keep_k is not None \
+            else set(counts.index)
+        keep -= set(exclude or ())
+        df = pm4py.filter_event_attribute_values(
+            df, "concept:name", keep, level="event", retain=True)
+
+    top_v = spec.get("top_variants")
+    if top_v is not None:
+        df = pm4py.filter_variants_top_k(df, int(top_v))
+
+    t_from, t_to = spec.get("time_from"), spec.get("time_to")
+    if t_from or t_to:
+        ts = pd.to_datetime(df["time:timestamp"], utc=True, errors="coerce")
+        lo = t_from or ts.min().strftime("%Y-%m-%d %H:%M:%S")
+        hi = t_to or ts.max().strftime("%Y-%m-%d %H:%M:%S")
+        df = pm4py.filter_time_range(df, lo, hi, mode="traces_intersecting")
+
+    return df
+
+
+@st.cache_data(show_spinner=False)
+def _log_filter_options(log_bytes: bytes, log_kind: str, csv_columns,
+                        _file_hash: str):
+    """Choices for the log-filter UI, from the **unfiltered** log: the
+    activity names by descending frequency, the trace-variant count, and the
+    date span (ISO ``YYYY-MM-DD`` strings, or ``None``). Cached; only read
+    when filtering is enabled."""
+    df = _load_log_df(log_bytes, log_kind, csv_columns, _file_hash)
+    acts = list(df["concept:name"].value_counts().index)
+    ordered = df.sort_values(["case:concept:name", "time:timestamp"])
+    variants = ordered.groupby("case:concept:name")["concept:name"].agg(tuple)
+    n_variants = int(variants.nunique())
+    ts = pd.to_datetime(df["time:timestamp"], utc=True, errors="coerce")
+    dmin = ts.min()
+    dmax = ts.max()
+    return (acts, n_variants,
+            None if pd.isna(dmin) else dmin.date().isoformat(),
+            None if pd.isna(dmax) else dmax.date().isoformat())
 
 
 # ---------------------------------------------------------------------------
@@ -2066,6 +2145,72 @@ if log_kind == "csv":
 effective_min_support = 0.0 if _min_support_disabled else min_support
 decomposition_spec = st.session_state["applied_decomp"]
 
+# ---- Log filters (applied before mining the model + scenarios) -------------
+# Rendered here, after the CSV mapping is resolved, so the choices can be read
+# from the (unfiltered) log. The result — a hashable ``filter_spec`` — feeds
+# _mine and _synthesize through _log_and_tree, so changing a filter re-mines
+# and the Model and Scenarios views share the same filtered log. Sub-widgets
+# are keyed per log so a new log starts unfiltered rather than carrying stale
+# activity/variant selections whose options no longer exist.
+filter_spec: Tuple = ()
+with st.sidebar:
+    st.subheader("Log filters")
+    _filter_on = st.checkbox(
+        "Filter the event log", value=False, key="log_filter_on",
+        help="Pre-filter the log before mining the model and synthesizing "
+             "scenarios: keep the most frequent activities, drop specific "
+             "ones, keep the most frequent trace variants, or restrict to a "
+             "time window. Changing a filter re-mines. (The Family and "
+             "Compare views use the full log for now.)",
+    )
+    if _filter_on:
+        _flt: Dict[str, Any] = {}
+        try:
+            _f_acts, _f_nvar, _f_dmin, _f_dmax = _log_filter_options(
+                log_bytes, log_kind, csv_columns, file_hash)
+        except Exception as _f_exc:
+            _f_acts, _f_nvar, _f_dmin, _f_dmax = [], 0, None, None
+            st.warning(f"Could not read filter options: {_f_exc}")
+        _k = file_hash
+        if len(_f_acts) > 1:
+            _keepk = st.slider(
+                "Keep the N most frequent activities", 1, len(_f_acts),
+                value=len(_f_acts), key=f"flt_keep::{_k}",
+                help="1 = only the single most frequent activity; the max "
+                     "keeps them all (no filter).")
+            if _keepk < len(_f_acts):
+                _flt["keep_top_activities"] = int(_keepk)
+        if _f_acts:
+            _excl = st.multiselect(
+                "Exclude activities", options=_f_acts, default=[],
+                key=f"flt_excl::{_k}",
+                help="Remove these activities from every trace before mining.")
+            if _excl:
+                _flt["exclude_activities"] = tuple(sorted(_excl))
+        if _f_nvar > 1:
+            _topv = st.slider(
+                "Keep the K most frequent variants", 1, _f_nvar,
+                value=_f_nvar, key=f"flt_vars::{_k}",
+                help="A variant is a distinct ordered activity sequence; the "
+                     "max keeps them all (no filter).")
+            if _topv < _f_nvar:
+                _flt["top_variants"] = int(_topv)
+        if _f_dmin and _f_dmax and _f_dmin != _f_dmax:
+            _lo, _hi = date.fromisoformat(_f_dmin), date.fromisoformat(_f_dmax)
+            _dr = st.date_input(
+                "Time range (cases intersecting)", value=(_lo, _hi),
+                min_value=_lo, max_value=_hi, key=f"flt_time::{_k}",
+                help="Keep cases that overlap this window.")
+            if (isinstance(_dr, (list, tuple)) and len(_dr) == 2
+                    and (_dr[0] != _lo or _dr[1] != _hi)):
+                _flt["time_from"] = _dr[0].strftime("%Y-%m-%d 00:00:00")
+                _flt["time_to"] = _dr[1].strftime("%Y-%m-%d 23:59:59")
+        filter_spec = tuple(sorted(_flt.items()))
+        if filter_spec:
+            st.caption(
+                f"{len(_flt)} filter(s) active — the model is mined on the "
+                "filtered log.")
+
 # ---- Mine UCM (for Model tab) ----------------------------------------------
 try:
     with st.status("Mining UCM...", expanded=True) as status:
@@ -2074,7 +2219,7 @@ try:
             decomposition_spec, resource_attribute,
             effective_min_support, noise_threshold,
             overlay_nodes, overlay_edges,
-            file_hash, _status=status,
+            file_hash, filter_spec, _status=status,
             _progress=_ProgressUI(status),
         )
         status.update(label="Done.", state="complete")
@@ -2377,7 +2522,7 @@ if _view == "Scenarios":
         condition_strategy, max_loop_iterations,
         decision_tree_max_depth, group_name,
         decomposition_spec, resource_attribute,
-        effective_min_support,
+        effective_min_support, filter_spec,
     )
 
     stashed_fp = st.session_state.get("synth_fp")
@@ -2398,7 +2543,7 @@ if _view == "Scenarios":
                     max_loop_iterations, decision_tree_max_depth,
                     group_name, decomposition_spec,
                     resource_attribute, effective_min_support,
-                    file_hash, _status=status,
+                    file_hash, filter_spec, _status=status,
                     _progress=_ProgressUI(status),
                 )
                 status.update(label="Done.", state="complete")
