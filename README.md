@@ -50,7 +50,9 @@ serves the deployment: a left-rail workspace over these views (a strict
 superset of the earlier four-tab V3 app):
 
 - **Model** — upload an event log (XES or CSV), tune the inductive
-  miner / decomposition / performer settings interactively, preview
+  miner / decomposition / performer settings interactively, optionally
+  **filter the log** (keep the most frequent activities or variants, drop
+  specific activities, restrict to a time window) before mining, preview
   the diagram in UCM or BPMN notation, and download the rendered PNG
   plus the `.jucm` file.
 

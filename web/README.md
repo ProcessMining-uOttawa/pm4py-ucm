@@ -45,7 +45,10 @@ loaded log:
 - **Model** — mine a UCM, preview it in UCM or BPMN notation as a zoom /
   pan **SVG** (click a stub to jump to its plug-in map), and download the
   SVG, a raster PNG, or the `.jucm`. Decomposition is honoured across all
-  maps.
+  maps. An optional **log filter** (keep the most frequent activities, drop
+  specific ones, keep the most frequent variants, restrict to a time window)
+  re-mines from the filtered log — and the Scenarios view mines the same
+  filtered log.
 
   ![Model view](PM4Py-UCM-Model.png)
 
@@ -190,6 +193,15 @@ The sidebar settings above (notation, miner, decomposition, performers)
 apply to every view. Pick a view in the left rail:
 
 ### 4 · Model
+
+**Log filters (optional).** Tick **Filter the event log** in the sidebar to
+pre-filter the log before mining: **keep the N most frequent activities**,
+**exclude** specific activities, **keep the K most frequent variants**, or
+restrict to a **time range** (cases intersecting the window). Each filter is
+a standard pm4py log filter applied before inductive mining, so the model
+(and the Scenarios view, which mines the same filtered log) reflects the
+filtered process — changing a filter re-mines. The Family and Compare views
+use the full log for now.
 
 Once mining completes, the **Model** view shows a metrics row (file name,
 notation, decomposition mode, maps, nodes) and the diagram as a **vector
