@@ -110,7 +110,7 @@ Outputs land in `output/dashboards/`. See
 [`docs/dashboards.md`](../docs/dashboards.md) for the semantic contract
 (every metric's exact definition, the ƒ grammar, and the engine's
 rounding / weighting decisions). Everything is also point-and-click in the
-V4 web app (`web/streamlit_app_v4.py`, **Dashboards** view).
+V5 web app (`web/streamlit_app_v5.py`, **Dashboards** view).
 
 ## Mine-and-export script
 

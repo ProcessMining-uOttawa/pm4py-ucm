@@ -1,11 +1,14 @@
-"""PM4Py-UCM web front-end — V4 (workspace shell + user-defined
-dashboards). **Work in progress; V3 is still the deployed app.**
+"""PM4Py-UCM web front-end — V5 (workspace shell + user-defined
+dashboards + log filtering & activity renaming). **The deployed app.**
 
-V4 is V3's capability behind the redesigned workspace shell, plus the
-new Dashboards view. Where V3 puts its views in ``st.tabs``, V4 puts
-them in a left rail — a persistent list of VIEWS beside a persistent
-log card — so the log you loaded and the views over it stay visible
-together.
+V5 is V4's workspace shell and Dashboards view, plus two pre-mining
+transforms that apply globally to every view and export: a **log
+filter** (keep activities / trace-variants by frequency rank, exclude
+activities, restrict the date window) and **activity renaming** (relabel
+or merge activities before mining, edited in a modal or loaded from a
+CSV/JSON map). Where V3 puts its views in ``st.tabs``, V4/V5 put them in
+a left rail — a persistent list of VIEWS beside a persistent log card —
+so the log you loaded and the views over it stay visible together.
 
 Views: **Model** (inductive-mine a UCM, preview in UCM or BPMN
 notation, download PNG/.jucm), **Scenarios** (concurrency-aware
@@ -30,16 +33,16 @@ specs persist to the browser's storage rather than to session state.
 
 Run locally:
 
-    streamlit run web/streamlit_app_v4.py
+    streamlit run web/streamlit_app_v5.py
 
 Deployment layout: ``streamlit_app.py`` (the
 https://pm4py-ucm.streamlit.app/ main file) is a shim that runs
-``streamlit_app_v3.py``, so the primary deployment serves V3 until V4
-is ready to take over. V1 (model-only) was retired at v0.5.1 and lives
-in git history. ``streamlit_app_v2.py`` is deliberately NOT a shim: it
-is the frozen V2 (model + scenarios) app that
-https://pm4py-ucm-scenarios.streamlit.app/ must keep serving while a
-paper referencing it is under review — do not fold it into V3 or V4.
+``streamlit_app_v5.py``, so the primary deployment serves V5. V4/V3 are
+strict subsets and live in git history (``streamlit_app_v3.py`` is still
+present); V1 (model-only) was retired at v0.5.1. ``streamlit_app_v2.py``
+is deliberately NOT a shim: it is the frozen V2 (model + scenarios) app
+that https://pm4py-ucm-scenarios.streamlit.app/ must keep serving while a
+paper referencing it is under review — do not fold it into V5.
 """
 from __future__ import annotations
 

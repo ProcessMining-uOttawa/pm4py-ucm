@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-07-18
+
+**Global log filtering and activity renaming across the whole web app**, a
+downloadable filtered log, and project branding. The Streamlit front-end is
+now **V5** (`web/streamlit_app_v5.py`); the deployment shim
+(`web/streamlit_app.py`) runs it, so https://pm4py-ucm.streamlit.app/ serves
+V5. V4/V3 are strict subsets and remain in git history.
+
+### Added — Web app (V5)
+
+- **A pre-mining log filter**, global to every view and export. Keep
+  **activities** or **trace-variants** by frequency rank with two-handled
+  range sliders (most / least / a middle band), **exclude** named activities
+  (listed alphabetically), and restrict the **date window** (cases
+  *intersecting* or *fully inside*). The Model view's Activities / Cases /
+  Events metrics read *selected / total* while a filter is active.
+  (#47, #50, #51, #52)
+- **A "top variants by case coverage (%)" box** kept in sync with the variant
+  rank slider — type a percentage and the slider snaps so the top variants
+  cover at least that share of cases, and vice-versa. Recomputed on the
+  activity/date-filtered log. (#52, #53)
+- **The filtered event log is downloadable** as its own asset in **XES** and
+  **CSV**, from the Model view; the filename carries the active filter
+  description. (#52, #53)
+- **Activity renaming** — a real *pre-mining* transform that relabels (and can
+  **merge**) activities before mining, so the new names flow to **every view
+  and every export**, including the exported log and the `.jucm`. Edited in a
+  modal dialog (with an **Apply** button, so edits re-mine only when you ask),
+  seeded from a **CSV/JSON** map upload, and **exportable as JSON** in the same
+  format the loader accepts. (#55, #57, #58)
+- **The global filter now also drives the Family, Compare and Dashboards
+  views** (and their exports), not just Model and Scenarios. (#54)
+- **Project logo** — the app's sidebar brand and browser-tab favicon, the
+  README header, and the generated API-docs site. (#56, #58)
+- **Resizable model viewers** — a diagram-height slider on the Model, Family
+  and Compare SVG viewers; a pinned model's default name carries the active
+  filter. (#48)
+
+### Changed
+
+- **The sidebar is decluttered** — the less-used groups (performers,
+  performance overlay, log filters) collapse into expanders. (#50)
+- The family **"merge behaviourally identical plug-ins"** option defaults off
+  and moved to the Prepare-downloads section (it only shapes the umbrella
+  `.jucm`). (#49, #51)
+- The Streamlit app is now **V5**; `streamlit run web/streamlit_app_v5.py`.
+
+### Fixed
+
+- **CSV logs no longer crash the filter** with `ArrowNotImplementedError:
+  Function 'unique' has no kernel matching input types (list<item: string>)`.
+  `pm4py.format_dataframe` gave a CSV import's activity columns the arrow-backed
+  `string` dtype, which broke the variant aggregation; the log is now coerced
+  to plain `object` strings so CSV behaves like XES everywhere. (#53)
+- **Family re-mine no longer raises `CacheReplayClosureError`** (a cached miner
+  drew a progress bar as a child of the caller's `st.status` block). (#49)
+- **The rename dialog reliably captures an in-progress cell edit** on Apply
+  (the editor now lives in an `st.form`), and a mapping upload now reports a
+  clear error for a malformed file and a warning for names that don't match any
+  activity in the log (case-sensitive), instead of failing silently. (#58)
+
+### Docs
+
+- The end-to-end tutorial notebook gains **filtering** and **renaming**
+  sections (the code equivalent of the web app's pre-mining transforms).
+- READMEs (main, `web/`, `tests/`, `demo/`) refreshed for **0.7.0 / V5**.
+
 ## [0.6.5] — 2026-07-18
 
 Model-view viewer and overlay refinements.
