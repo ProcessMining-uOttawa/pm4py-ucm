@@ -739,6 +739,28 @@ def _apply_log_filters(log, filter_spec):
     return df
 
 
+def _filter_summary(filter_spec) -> str:
+    """A short human label for the active log filters (empty when none) —
+    e.g. ``"top 10 activities, −2 activities, top 20 variants,
+    2022-09-09→2023-01-10"``. Used to name a pinned filtered model."""
+    if not filter_spec:
+        return ""
+    spec = dict(filter_spec)
+    parts = []
+    if "keep_top_activities" in spec:
+        parts.append(f"top {spec['keep_top_activities']} activities")
+    if "exclude_activities" in spec:
+        n = len(spec["exclude_activities"])
+        parts.append(f"−{n} activit{'y' if n == 1 else 'ies'}")
+    if "top_variants" in spec:
+        parts.append(f"top {spec['top_variants']} variants")
+    if "time_from" in spec or "time_to" in spec:
+        lo = (spec.get("time_from") or "")[:10]
+        hi = (spec.get("time_to") or "")[:10]
+        parts.append(f"{lo}→{hi}")
+    return ", ".join(parts)
+
+
 @st.cache_data(show_spinner=False)
 def _log_filter_options(log_bytes: bytes, log_kind: str, csv_columns,
                         _file_hash: str):
@@ -1539,7 +1561,8 @@ _SVG_VIEWER_TEMPLATE = r"""
 </script>"""
 
 
-def _svg_viewer(svg: str, *, height: int = 620, key: str = "svgview") -> None:
+def _svg_viewer(svg: str, *, height: int = 620, key: str = "svgview",
+                resizable: bool = True) -> None:
     """Show an SVG model inline with scrollbars, wheel-zoom and drag-to-pan.
 
     SVG is the on-screen default: it stays crisp at any zoom and its text
@@ -1550,7 +1573,18 @@ def _svg_viewer(svg: str, *, height: int = 620, key: str = "svgview") -> None:
     load; the wheel zooms, dragging pans, and the stage scrolls, so the
     scrollbars track the zoomed diagram's real size (see
     :data:`_SVG_VIEWER_TEMPLATE`).
+
+    ``resizable`` adds a slim height control so the viewer window can be made
+    taller or shorter. The chosen height persists (keyed on ``key``) so it
+    survives the reruns a plain drag-resize of the ``st.iframe`` would lose —
+    Streamlit re-applies the iframe's fixed height on every rerun.
     """
+    if resizable:
+        height = st.slider(
+            "Diagram height (px)", min_value=320, max_value=1600,
+            value=height, step=40, key=f"{key}_height",
+            help="Resize the diagram window vertically. The choice sticks "
+                 "for this view.")
     b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
     _embed_html(
         _SVG_VIEWER_TEMPLATE
@@ -2411,9 +2445,17 @@ if _view == "Model":
             "is live: it renders whatever the model currently is, so it "
             "follows a re-mine rather than freezing today's picture."
         )
+        # Default name carries the active filters, so a pinned filtered
+        # model is not mistaken for the full one on the dashboard. Keyed on
+        # the filter config so the default refreshes when the filters change
+        # (a manual edit still sticks for a given filter config).
+        _pin_default = f"Mined model — {Path(log_name).stem}"
+        _pin_fsum = _filter_summary(filter_spec)
+        if _pin_fsum:
+            _pin_default += f" (filtered: {_pin_fsum})"
         _pin_title = st.text_input(
-            "Widget title", value=f"Mined model — {Path(log_name).stem}",
-            key="pin_title",
+            "Widget title", value=_pin_default,
+            key=f"pin_title_{_arg_fingerprint(filter_spec)}",
         )
         if st.button("Pin ▦", type="primary", key="pin_go"):
             # The island cannot be reached directly — the iframe embedding
