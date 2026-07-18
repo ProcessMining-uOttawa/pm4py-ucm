@@ -684,6 +684,25 @@ def _load_log_df(log_bytes: bytes, log_kind: str, csv_columns,
 
 
 @st.cache_data(show_spinner=False)
+def _filtered_log_df(log_bytes: bytes, log_kind: str, csv_columns,
+                     filter_spec: Tuple, _file_hash: str) -> pd.DataFrame:
+    """The event log as a DataFrame with the sidebar log filters applied.
+
+    The shared filtered view the Family, Compare and Dashboards paths mine and
+    measure from — so the whole app honours one global filter (the Model and
+    Scenarios paths get the same filtered log from :func:`_log_and_tree`). An
+    empty ``filter_spec`` is a straight pass-through to the full log, and is
+    cached separately, so an unfiltered session pays nothing. Cached on the
+    log + filter."""
+    df = _load_log_df(log_bytes, log_kind, csv_columns, _file_hash)
+    if filter_spec:
+        df = _apply_log_filters(df, filter_spec)
+        if not isinstance(df, pd.DataFrame):
+            df = pm4py.convert_to_dataframe(df)
+    return df
+
+
+@st.cache_data(show_spinner=False)
 def _log_is_interval(log_bytes: bytes, log_kind: str, _file_hash: str) -> bool:
     """Whether the log carries two timestamps per event (a start_timestamp).
 
@@ -901,17 +920,18 @@ _DEFAULT_DASHBOARD_SPECS: List[Dict[str, Any]] = [
 
 @st.cache_data(show_spinner="Preparing dashboard data...")
 def _fact_table(log_bytes: bytes, log_kind: str, csv_columns,
-                log_name: str, _file_hash: str):
+                log_name: str, filter_spec: Tuple, _file_hash: str):
     """The per-case fact table the Dashboards view computes over.
 
-    Cached on the log, not on any widget: the browser recomputes every
-    widget itself, so this runs once per log rather than once per
-    interaction. Sub-second on the logs the app ships (see
-    docs/dashboards.md).
+    Cached on the log + filter, not on any widget: the browser recomputes
+    every widget itself, so this runs once per (log, filter) rather than once
+    per interaction. The dashboard measures the same filtered log the Model
+    view mines. Sub-second on the logs the app ships (see docs/dashboards.md).
     """
     from pm4py_ucm.algo.dashboards import build_fact_table
 
-    df = _load_log_df(log_bytes, log_kind, csv_columns, _file_hash)
+    df = _filtered_log_df(log_bytes, log_kind, csv_columns, filter_spec,
+                          _file_hash)
     return build_fact_table(df, log_name=log_name)
 
 
@@ -953,13 +973,16 @@ def _dashboard_html_cached(_table, specs_json: str, name: str,
 
 @st.cache_data(show_spinner="Detecting case attributes...")
 def _detect_family_attributes(
-    log_bytes: bytes, log_kind: str, csv_columns, _file_hash: str,
+    log_bytes: bytes, log_kind: str, csv_columns, filter_spec: Tuple,
+    _file_hash: str,
 ) -> List[Dict[str, Any]]:
     """Case-constant attributes usable as partition axes, with the
-    context a user needs to pick one (type, cardinality, missing %)."""
+    context a user needs to pick one (type, cardinality, missing %).
+    Detected on the filtered log, so the axes match what the family mines."""
     from pm4py_ucm.algo.discovery.families import detect_case_attributes
 
-    df = _load_log_df(log_bytes, log_kind, csv_columns, _file_hash)
+    df = _filtered_log_df(log_bytes, log_kind, csv_columns, filter_spec,
+                          _file_hash)
     specs, per_case_raw = detect_case_attributes(df)
     rows: List[Dict[str, Any]] = []
     for spec in specs.values():
@@ -979,14 +1002,17 @@ def _family_preview(
     log_bytes: bytes, log_kind: str, csv_columns,
     attrs: Tuple[str, ...], min_cases: int, max_values: int, bins: int,
     include_values,  # None or tuple of (attr, (label, ...)) pairs
+    filter_spec: Tuple,
     _file_hash: str,
 ) -> Dict[str, Any]:
     """Partition only (no mining) — the coverage heatmap shown before
     the user commits to mining N models. Also returns the value axes
-    so the UI can offer per-attribute value filters."""
+    so the UI can offer per-attribute value filters. Partitions the
+    filtered log, so the coverage matches what the family mines."""
     from pm4py_ucm.algo.discovery.families import partition_log
 
-    df = _load_log_df(log_bytes, log_kind, csv_columns, _file_hash)
+    df = _filtered_log_df(log_bytes, log_kind, csv_columns, filter_spec,
+                          _file_hash)
     part = partition_log(
         df, list(attrs),
         min_cases=min_cases,
@@ -1048,6 +1074,7 @@ def _mine_family(
     overlay_nodes: Tuple[str, ...],
     overlay_edges: Tuple[str, ...],
     _file_hash: str,
+    filter_spec: Tuple = (),
     _status=None,
     _progress=None,
 ) -> Dict[str, Any]:
@@ -1076,7 +1103,8 @@ def _mine_family(
             _status.update(label=label)
 
     _phase("Loading event log...")
-    df = _load_log_df(log_bytes, log_kind, csv_columns, _file_hash)
+    df = _filtered_log_df(log_bytes, log_kind, csv_columns, filter_spec,
+                          _file_hash)
 
     params: Dict[str, Any] = {}
     res_attrs = [a.strip() for a in resource_attribute.replace(",", " ").split()
@@ -2293,11 +2321,11 @@ with st.sidebar:
     _flt_exp = st.expander("Log filters", expanded=False)
     _filter_on = _flt_exp.checkbox(
         "Filter the event log", value=False, key="log_filter_on",
-        help="Pre-filter the log before mining the model and synthesizing "
-             "scenarios. The range sliders have two handles — keep the most "
-             "or the least frequent, or a band in the middle. Changing a "
-             "filter re-mines. (The Family and Compare views use the full "
-             "log for now.)",
+        help="Pre-filter the log before mining. The range sliders have two "
+             "handles — keep the most or the least frequent, or a band in the "
+             "middle. Changing a filter re-mines. The filter is global: every "
+             "view (Model, Scenarios, Family, Compare, Dashboards) and its "
+             "exports work on the filtered log.",
     )
     if _filter_on:
         _flt: Dict[str, Any] = {}
@@ -2469,6 +2497,7 @@ except Exception as exc:
 _family_base_fp = _arg_fingerprint(
     file_hash, log_kind, csv_columns, noise_threshold, decomposition_spec,
     resource_attribute, effective_min_support, overlay_nodes, overlay_edges,
+    filter_spec,
 )
 if st.session_state.get("family_base_fp") not in (None, _family_base_fp):
     st.session_state.pop("family_result", None)
@@ -2482,7 +2511,7 @@ with st.sidebar:
     _n_attrs = 0
     try:
         _n_attrs = len(_detect_family_attributes(
-            log_bytes, log_kind, csv_columns, file_hash))
+            log_bytes, log_kind, csv_columns, filter_spec, file_hash))
     except Exception:
         # Attribute detection is best-effort context for the log card;
         # a log without usable case attributes is normal, and a failure
@@ -2965,7 +2994,7 @@ if _view == "Family":
 
     try:
         attr_rows = _detect_family_attributes(
-            log_bytes, log_kind, csv_columns, file_hash,
+            log_bytes, log_kind, csv_columns, filter_spec, file_hash,
         )
     except Exception as exc:
         st.error(
@@ -3048,7 +3077,7 @@ if _view == "Family":
                 log_bytes, log_kind, csv_columns,
                 selected_attrs, int(family_min_cases),
                 int(family_max_values), int(family_bins),
-                None, file_hash,
+                None, filter_spec, file_hash,
             )
             filter_cols = st.columns(len(selected_attrs))
             selections: Dict[str, Tuple[str, ...]] = {}
@@ -3076,7 +3105,7 @@ if _view == "Family":
                     log_bytes, log_kind, csv_columns,
                     selected_attrs, int(family_min_cases),
                     int(family_max_values), int(family_bins),
-                    family_include_values, file_hash,
+                    family_include_values, filter_spec, file_hash,
                 )
             )
         except Exception as exc:
@@ -3130,7 +3159,7 @@ if _view == "Family":
                 int(family_bins), family_include_values,
                 noise_threshold, decomposition_spec,
                 resource_attribute, effective_min_support,
-                overlay_nodes, overlay_edges,
+                overlay_nodes, overlay_edges, filter_spec,
             )
             stashed_family_fp = st.session_state.get("family_fp")
             family_params_changed = (
@@ -3153,7 +3182,7 @@ if _view == "Family":
                             noise_threshold, decomposition_spec,
                             resource_attribute, effective_min_support,
                             overlay_nodes, overlay_edges,
-                            file_hash, _status=status,
+                            file_hash, filter_spec, _status=status,
                             _progress=_ProgressUI(status),
                         )
                         status.update(label="Done.", state="complete")
@@ -3289,8 +3318,9 @@ if _view == "Family":
                              "default — it only shapes the umbrella `.jucm` "
                              "below and the merge costs extra CPU.")
                     with st.spinner("Building download files…"):
-                        _df = _load_log_df(
-                            log_bytes, log_kind, csv_columns, file_hash)
+                        _df = _filtered_log_df(
+                            log_bytes, log_kind, csv_columns, filter_spec,
+                            file_hash)
                         _umb_bytes, _n_vp, _n_pl = _family_umbrella(
                             _fam_fp, fam["family"], _df, family_dedup,
                             overlay_nodes, overlay_edges)
@@ -3786,7 +3816,7 @@ if _view == "Dashboards":
 
     try:
         _ft = _fact_table(log_bytes, log_kind, csv_columns, log_name,
-                          file_hash)
+                          filter_spec, file_hash)
     except Exception as exc:
         st.error(
             f"Could not prepare dashboard data: {type(exc).__name__}: {exc}"
