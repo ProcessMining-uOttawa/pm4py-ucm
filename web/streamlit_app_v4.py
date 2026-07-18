@@ -112,6 +112,7 @@ def _embed_html(html: str, *, height: int, scrolling: bool = False) -> None:
 
 
 _SAMPLES_DIR = Path(__file__).resolve().parent / "samples"
+_LOGO_PATH = Path(__file__).resolve().parent / "assets" / "logo.png"
 _DISPLAY_WIDTH_PX = 1100
 _NONE_OPT = "(none)"
 
@@ -1846,7 +1847,9 @@ def _fmt_duration_s(seconds) -> str:
 # The rail is this app's primary navigation, not an optional settings
 # drawer — it must never open collapsed, whatever the viewport.
 st.set_page_config(
-    page_title="PM4Py-UCM", layout="wide", initial_sidebar_state="expanded",
+    page_title="PM4Py-UCM",
+    page_icon=str(_LOGO_PATH) if _LOGO_PATH.is_file() else None,
+    layout="wide", initial_sidebar_state="expanded",
 )
 
 # Which theme Streamlit is actually rendering. Asking Streamlit beats
@@ -2031,14 +2034,20 @@ with st.sidebar:
     # design carries the identity here rather than in a main-area title.
     _repo_url = "https://github.com/ProcessMining-uOttawa/pm4py-ucm"
     _release_url = f"{_repo_url}/releases/tag/v{_version}"
+    if _LOGO_PATH.is_file():
+        st.image(str(_LOGO_PATH), use_container_width=True)
+    else:  # fallback to the wordmark if the asset is missing
+        st.markdown(
+            f'<div class="pm-brand">'
+            f'<a href="{_repo_url}" target="_blank" rel="noopener">'
+            f'PM4Py-UCM</a></div>', unsafe_allow_html=True,
+        )
     st.markdown(
-        f'<div class="pm-brand">'
-        f'<a href="{_repo_url}" target="_blank" rel="noopener">PM4Py-UCM</a>'
-        f'<span><a href="{_release_url}" target="_blank" rel="noopener">'
-        f'{_html_escape_min(_version)}</a></span></div>'
-        f'<div class="pm-byline">'
+        f'<div class="pm-byline" style="text-align:center">'
+        f'<a href="{_release_url}" target="_blank" rel="noopener">'
+        f'v{_html_escape_min(_version)}</a>. '
         f'<a href="https://damyot.github.io/" target="_blank" '
-        f'rel="noopener">D. Amyot</a>, uOttawa, 2026</div>',
+        f'rel="noopener">Daniel Amyot</a>, uOttawa, 2026</div>',
         unsafe_allow_html=True,
     )
     st.header("Inductive miner")
