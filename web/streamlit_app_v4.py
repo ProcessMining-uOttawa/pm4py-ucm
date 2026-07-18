@@ -654,6 +654,32 @@ def _load_log_df(log_bytes: bytes, log_kind: str, csv_columns,
     return pm4py.convert_to_dataframe(log)
 
 
+@st.cache_data(show_spinner=False)
+def _log_is_interval(log_bytes: bytes, log_kind: str, _file_hash: str) -> bool:
+    """Whether the log carries two timestamps per event (a start_timestamp).
+
+    Matches :func:`build_fact_table`'s criterion — an interval log is one
+    whose DataFrame has a ``start_timestamp`` column — but detects it from
+    the raw bytes so it needs no full parse (this is read on every sidebar
+    render, before mining). A CSV upload maps a single timestamp, so it is
+    always single; an XES only yields that column when it declares a
+    ``start_timestamp`` attribute, which then appears literally in the XML.
+    Lifecycle start/complete logs, as elsewhere in the app, count as single.
+    """
+    if log_kind == "csv":
+        return False
+    try:
+        raw = log_bytes
+        if log_kind == "zip" or (len(raw) >= 2 and raw[:2] == b"PK"):
+            raw = _extract_xes_from_zip(log_bytes)
+        elif len(raw) >= 2 and raw[:2] == b"\x1f\x8b":
+            import gzip
+            raw = gzip.decompress(raw)
+        return b"start_timestamp" in raw
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Dashboards (cached)
 # ---------------------------------------------------------------------------
@@ -1260,9 +1286,13 @@ def _open_image_in_tab_button(png_b64: str, label: str = "Open image "
 #: scrolls to its plug-in.
 _SVG_VIEWER_TEMPLATE = r"""
 <style>
-  html, body { margin: 0; height: 100%; }
+  /* The host iframe (st.iframe) hardcodes scrolling — suppress the root's
+     own scrollbars so ONLY #stage's inner ones show, never a useless outer
+     pair. box-sizing keeps the 1px border inside width:100% so the stage
+     never spills past the iframe and forces those outer bars. */
+  html, body { margin: 0; height: 100%; overflow: hidden; }
   #stage {
-    position: relative;
+    position: relative; box-sizing: border-box;
     width: 100%; height: __HEIGHT__px; overflow: auto;
     border: 1px solid #e2dfd8; border-radius: 8px; background: #fff;
     cursor: grab; touch-action: none; overscroll-behavior: contain;
@@ -1842,9 +1872,27 @@ with st.sidebar:
         EDGE_METRICS as _EDGE_METRICS,
         NODE_METRICS as _NODE_METRICS,
     )
+    # Pre-select overlay metrics that fit the log: activity frequency plus a
+    # time metric — service time (median_time) when the log has two
+    # timestamps, otherwise the sojourn time, which works on a single one —
+    # and, for edges, an OR-fork branch's share (percentage) plus frequency.
+    # Seeded per log (keyed on its hash) so a newly loaded log gets the
+    # defaults that suit it, while the user's own picks persist within a log.
+    _ov_hash = st.session_state.get("log_hash", "nolog")
+    _interval = bool(st.session_state.get("log_bytes") is not None
+                     and _log_is_interval(st.session_state["log_bytes"],
+                                          st.session_state.get("log_kind", ""),
+                                          _ov_hash))
+    _node_key = f"overlay_nodes::{_ov_hash}"
+    _edge_key = f"overlay_edges::{_ov_hash}"
+    if _node_key not in st.session_state:
+        st.session_state[_node_key] = [
+            "frequency", "median_time" if _interval else "sojourn_median_time"]
+    if _edge_key not in st.session_state:
+        st.session_state[_edge_key] = ["percentage", "frequency"]
     overlay_nodes = tuple(st.multiselect(
         "On activities (max 2)",
-        options=list(_NODE_METRICS), default=[],
+        options=list(_NODE_METRICS), key=_node_key,
         help=(
             "frequency = executions; case_coverage = cases containing "
             "the activity; relative_frequency = share of all events; "
@@ -1860,7 +1908,7 @@ with st.sidebar:
     )[:2])
     overlay_edges = tuple(st.multiselect(
         "On edges (max 2)",
-        options=list(_EDGE_METRICS), default=[],
+        options=list(_EDGE_METRICS), key=_edge_key,
         help=(
             "frequency = directly-follows traversals; case_frequency = "
             "distinct cases traversing the handover; relative_frequency "
