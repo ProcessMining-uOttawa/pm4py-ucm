@@ -6,9 +6,15 @@ render **UCM models** (UCM or BPMN notation, PNG and navigable **SVG**),
 synthesize executable **scenarios**, mine attribute **model families**,
 **compare** family members, and build interactive **dashboards** —
 downloading `.jucm`, CSV, SVG/PNG, and self-contained HTML at every step.
+A global **pre-mining log filter** (keep activities / trace-variants by
+frequency rank, exclude activities, restrict a date window) and **activity
+renaming** (relabel / merge activities before mining) apply to every view
+and its exports, and the filtered event log is itself downloadable as
+**XES + CSV**.
 
-Since v0.6.0 the deployed app is **V4** (the workspace shell + Dashboards),
-a strict superset of the earlier four-tab V3 app.
+Since v0.7.0 the deployed app is **V5** (the workspace shell + Dashboards,
+with a global pre-mining log filter and activity renaming), a strict
+superset of the earlier four-tab V3 and workspace V4 apps.
 
 ## Run locally
 
@@ -23,7 +29,7 @@ python -m venv .venv
 # source .venv/bin/activate       # macOS/Linux
 
 pip install -r web/requirements.txt
-streamlit run web/streamlit_app_v4.py     # V4 — the deployed app
+streamlit run web/streamlit_app_v5.py     # V5 — the deployed app
 # streamlit run web/streamlit_app_v3.py   # V3 — the earlier four-tab app
 ```
 
@@ -37,7 +43,7 @@ missing).
 
 ## The app and its views
 
-**`streamlit_app_v4.py`** (**V4**) is served at
+**`streamlit_app_v5.py`** (**V5**) is served at
 https://pm4py-ucm.streamlit.app/ via the `streamlit_app.py` shim (that
 deployment's main file). A left rail switches between five views over the
 loaded log:
@@ -45,9 +51,10 @@ loaded log:
 - **Model** — mine a UCM, preview it in UCM or BPMN notation as a zoom /
   pan **SVG** (click a stub to jump to its plug-in map), and download the
   SVG, a raster PNG, or the `.jucm`. Decomposition is honoured across all
-  maps. An optional **log filter** (range sliders over the activity- and
-  variant-frequency ranks, an exclude list, and a date-range slider) re-mines
-  from the filtered log — and the Scenarios view mines the same filtered log.
+  maps. A global **log filter** (range sliders over the activity- and
+  variant-frequency ranks, an exclude list, and a date-range slider) and
+  **activity renaming** (relabel / merge activities before mining) apply to
+  every view and its exports; the filtered log is downloadable as XES + CSV.
 
   ![Model view](PM4Py-UCM-Model.png)
 
@@ -83,8 +90,9 @@ loaded log:
 
   ![Dashboards view](PM4Py-UCM-Dashboard.png)
 
-The earlier four-tab **V3** app (`streamlit_app_v3.py`) is a strict subset
-of V4 and stays in git history. **`streamlit_app_v2.py` is the FROZEN V2
+The earlier workspace **V4** app (`streamlit_app_v4.py`) and four-tab **V3**
+app (`streamlit_app_v3.py`) are strict subsets of V5 and stay in git history.
+**`streamlit_app_v2.py` is the FROZEN V2
 app** (model + scenarios) — served at
 https://pm4py-ucm-scenarios.streamlit.app/ for a paper under review; do
 not modernise it. **V1** (model-only) was retired at v0.5.1.
@@ -200,16 +208,21 @@ middle band:
 
 - **Activities by frequency rank** — keep activities whose rank falls in the
   selected band (rank 1 = most frequent); plus an **Exclude activities** list.
-- **Variants by frequency rank** — keep trace variants in the selected band.
+- **Variants by frequency rank** — keep trace variants in the selected band,
+  with a **top variants by case coverage %** box synced to the slider.
 - **Date range** — a slider over the log's own span (fewer clicks than two
   calendars), with a **cases in the window** choice (*intersecting* or *fully
   inside*).
 
-Each is a standard pm4py log filter applied before inductive mining, so the
-model (and the Scenarios view, which mines the same filtered log) reflects the
-filtered process — changing a filter re-mines. The Model view's Activities,
-Cases, and Events metrics then read **selected / total**. The Family and
-Compare views use the full log for now.
+Each is a standard pm4py log filter applied before inductive mining. The
+filter is **global** — every view (Model, Scenarios, Family, Compare,
+Dashboards) and every export works over the same filtered log — so changing a
+filter re-mines. The Model view's Activities, Cases, and Events metrics then
+read **selected / total**, and the filtered log is itself downloadable as
+**XES + CSV**. Alongside the filter, **activity renaming** is a real
+pre-mining transform: relabel or merge activities (edited in a modal dialog
+with an **Apply** button, seeded from a CSV / JSON map and exportable as JSON)
+before the miner runs, again applying to every view and export.
 
 Once mining completes, the **Model** view shows a metrics row (activities,
 cases and events — selected/total when filtered — plus maps and nodes) and
@@ -393,11 +406,11 @@ the engine.
 
 1. Push this repo to GitHub.
 2. At <https://share.streamlit.io>, "New app" → pick the repo and branch.
-3. Set **Main file path** to `web/streamlit_app_v4.py` for the latest
+3. Set **Main file path** to `web/streamlit_app_v5.py` for the latest
    app (or `web/streamlit_app_v2.py` for the frozen V2 scenarios
    app). Streamlit Cloud picks up `web/requirements.txt`
    automatically (sits next to the main file). The existing primary
-   deployment points at `web/streamlit_app.py` — a shim that runs V4,
+   deployment points at `web/streamlit_app.py` — a shim that runs V5,
    so it keeps working without a settings change.
 4. **`packages.txt` (apt packages) MUST be at the repo root** — Streamlit
    Cloud's apt-install phase only reads from the root, not from the main
