@@ -732,13 +732,31 @@ def _log_is_interval(log_bytes: bytes, log_kind: str, _file_hash: str) -> bool:
 # Log filters (Model + Scenarios): a pre-mining transform of the event log.
 # ---------------------------------------------------------------------------
 
+def _apply_rename(df, rename_map):
+    """Return ``df`` with ``concept:name`` relabelled via ``rename_map``
+    (``{original: new}``), leaving unmapped activities untouched.
+
+    A new frame — never mutate the (cached) input in place. Two originals
+    mapped to the same new name merge into one activity, which is a deliberate
+    use of renaming (e.g. collapsing lifecycle variants)."""
+    if not rename_map:
+        return df
+    return df.assign(**{
+        "concept:name": df["concept:name"].map(
+            lambda v: rename_map.get(v, v))})
+
+
 def _apply_log_filters(log, filter_spec):
-    """Apply the sidebar log filters to a DataFrame log before mining.
+    """Apply the sidebar activity rename + log filters to a DataFrame log
+    before mining.
 
     ``filter_spec`` is a hashable, sorted tuple of ``(key, value)`` pairs (or
     empty, which is a no-op) so it can be part of a ``@st.cache_data`` key.
-    Each filter is a standard pm4py log filter, applied in turn:
+    Applied in order:
 
+    * ``rename_map`` (tuple of ``(original, new)`` pairs) — relabel activities
+      FIRST, so every downstream step (and the mined model + exports) sees the
+      new names;
     * ``activity_ranks`` ``(lo, hi)`` — keep activities whose 1-based
       frequency rank falls in ``[lo, hi]`` (rank 1 = most frequent), so a
       range slider can keep the most, the least, or a middle band;
@@ -756,6 +774,10 @@ def _apply_log_filters(log, filter_spec):
         return log
     spec = dict(filter_spec)
     df = log if isinstance(log, pd.DataFrame) else pm4py.convert_to_dataframe(log)
+
+    rename = spec.get("rename_map")
+    if rename:
+        df = _apply_rename(df, dict(rename))
 
     ranks = spec.get("activity_ranks")
     exclude = spec.get("exclude_activities")
@@ -810,20 +832,61 @@ def _filter_summary(filter_spec) -> str:
         lo = (spec.get("time_from") or "")[:10]
         hi = (spec.get("time_to") or "")[:10]
         parts.append(f"{lo}→{hi}")
+    if "rename_map" in spec:
+        n = len(spec["rename_map"])
+        parts.append(f"renamed {n} activit{'y' if n == 1 else 'ies'}")
     return ", ".join(parts)
 
 
 @st.cache_data(show_spinner=False)
-def _log_filter_options(log_bytes: bytes, log_kind: str, csv_columns,
-                        _file_hash: str):
-    """Upstream choices for the log-filter UI, from the **unfiltered** log:
-    the activity names by descending frequency, the date span (ISO
-    ``YYYY-MM-DD`` strings, or ``None``), and the total case and event counts
-    (for the Model view's now/total metrics). The variant count and per-rank
-    case coverage are *not* here — they depend on the activity + date filters,
-    so they are recomputed by :func:`_variant_filter_options`. Cached; only
-    read when filtering is enabled."""
+def _activity_names(log_bytes: bytes, log_kind: str, csv_columns,
+                    _file_hash: str) -> List[str]:
+    """The log's original activity names by descending frequency — the rows
+    the activity-rename editor offers (before any rename or filter)."""
     df = _load_log_df(log_bytes, log_kind, csv_columns, _file_hash)
+    return list(df["concept:name"].value_counts().index)
+
+
+def _parse_rename_upload(uploaded) -> Dict[str, str]:
+    """Parse an uploaded activity-rename mapping into ``{original: new}``.
+
+    Accepts JSON (an ``{"old": "new", ...}`` object) or CSV (first column =
+    original, second = new; a header row is fine — it is skipped if it does
+    not match any activity). Blank / NaN new names are dropped."""
+    raw = uploaded.getvalue()
+    name = (uploaded.name or "").lower()
+    if name.endswith(".json"):
+        import json
+        obj = json.loads(raw.decode("utf-8"))
+        return {str(k): str(v).strip() for k, v in obj.items()
+                if str(v).strip()}
+    dfu = pd.read_csv(io.BytesIO(raw), header=None, dtype=str,
+                      keep_default_na=False)
+    out: Dict[str, str] = {}
+    for _, row in dfu.iterrows():
+        if len(row) < 2:
+            continue
+        old, new = str(row.iloc[0]).strip(), str(row.iloc[1]).strip()
+        if old and new and old.lower() != "old" and old != new:
+            out[old] = new
+    return out
+
+
+@st.cache_data(show_spinner=False)
+def _log_filter_options(log_bytes: bytes, log_kind: str, csv_columns,
+                        rename_spec: Tuple, _file_hash: str):
+    """Upstream choices for the log-filter UI, from the log after only the
+    activity **rename** is applied (rename is the first transform, so the
+    filter's activity/date/variant choices are stated in the new names): the
+    activity names by descending frequency, the date span (ISO ``YYYY-MM-DD``
+    strings, or ``None``), and the total case and event counts (for the Model
+    view's now/total metrics). The variant count and per-rank case coverage
+    are *not* here — they depend on the activity + date filters, so they are
+    recomputed by :func:`_variant_filter_options`. Cached; only read when
+    filtering is enabled."""
+    df = _load_log_df(log_bytes, log_kind, csv_columns, _file_hash)
+    if rename_spec:
+        df = _apply_rename(df, dict(rename_spec))
     acts = list(df["concept:name"].value_counts().index)
     ts = pd.to_datetime(df["time:timestamp"], utc=True, errors="coerce")
     dmin = ts.min()
@@ -2316,6 +2379,65 @@ filter_spec: Tuple = ()
 # for the filter options anyway); None means "no filter, so now == total".
 _filter_totals = None
 with st.sidebar:
+    # ---- Activity rename (the FIRST pre-mining transform) -----------------
+    # A real relabel of the log, applied before every filter, mining and
+    # export, so the new names flow to all views. Independent of the filter
+    # toggle below; both fold into the one hashable ``filter_spec`` and so
+    # ride the same plumbing to every view.
+    rename_map: Dict[str, str] = {}
+    _rn_exp = st.expander("Rename activities", expanded=False)
+    _rename_on = _rn_exp.checkbox(
+        "Rename activities", value=False, key="rename_on",
+        help="Relabel activities before mining. Applies everywhere (Model, "
+             "Scenarios, Family, Compare, Dashboards) and to every export, "
+             "including the exported log. Two activities given the same new "
+             "name merge into one.")
+    if _rename_on:
+        try:
+            _orig_acts = sorted(_activity_names(
+                log_bytes, log_kind, csv_columns, file_hash))
+        except Exception as _rn_exc:
+            _orig_acts = []
+            _rn_exp.warning(f"Could not read activities: {_rn_exc}")
+        _rn_up = _rn_exp.file_uploader(
+            "Load a mapping (optional)", type=["csv", "json"],
+            key=f"rename_upload::{file_hash}",
+            help="CSV rows of `original,new` (a header row is skipped), or a "
+                 "JSON `{\"original\": \"new\"}` object. Fills the table "
+                 "below; you can still edit it by hand.")
+        _rn_seed: Dict[str, str] = {}
+        if _rn_up is not None:
+            try:
+                _rn_seed = _parse_rename_upload(_rn_up)
+            except Exception as _up_exc:
+                _rn_exp.warning(f"Could not read mapping file: {_up_exc}")
+        # Re-key the editor on the uploaded file so a new upload re-seeds it;
+        # with no new upload the key is stable and manual edits persist.
+        _rn_up_id = (f"{_rn_up.name}:{_rn_up.size}"
+                     if _rn_up is not None else "none")
+        if _orig_acts:
+            _rn_seed_df = pd.DataFrame({
+                "activity": _orig_acts,
+                "new name": [_rn_seed.get(a, "") for a in _orig_acts]})
+            _rn_edited = _rn_exp.data_editor(
+                _rn_seed_df, hide_index=True, use_container_width=True,
+                disabled=["activity"],
+                key=f"rename_editor::{file_hash}::{_rn_up_id}")
+            for _a, _n in zip(_rn_edited["activity"], _rn_edited["new name"]):
+                _n = "" if _n is None else str(_n).strip()
+                if _n and _n != str(_a):
+                    rename_map[str(_a)] = _n
+        if rename_map:
+            _rn_exp.caption(
+                f"{len(rename_map)} activit"
+                f"{'y' if len(rename_map) == 1 else 'ies'} renamed.")
+    _rename_spec = tuple(sorted(rename_map.items()))
+
+    # ---- Log filters ------------------------------------------------------
+    # Rename + filters both accumulate into ``_flt`` → ``filter_spec``.
+    _flt: Dict[str, Any] = {}
+    if rename_map:
+        _flt["rename_map"] = _rename_spec
     # Collapsed by default like the other advanced groups; rendered on the
     # expander container so the block stays flat.
     _flt_exp = st.expander("Log filters", expanded=False)
@@ -2328,11 +2450,10 @@ with st.sidebar:
              "exports work on the filtered log.",
     )
     if _filter_on:
-        _flt: Dict[str, Any] = {}
         try:
             (_f_acts, _f_dmin, _f_dmax,
              _f_ncases, _f_nev) = _log_filter_options(
-                log_bytes, log_kind, csv_columns, file_hash)
+                log_bytes, log_kind, csv_columns, _rename_spec, file_hash)
         except Exception as _f_exc:
             (_f_acts, _f_dmin, _f_dmax,
              _f_ncases, _f_nev) = [], None, None, 0, 0
@@ -2456,11 +2577,14 @@ with st.sidebar:
                      "is not at rank 1.")
             if tuple(_vr) != (1, _f_nvar):
                 _flt["variant_ranks"] = (int(_vr[0]), int(_vr[1]))
-        filter_spec = tuple(sorted(_flt.items()))
-        if filter_spec:
-            _flt_exp.caption(
-                f"{len(_flt)} filter(s) active — the model is mined on the "
-                "filtered log.")
+    # Rename + filters combined. Assembled outside ``if _filter_on`` so a
+    # rename with no filter still produces a spec (and re-mines).
+    filter_spec = tuple(sorted(_flt.items()))
+    _n_filters = len(_flt) - (1 if "rename_map" in _flt else 0)
+    if _filter_on and _n_filters:
+        _flt_exp.caption(
+            f"{_n_filters} filter(s) active — the model is mined on the "
+            "filtered log.")
 
 # ---- Mine UCM (for Model tab) ----------------------------------------------
 try:
