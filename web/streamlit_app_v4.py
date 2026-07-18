@@ -956,7 +956,6 @@ def _mine_family(
     decomposition_spec,
     resource_attribute: str,
     min_support: float,
-    dedup: bool,
     overlay_nodes: Tuple[str, ...],
     overlay_edges: Tuple[str, ...],
     _file_hash: str,
@@ -978,9 +977,10 @@ def _mine_family(
     The mined family object is returned too so the grid PNG and the
     assemblies can be (re-)rendered per notation WITHOUT re-mining —
     rendering style must never be part of this function's cache key
-    (see :func:`_render_family_grid`). ``dedup`` no longer affects this
-    function's output (it only shapes the umbrella), but stays in the
-    signature so it keeps its place in the cache key / mine fingerprint.
+    (see :func:`_render_family_grid`). The umbrella's ``dedup`` is likewise
+    NOT a parameter here: it only shapes the umbrella `.jucm`
+    (:func:`_family_umbrella` keys on it), so toggling it neither re-mines
+    nor invalidates this result.
     """
     def _phase(label: str) -> None:
         if _status is not None:
@@ -1595,22 +1595,28 @@ def _svg_viewer(svg: str, *, height: int = 620, key: str = "svgview",
 
 
 class _ProgressUI:
-    """A ``progress_callback(stage, done, total)`` that renders a
-    progress bar with a remaining-time estimate inside an
-    ``st.status`` container.
+    """A ``progress_callback(stage, done, total)`` that shows a fraction and
+    a remaining-time estimate in an ``st.status`` container's label.
 
-    The long pipeline loops (case replay, per-cell family mining,
-    umbrella replay, family statistics) accept this callback and fire
-    it with known totals, so the bar shows genuine fractions rather
-    than a spinner. Repaints are throttled to ~3/second — every
-    update is a websocket message, and unthrottled per-item updates
-    would slow down the very work being measured. Pass instances into
-    the cached miners under a leading-underscore parameter so they
-    stay out of the cache keys (same convention as ``_status``)."""
+    The long pipeline loops (case replay, per-cell family mining, umbrella
+    replay, family statistics) accept this callback and fire it with known
+    totals, so the label reads ``stage — done/total · about … left`` rather
+    than a bare spinner. Repaints are throttled to ~3/second — every update
+    is a websocket message, and unthrottled per-item updates would slow down
+    the very work being measured.
+
+    It updates the status *label* rather than drawing a ``st.progress`` bar
+    on purpose: these callbacks fire inside ``@st.cache_data`` miners
+    (``_mine`` / ``_synthesize`` / ``_mine_family``), and creating a child
+    element on the caller's ``st.status`` block is recorded for cache replay
+    and then fails on a cache hit (``CacheReplayClosureError`` — the external
+    block no longer exists). ``status.update(label=…)`` mutates the status
+    itself and replays safely, the same way ``_phase`` does. Pass instances
+    in under a leading-underscore parameter so they stay out of the cache
+    keys (same convention as ``_status``)."""
 
     def __init__(self, container) -> None:
         self._container = container
-        self._bar = None
         self._stage: Optional[str] = None
         self._t0 = 0.0
         self._last_paint = 0.0
@@ -1624,18 +1630,15 @@ class _ProgressUI:
         if done < total and now - self._last_paint < 0.35:
             return
         self._last_paint = now
-        frac = (done / total) if total else 1.0
-        text = f"{stage} — {done:,}/{total:,}"
+        pct = int(round(100 * (done / total))) if total else 100
+        text = f"{stage} — {done:,}/{total:,} ({pct}%)"
         if 0 < done < total:
             elapsed = now - self._t0
             remaining = elapsed * (total - done) / done
             text += f" · about {_fmt_duration_s(remaining)} left"
-        if self._bar is None:
-            self._bar = self._container.progress(
-                min(1.0, frac), text=text,
-            )
-        else:
-            self._bar.progress(min(1.0, frac), text=text)
+        # Update the status LABEL (replay-safe); do NOT create a child
+        # element on the caller's st.status block — see the class docstring.
+        self._container.update(label=text)
 
 
 def _fmt_duration_s(seconds) -> str:
@@ -2855,13 +2858,16 @@ if _view == "Family":
 
             family_dedup = st.checkbox(
                 "Merge behaviourally identical plug-ins (umbrella)",
-                value=True,
+                value=False,
                 help=(
                     "Combinations whose mined process trees are "
                     "identical share one plug-in map; its selection "
                     "condition becomes the simplified OR of the "
                     "member conditions. The shared plug-ins show "
-                    "which sub-populations follow the same process."
+                    "which sub-populations follow the same process. "
+                    "Off by default — it only shapes the umbrella `.jucm` "
+                    "download (built on request), and the merge costs extra "
+                    "CPU. Toggling it does not re-mine the family."
                 ),
             )
 
@@ -2880,13 +2886,19 @@ if _view == "Family":
             # this fingerprint — it only affects grid rendering,
             # which has its own cache (_render_family_grid). Toggling
             # UCM ↔ BPMN must never invalidate the mined family.
+            # family_dedup is deliberately NOT in this fingerprint: it only
+            # shapes the umbrella `.jucm` (built on demand by
+            # _family_umbrella, which keys on it separately), not the mined
+            # family — so toggling it must neither re-mine nor invalidate the
+            # result (and re-mining is what raised the CacheReplayClosureError
+            # when it was in the key).
             _family_fp = _arg_fingerprint(
                 file_hash, log_kind, csv_columns, selected_attrs,
                 int(family_min_cases), int(family_max_values),
                 int(family_bins), family_include_values,
                 noise_threshold, decomposition_spec,
                 resource_attribute, effective_min_support,
-                family_dedup, overlay_nodes, overlay_edges,
+                overlay_nodes, overlay_edges,
             )
             stashed_family_fp = st.session_state.get("family_fp")
             family_params_changed = (
@@ -2908,7 +2920,7 @@ if _view == "Family":
                             family_include_values,
                             noise_threshold, decomposition_spec,
                             resource_attribute, effective_min_support,
-                            family_dedup, overlay_nodes, overlay_edges,
+                            overlay_nodes, overlay_edges,
                             file_hash, _status=status,
                             _progress=_ProgressUI(status),
                         )
