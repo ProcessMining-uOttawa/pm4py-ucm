@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.5] — 2026-07-18
+
+Model-view viewer and overlay refinements.
+
+### Fixed
+
+- **The inline model viewer's scrollbars now track the zoom and the diagram
+  size.** It previously zoomed with a CSS transform inside a clipped stage,
+  so the scrollbars reflected neither; the diagram is now sized in real
+  pixels inside a scrolling stage. The wheel zooms toward the cursor,
+  dragging pans, and a stub click scrolls to its plug-in. Applies to the
+  Model, Family, and Compare viewers.
+- **No more double scrollbars.** The host iframe's own scrollbars are
+  suppressed, so only the viewer's inner pair shows (the outer pair used to
+  overlap and hide the useful inner one).
+
+### Added
+
+- **The performance overlay pre-selects sensible metrics.** Activities open
+  on `frequency` plus a time metric — service time (`median_time`) when the
+  log has two timestamps, otherwise sojourn time (`sojourn_median_time`) —
+  and edges on `percentage` + `frequency`. Chosen per log; change any of them.
+
 ## [0.6.4] — 2026-07-17
 
 Refinements to the web front-end: a zoomable pinned model, faster mining
