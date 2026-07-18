@@ -859,6 +859,10 @@ def _parse_rename_upload(uploaded) -> Dict[str, str]:
     if name.endswith(".json"):
         import json
         obj = json.loads(raw.decode("utf-8"))
+        if not isinstance(obj, dict):
+            raise ValueError(
+                "JSON must be an object of \"original\": \"new\" pairs, "
+                f"not a {type(obj).__name__}.")
         return {str(k): str(v).strip() for k, v in obj.items()
                 if str(v).strip()}
     dfu = pd.read_csv(io.BytesIO(raw), header=None, dtype=str,
@@ -1931,6 +1935,7 @@ st.markdown(
       .pm-brand span a { color: var(--pm-muted); }
       .pm-byline {
         font-size: 10.5px; color: var(--pm-muted); margin: 3px 0 2px;
+        text-align: center;
       }
       .pm-byline a { color: var(--pm-muted); text-decoration: none; }
       .pm-byline a:hover {
@@ -2038,9 +2043,12 @@ with st.sidebar:
     _repo_url = "https://github.com/ProcessMining-uOttawa/pm4py-ucm"
     _release_url = f"{_repo_url}/releases/tag/v{_version}"
     if _LOGO_PATH.is_file():
-        # Compact brand mark — a fraction of the rail width so it doesn't
-        # push the controls down (was full-width, far too tall).
-        st.image(str(_LOGO_PATH), width=72)
+        # Compact brand mark, centred by placing it in the middle of three
+        # columns (st.image has no align option, and a fixed-width image
+        # otherwise hugs the rail's left edge). The 1:2:1 split renders the
+        # logo at ~half the rail width (~120 px).
+        _lc = st.columns([1, 2, 1])
+        _lc[1].image(str(_LOGO_PATH), use_container_width=True)
     else:  # fallback to the wordmark if the asset is missing
         st.markdown(
             f'<div class="pm-brand">'
@@ -2065,7 +2073,7 @@ with st.sidebar:
         ),
     )
 
-    st.subheader("Decomposition (Model tab only)")
+    st.subheader("Decomposition")
     decomposition_preset = st.selectbox(
         "Decomposition",
         options=["off", "auto", "aggressive"],
@@ -2400,34 +2408,62 @@ _filter_totals = None
 @st.dialog("Rename activities", width="large")
 def _rename_dialog(orig_acts, applied_map, seed_suffix):
     import json
+    act_set = set(orig_acts)
     st.caption(
         "Relabel activities **before mining**. Applies to every view (Model, "
         "Scenarios, Family, Compare, Dashboards) and every export, including "
         "the exported log. Two activities given the same new name merge into "
-        "one. Blank = unchanged.")
+        "one. Blank = unchanged. Edit the table, then click **Apply**.")
     up = st.file_uploader(
         "Load a mapping (optional)", type=["csv", "json"],
         key="rename_dialog_upload",
         help="CSV rows of `original,new` (a header row is skipped) or a JSON "
-             "`{\"original\": \"new\"}` object. Seeds the table below.")
+             "`{\"original\": \"new\"}` object. Only names that match an "
+             "activity in the log are used. Seeds the table below.")
     seed = dict(applied_map)
     if up is not None:
         try:
-            seed.update(_parse_rename_upload(up))
+            parsed = _parse_rename_upload(up)
         except Exception as exc:
-            st.warning(f"Could not read mapping file: {exc}")
+            parsed = None
+            st.error(
+                "Could not read that mapping file. Expected a **JSON object** "
+                "like `{\"Old activity\": \"New name\"}`, or a **CSV** with "
+                f"rows `original,new`. Details: {exc}")
+        if parsed is not None:
+            matched = {k: v for k, v in parsed.items() if k in act_set}
+            unmatched = sorted(k for k in parsed if k not in act_set)
+            seed.update(matched)
+            if unmatched:
+                st.warning(
+                    f"{len(unmatched)} name(s) in the file don't match any "
+                    "activity in the log and were ignored — activity names "
+                    "are **case-sensitive** and must match exactly. Ignored: "
+                    + ", ".join(f"`{u}`" for u in unmatched[:15])
+                    + (" …" if len(unmatched) > 15 else ""))
+            elif not matched:
+                st.info("The file contained no usable renames.")
     up_id = f"{up.name}:{up.size}" if up is not None else "none"
     seed_df = pd.DataFrame({
         "activity": list(orig_acts),
         "new name": [seed.get(a, "") for a in orig_acts]})
-    edited = st.data_editor(
-        seed_df, hide_index=True, use_container_width=True,
-        disabled=["activity"],
-        column_config={
-            "new name": st.column_config.TextColumn("new name", default="")},
-        key=f"rename_dialog_editor::{seed_suffix}::{up_id}")
-    # Build the map, treating a cleared cell (None / NaN / blank) as "no
-    # rename" so deleting a new name un-renames that activity.
+    # The editor lives in a form so that clicking Apply captures an in-progress
+    # cell edit too — a plain button can miss a not-yet-committed edit, because
+    # a data_editor only submits a cell when it loses focus. The form re-keys
+    # on the upload id so a new upload re-seeds it.
+    with st.form(f"rename_form::{seed_suffix}::{up_id}", border=False):
+        edited = st.data_editor(
+            seed_df, hide_index=True, use_container_width=True,
+            disabled=["activity"],
+            column_config={
+                "new name": st.column_config.TextColumn(
+                    "new name", default="")},
+            key=f"rename_dialog_editor::{seed_suffix}::{up_id}")
+        submitted = st.form_submit_button(
+            "Apply", type="primary", use_container_width=True)
+    # Build the map from the editor state, treating a cleared cell
+    # (None / NaN / blank) as "no rename" so deleting a new name un-renames
+    # that activity.
     new_map: Dict[str, str] = {}
     for _a, _n in zip(edited["activity"], edited["new name"]):
         if _n is None or (isinstance(_n, float) and pd.isna(_n)):
@@ -2436,20 +2472,19 @@ def _rename_dialog(orig_acts, applied_map, seed_suffix):
             _n = str(_n).strip()
         if _n and _n != str(_a):
             new_map[str(_a)] = _n
+    if submitted:
+        st.session_state["rename_map_applied"] = new_map
+        st.rerun()
     st.caption(
         f"**{len(new_map)}** activit{'y' if len(new_map) == 1 else 'ies'} "
-        "will be renamed.")
+        "currently mapped.")
     st.download_button(
         "⬇ Export mapping (JSON)",
         data=json.dumps(new_map, indent=2, ensure_ascii=False),
         file_name="activity_rename.json", mime="application/json",
         disabled=not new_map, use_container_width=True,
         help="The current map, in the same JSON format the loader accepts.")
-    a1, a2 = st.columns(2)
-    if a1.button("Apply", type="primary", use_container_width=True):
-        st.session_state["rename_map_applied"] = new_map
-        st.rerun()
-    if a2.button("Cancel", use_container_width=True):
+    if st.button("Cancel", use_container_width=True):
         st.rerun()
 
 
