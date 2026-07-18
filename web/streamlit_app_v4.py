@@ -1959,16 +1959,20 @@ with st.sidebar:
         else:
             st.warning("Decomposition has unapplied changes.")
 
-    st.subheader("Performers")
+    # Less-used groups live in collapsed expanders to keep the rail tidy —
+    # rendered on their expander container (calling widgets on it, rather than
+    # a `with` block, keeps the surrounding code flat). They still execute
+    # every run, so their values are always available below.
+    _perf_exp = st.expander("Performers", expanded=False)
     _RES_BUILTIN = ["org:role", "org:resource"]
     _RES_OTHER = "Other..."
-    resource_choice = st.selectbox(
+    resource_choice = _perf_exp.selectbox(
         "Resource attribute",
         options=_RES_BUILTIN + [_RES_OTHER, "(none)"],
         index=0,
     )
     if resource_choice == _RES_OTHER:
-        resource_attribute = st.text_input(
+        resource_attribute = _perf_exp.text_input(
             "Custom attribute(s)",
             value="org:role, org:resource, org:group",
         )
@@ -1977,13 +1981,13 @@ with st.sidebar:
     else:
         resource_attribute = resource_choice
     _min_support_disabled = not resource_attribute.strip()
-    min_support = st.slider(
+    min_support = _perf_exp.slider(
         "Min support", min_value=0.0, max_value=1.0,
         value=0.0, step=0.05,
         disabled=_min_support_disabled,
     )
 
-    st.subheader("Performance overlay")
+    _ovl_exp = st.expander("Performance overlay", expanded=False)
     from pm4py_ucm.algo.performance import (
         EDGE_METRICS as _EDGE_METRICS,
         NODE_METRICS as _NODE_METRICS,
@@ -2006,7 +2010,7 @@ with st.sidebar:
             "frequency", "median_time" if _interval else "sojourn_median_time"]
     if _edge_key not in st.session_state:
         st.session_state[_edge_key] = ["percentage", "frequency"]
-    overlay_nodes = tuple(st.multiselect(
+    overlay_nodes = tuple(_ovl_exp.multiselect(
         "On activities (max 2)",
         options=list(_NODE_METRICS), key=_node_key,
         help=(
@@ -2022,7 +2026,7 @@ with st.sidebar:
             "≤2 shown on the diagram. See docs/metrics.md."
         ),
     )[:2])
-    overlay_edges = tuple(st.multiselect(
+    overlay_edges = tuple(_ovl_exp.multiselect(
         "On edges (max 2)",
         options=list(_EDGE_METRICS), key=_edge_key,
         help=(
@@ -2191,8 +2195,10 @@ decomposition_spec = st.session_state["applied_decomp"]
 # activity/variant selections whose options no longer exist.
 filter_spec: Tuple = ()
 with st.sidebar:
-    st.subheader("Log filters")
-    _filter_on = st.checkbox(
+    # Collapsed by default like the other advanced groups; rendered on the
+    # expander container so the block stays flat.
+    _flt_exp = st.expander("Log filters", expanded=False)
+    _filter_on = _flt_exp.checkbox(
         "Filter the event log", value=False, key="log_filter_on",
         help="Pre-filter the log before mining the model and synthesizing "
              "scenarios: keep the most frequent activities, drop specific "
@@ -2207,10 +2213,10 @@ with st.sidebar:
                 log_bytes, log_kind, csv_columns, file_hash)
         except Exception as _f_exc:
             _f_acts, _f_nvar, _f_dmin, _f_dmax = [], 0, None, None
-            st.warning(f"Could not read filter options: {_f_exc}")
+            _flt_exp.warning(f"Could not read filter options: {_f_exc}")
         _k = file_hash
         if len(_f_acts) > 1:
-            _keepk = st.slider(
+            _keepk = _flt_exp.slider(
                 "Keep the N most frequent activities", 1, len(_f_acts),
                 value=len(_f_acts), key=f"flt_keep::{_k}",
                 help="1 = only the single most frequent activity; the max "
@@ -2218,14 +2224,14 @@ with st.sidebar:
             if _keepk < len(_f_acts):
                 _flt["keep_top_activities"] = int(_keepk)
         if _f_acts:
-            _excl = st.multiselect(
+            _excl = _flt_exp.multiselect(
                 "Exclude activities", options=_f_acts, default=[],
                 key=f"flt_excl::{_k}",
                 help="Remove these activities from every trace before mining.")
             if _excl:
                 _flt["exclude_activities"] = tuple(sorted(_excl))
         if _f_nvar > 1:
-            _topv = st.slider(
+            _topv = _flt_exp.slider(
                 "Keep the K most frequent variants", 1, _f_nvar,
                 value=_f_nvar, key=f"flt_vars::{_k}",
                 help="A variant is a distinct ordered activity sequence; the "
@@ -2234,7 +2240,7 @@ with st.sidebar:
                 _flt["top_variants"] = int(_topv)
         if _f_dmin and _f_dmax and _f_dmin != _f_dmax:
             _lo, _hi = date.fromisoformat(_f_dmin), date.fromisoformat(_f_dmax)
-            _dr = st.date_input(
+            _dr = _flt_exp.date_input(
                 "Time range (cases intersecting)", value=(_lo, _hi),
                 min_value=_lo, max_value=_hi, key=f"flt_time::{_k}",
                 help="Keep cases that overlap this window.")
@@ -2244,7 +2250,7 @@ with st.sidebar:
                 _flt["time_to"] = _dr[1].strftime("%Y-%m-%d 23:59:59")
         filter_spec = tuple(sorted(_flt.items()))
         if filter_spec:
-            st.caption(
+            _flt_exp.caption(
                 f"{len(_flt)} filter(s) active — the model is mined on the "
                 "filtered log.")
 
