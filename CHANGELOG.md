@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-07-17
+
+Refinements to the web front-end: a zoomable pinned model, faster mining
+when settings change, and download files built only when you ask for them.
+
+### Added
+
+- **A pinned model widget is now zoomable.** A model pinned to a dashboard
+  used to be a flat image; it now behaves like the Model view and the
+  session report — scroll to zoom, drag to pan, click a stub to jump to its
+  sub-map — preferring the crisp inline SVG and framing the whole model to
+  the card on open.
+- **One "Prepare downloads" button per view.** The Family and Scenarios
+  views no longer build their download files up front. The per-cell zip,
+  the combined and umbrella `.jucm`, the grid PNG and the interactive
+  report (Family), and the synthesized `.jucm` (Scenarios) are built only
+  when you ask, on a single button — so mining or synthesizing just to look
+  at the result stays fast.
+
+### Changed
+
+- **Changing the decomposition no longer re-mines the process tree.** The
+  Model and Scenarios views share one cache for the parsed log and the
+  inductive tree, keyed on the log and the noise threshold alone — so
+  toggling the decomposition (or, for scenarios, the strategy / loop
+  settings) reuses the tree and rebuilds only the tree→UCM conversion. This
+  dominates the cost on complex logs.
+- **Mining a model family is markedly faster.** The download-only umbrella
+  and combined assemblies — the bulk of a family mine — are deferred to the
+  new "Prepare downloads" button, so browsing the grid no longer pays for
+  artifacts it may never use. The umbrella's variation-point counts moved
+  next to its download, where the umbrella that produces them is built.
+
 ## [0.6.3] — 2026-07-17
 
 Three more ways to draw a widget. Each is a new *rendering* of a figure

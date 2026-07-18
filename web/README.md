@@ -50,18 +50,20 @@ loaded log:
   ![Model view](PM4Py-UCM-Model.png)
 
 - **Scenarios** — concurrency-aware variant clustering + one executable
-  jUCMNav `ScenarioDef` per variant, with downloads for the `.jucm`
-  (carrying the `<scenarioGroups>`), `variants.csv`,
-  `case_variant_map.csv`, and (data-driven mode only)
-  `condition_mining.csv`. Both variant-driven and data-driven OR-fork
-  encodings are exposed.
+  jUCMNav `ScenarioDef` per variant. A single **Prepare downloads** button
+  builds the `.jucm` (carrying the `<scenarioGroups>`), `variants.csv`,
+  `case_variant_map.csv`, and (data-driven mode only) `condition_mining.csv`
+  on request. Both variant-driven and data-driven OR-fork encodings are
+  exposed.
 
   ![Scenarios view](PM4Py-UCM-Scenarios.png)
 
-- **Family** — partition the log by 1–2 case attributes, mine one model
-  per combination, and download the per-cell zip / combined `.jucm` /
-  dynamic-stub umbrella `.jucm` / grid (SVG or PNG) / interactive HTML
-  statistics report.
+- **Family** — partition the log by 1–2 case attributes and mine one model
+  per combination. A single **Prepare downloads** button then builds the
+  per-cell zip / combined `.jucm` / dynamic-stub umbrella `.jucm` / grid PNG
+  / interactive HTML statistics report — download-only artifacts built only
+  when you ask, so mining a family just to browse the grid stays fast.
+  (The grid SVG is already vector-quality on screen.)
 
   ![Family view](PM4Py-UCM-Family.png)
 
@@ -202,7 +204,8 @@ stub opens a picker of its preconditioned plug-ins). Downloads:
 - **Download .jucm** — the model in jUCMNav's native XMI format, ready to
   open in [jUCMNav](https://github.com/JUCMNAV/jUCMNavPlus).
 - **Pin to dashboard** — adds the live model as a widget in the Dashboards
-  view.
+  view. The pinned widget is itself a zoom / pan viewer — scroll to zoom,
+  drag to pan, click a stub to jump to its sub-map — not a flat image.
 
 ### 5 · Scenarios
 
@@ -211,21 +214,26 @@ guarded by `variant_id == v_i`) or *data-driven* (a decision tree per
 outside-loop fork turns case attributes into a business-readable rule;
 needs `scikit-learn`) — and a scenario-group name. The view reports
 headline metrics (variant count, sequence variants, compression, fitness,
-and per-fork condition-mining accuracy in data-driven mode) and offers the
-`.jucm` (with the synthesized `<scenarioGroups>`), `variants.csv`,
-`case_variant_map.csv`, and (data-driven) `condition_mining.csv`. Works on
-flat and decomposed models alike.
+and per-fork condition-mining accuracy in data-driven mode). A single
+**⬇ Prepare downloads** button then builds the `.jucm` (with the synthesized
+`<scenarioGroups>`), `variants.csv`, `case_variant_map.csv`, and
+(data-driven) `condition_mining.csv` — the `.jucm` is serialized only when
+you ask, since this view shows no model on screen. Works on flat and
+decomposed models alike.
 
 ### 6 · Family
 
 Pick **1–2 case attributes**; a **coverage heatmap** previews the cell
 sizes *before* mining, with per-value filters, a `min_cases` floor, and
 quantile `bins` for numeric attributes. Mine to get one model per
-combination, shown as a **2-D SVG grid** (rows × columns). Downloads: the
-per-cell `.zip`, the combined `.jucm` (shared definitions), the dynamic-
-stub **umbrella** `.jucm` (one plug-in per variation point, with
-executable strategies), the grid **SVG or PNG**, and the self-contained
-**interactive HTML statistics report**.
+combination, shown as a **2-D SVG grid** (rows × columns). A single
+**⬇ Prepare downloads** button then builds the download-only artifacts —
+the per-cell `.zip`, the combined `.jucm` (shared definitions), the
+dynamic-stub **umbrella** `.jucm` (one plug-in per variation point, with
+executable strategies), the grid **PNG**, and the self-contained
+**interactive HTML statistics report** — plus the umbrella's variation-point
+counts. They are built only when you ask, so mining a family just to browse
+the grid stays fast; the grid **SVG** is already on screen.
 
 ### 7 · Compare
 

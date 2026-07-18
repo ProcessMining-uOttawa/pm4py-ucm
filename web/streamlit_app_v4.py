@@ -584,26 +584,24 @@ def _synthesize(
     group = _scenarios.synthesize_scenarios(ucm, tree, clustering, **synth_kwargs)
     data_group = group if condition_strategy == "data-driven" else None
 
-    _phase("Writing artifacts...")
-    with tempfile.TemporaryDirectory() as td:
-        td = Path(td)
-        jucm_path = td / "model.jucm"
-        pm4py_ucm.write_ucm(ucm, str(jucm_path))
-        jucm_bytes = jucm_path.read_bytes()
+    # The CSV reports feed the tables shown on this tab, so they are built
+    # now. The .jucm is download-only (this view shows no model), so it is
+    # NOT written here — the mined UCM is returned instead and serialized on
+    # demand by :func:`_scenario_jucm` when the user prepares downloads.
+    _phase("Writing variant reports...")
+    var_buf = io.StringIO()
+    _reports.write_variants_report(clustering, var_buf)
+    variants_csv = var_buf.getvalue().encode("utf-8")
 
-        var_buf = io.StringIO()
-        _reports.write_variants_report(clustering, var_buf)
-        variants_csv = var_buf.getvalue().encode("utf-8")
+    case_buf = io.StringIO()
+    _reports.write_case_variant_map(clustering, case_buf)
+    case_map_csv = case_buf.getvalue().encode("utf-8")
 
-        case_buf = io.StringIO()
-        _reports.write_case_variant_map(clustering, case_buf)
-        case_map_csv = case_buf.getvalue().encode("utf-8")
-
-        condition_csv: Optional[bytes] = None
-        if data_group is not None:
-            cond_buf = io.StringIO()
-            _reports.write_condition_mining_report(data_group, cond_buf)
-            condition_csv = cond_buf.getvalue().encode("utf-8")
+    condition_csv: Optional[bytes] = None
+    if data_group is not None:
+        cond_buf = io.StringIO()
+        _reports.write_condition_mining_report(data_group, cond_buf)
+        condition_csv = cond_buf.getvalue().encode("utf-8")
 
     variants_df = pd.read_csv(io.BytesIO(variants_csv))
     condition_df: Optional[pd.DataFrame] = None
@@ -611,7 +609,7 @@ def _synthesize(
         condition_df = pd.read_csv(io.BytesIO(condition_csv))
 
     return {
-        "jucm": jucm_bytes,
+        "ucm": ucm,
         "variants_csv": variants_csv,
         "case_map_csv": case_map_csv,
         "condition_csv": condition_csv,
@@ -627,6 +625,17 @@ def _synthesize(
         "group_names": [g.name for g in ucm.scenario_groups],
         "n_maps": len(ucm.maps),
     }
+
+
+@st.cache_data(show_spinner=False)
+def _scenario_jucm(synth_fingerprint: str, _ucm) -> bytes:
+    """The synthesized model as ``.jucm`` bytes — download-only, built on
+    request. Cached on ``synth_fingerprint``; ``_ucm`` is the unhashable
+    payload carried on the synthesis result."""
+    with tempfile.TemporaryDirectory() as td:
+        jucm_path = Path(td) / "model.jucm"
+        pm4py_ucm.write_ucm(_ucm, str(jucm_path))
+        return jucm_path.read_bytes()
 
 
 # ---------------------------------------------------------------------------
@@ -827,16 +836,25 @@ def _mine_family(
     _status=None,
     _progress=None,
 ) -> Dict[str, Any]:
-    """Mine the family and produce the notation-independent
-    deliverables in one pass: the per-cell zip, the combined .jucm,
-    and the umbrella .jucm. The mined family object is returned too so
-    the grid PNG can be (re-)rendered per notation WITHOUT re-mining —
-    rendering style must never be part of this function's cache key
-    (see :func:`_render_family_grid`)."""
-    from pm4py_ucm.objects.ucm.exporter.variants.jucm import (
-        serialize_to_string,
-    )
+    """Mine the family and its comparative statistics.
 
+    Only what the Family view *shows* is built here: the per-cell models
+    (for the grid), the cells summary, and the statistics (for the Compare
+    tab and the report — computed now because they need the full log, which
+    is dropped afterwards to keep the cache small). The download-only
+    assemblies — per-cell zip, combined .jucm, umbrella .jucm — are NOT
+    built here; they are produced on demand by :func:`_family_zip_bytes`,
+    :func:`_family_combined_jucm` and :func:`_family_umbrella` when the user
+    asks for downloads, so mining a family just to browse the grid no longer
+    pays for artifacts it may never use.
+
+    The mined family object is returned too so the grid PNG and the
+    assemblies can be (re-)rendered per notation WITHOUT re-mining —
+    rendering style must never be part of this function's cache key
+    (see :func:`_render_family_grid`). ``dedup`` no longer affects this
+    function's output (it only shapes the umbrella), but stays in the
+    signature so it keeps its place in the cache key / mine fingerprint.
+    """
     def _phase(label: str) -> None:
         if _status is not None:
             _status.update(label=label)
@@ -893,38 +911,6 @@ def _mine_family(
                 edge_metrics=list(overlay_edges),
             )
 
-    with tempfile.TemporaryDirectory() as td:
-        td = Path(td)
-
-        _phase("Writing per-cell .jucm files...")
-        zip_path = td / "family.zip"
-        pm4py_ucm.write_ucm_family(family, str(zip_path))
-        zip_bytes = zip_path.read_bytes()
-
-        _phase("Assembling combined model...")
-        combined_bytes = serialize_to_string(
-            pm4py_ucm.assemble_ucm_family(
-                family, mode="combined",
-                node_metrics=list(overlay_nodes),
-                edge_metrics=list(overlay_edges),
-            ),
-        ).encode("utf-8")
-
-        _phase("Assembling umbrella model (dynamic stub)...")
-        umbrella = pm4py_ucm.assemble_ucm_family(
-            family, mode="umbrella", dedup=bool(dedup),
-            node_metrics=list(overlay_nodes),
-            edge_metrics=list(overlay_edges),
-            progress_callback=_progress,
-        )
-        umbrella_bytes = serialize_to_string(umbrella).encode("utf-8")
-        dynamic_stubs = [
-            n for n in umbrella.maps[0].nodes
-            if isinstance(n, pm4py_ucm.UCM.Stub) and n.dynamic
-        ]
-        n_variation_points = len(dynamic_stubs)
-        n_plugins = sum(len(s.bindings) for s in dynamic_stubs)
-
     summary_rows = family.summary_rows()
     summary_df = pd.DataFrame(summary_rows[1:], columns=summary_rows[0])
 
@@ -936,25 +922,97 @@ def _mine_family(
         family, progress_callback=_progress,
     )
 
-    # The statistics above were the last consumer of the full log —
-    # drop it before this result is pickled into the cache so the
-    # cached family stays small (grid rendering only needs the cells).
+    # The statistics above were the last consumer of the full log for the
+    # *display* path — drop it before this result is pickled into the cache
+    # so the cached family stays small (grid rendering only needs the
+    # cells). The download-only assemblies re-attach the log on demand from
+    # the separately-cached ``_load_log_df`` (see :func:`_family_umbrella`).
     family.log_df = None
 
     return {
         "family": family,
         "stats": family_stats,
-        "zip": zip_bytes,
-        "combined_jucm": combined_bytes,
-        "umbrella_jucm": umbrella_bytes,
         "summary_df": summary_df,
         "n_cells": len(family.cells),
         "n_skipped": len(family.skipped_cells),
-        "n_variation_points": n_variation_points,
-        "n_plugins": n_plugins,
         "total_cases": family.total_cases,
         "covered_cases": family.covered_cases,
     }
+
+
+@st.cache_data(show_spinner=False)
+def _family_zip_bytes(mine_fingerprint: str, _family) -> bytes:
+    """Per-cell models as a ``.zip`` — download-only, built on request.
+
+    Needs only the mined cells (no event log), so it works straight off the
+    cached family. Cached on ``mine_fingerprint`` alone; ``_family`` is the
+    unhashable payload (same convention as :func:`_render_family_grid`)."""
+    with tempfile.TemporaryDirectory() as td:
+        zip_path = Path(td) / "family.zip"
+        pm4py_ucm.write_ucm_family(_family, str(zip_path))
+        return zip_path.read_bytes()
+
+
+@st.cache_data(show_spinner=False)
+def _family_combined_jucm(
+    mine_fingerprint: str, _family, _log_df,
+    _overlay_nodes, _overlay_edges,
+) -> bytes:
+    """Combined multi-map ``.jucm`` — download-only, built on request.
+
+    The assembly binds performers, so it needs the event log; that was
+    dropped after mining to keep the cache small, so it is re-attached here
+    from the separately-cached ``_load_log_df`` and detached again, leaving
+    the shared family object as it was found."""
+    from pm4py_ucm.objects.ucm.exporter.variants.jucm import (
+        serialize_to_string,
+    )
+    _family.log_df = _log_df
+    try:
+        combined = pm4py_ucm.assemble_ucm_family(
+            _family, mode="combined",
+            node_metrics=list(_overlay_nodes),
+            edge_metrics=list(_overlay_edges),
+        )
+    finally:
+        _family.log_df = None
+    return serialize_to_string(combined).encode("utf-8")
+
+
+@st.cache_data(show_spinner=False)
+def _family_umbrella(
+    mine_fingerprint: str, _family, _log_df, dedup: bool,
+    _overlay_nodes, _overlay_edges,
+) -> Tuple[bytes, int, int]:
+    """Umbrella (dynamic-stub) ``.jucm`` plus its variation-point / plug-in
+    counts — download-only, built on request.
+
+    Like :func:`_family_combined_jucm`, the assembly binds performers, so
+    the log is re-attached from ``_load_log_df`` and detached again. Returns
+    ``(jucm_bytes, n_variation_points, n_plugins)`` — the counts describe the
+    umbrella and are shown alongside its download. ``dedup`` shapes the merge
+    and is part of the cache key (``mine_fingerprint`` already encodes it, but
+    it is passed explicitly so this stays correct even if that changes)."""
+    from pm4py_ucm.objects.ucm.exporter.variants.jucm import (
+        serialize_to_string,
+    )
+    _family.log_df = _log_df
+    try:
+        umbrella = pm4py_ucm.assemble_ucm_family(
+            _family, mode="umbrella", dedup=bool(dedup),
+            node_metrics=list(_overlay_nodes),
+            edge_metrics=list(_overlay_edges),
+        )
+    finally:
+        _family.log_df = None
+    dynamic_stubs = [
+        n for n in umbrella.maps[0].nodes
+        if isinstance(n, pm4py_ucm.UCM.Stub) and n.dynamic
+    ]
+    n_variation_points = len(dynamic_stubs)
+    n_plugins = sum(len(s.bindings) for s in dynamic_stubs)
+    return (serialize_to_string(umbrella).encode("utf-8"),
+            n_variation_points, n_plugins)
 
 
 #: Widest inline preview embedded in the page. The full-resolution
@@ -2311,41 +2369,63 @@ if _view == "Scenarios":
 
         st.subheader("Downloads")
         stem = Path(log_name).stem
-        d1, d2, d3, d4 = st.columns(4)
         # Filename suffix encodes strategy AND decomposition so a user
         # comparing several runs in a single folder can tell them apart.
         _suffix_bits = [condition_strategy]
         if decomposition_preset != "off":
             _suffix_bits.append(f"decomp_{decomposition_preset}")
         _jucm_suffix = "_".join(_suffix_bits)
-        d1.download_button(
-            "Download .jucm (scenarios)", data=synth["jucm"],
-            file_name=_safe_download_name(
-                f"{stem}_{_jucm_suffix}", ".jucm"
-            ),
-            mime="application/xml",
-        )
-        d2.download_button(
-            "variants.csv", data=synth["variants_csv"],
-            file_name=_safe_download_name(f"{stem}_variants", ".csv"),
-            mime="text/csv",
-        )
-        d3.download_button(
-            "case_variant_map.csv", data=synth["case_map_csv"],
-            file_name=_safe_download_name(f"{stem}_case_variant_map", ".csv"),
-            mime="text/csv",
-        )
-        if synth["condition_csv"] is not None:
-            d4.download_button(
-                "condition_mining.csv",
-                data=synth["condition_csv"],
+        # The .jucm is download-only (this view shows no model), so it is
+        # serialized only when the user asks — on one button, alongside the
+        # variant CSVs. The flag is keyed by the synthesis fingerprint, so a
+        # re-synthesis collapses it again.
+        _synth_dl_fp = st.session_state.get("synth_fp", "")
+        _synth_dl_ready = f"synth_dl::{_synth_dl_fp}"
+        if not st.session_state.get(_synth_dl_ready):
+            st.caption(
+                "Prepares the synthesized `.jucm` and the variant CSVs for "
+                "download. Built only when you ask."
+            )
+            if st.button("⬇ Prepare downloads", type="primary",
+                         key="synth_prep_dl"):
+                st.session_state[_synth_dl_ready] = True
+                st.rerun()
+        else:
+            with st.spinner("Building download files…"):
+                _scn_jucm = _scenario_jucm(_synth_dl_fp, synth["ucm"])
+            d1, d2, d3, d4 = st.columns(4)
+            d1.download_button(
+                "Download .jucm (scenarios)", data=_scn_jucm,
                 file_name=_safe_download_name(
-                    f"{stem}_condition_mining", ".csv"
+                    f"{stem}_{_jucm_suffix}", ".jucm"
                 ),
+                mime="application/xml",
+            )
+            d2.download_button(
+                "variants.csv", data=synth["variants_csv"],
+                file_name=_safe_download_name(f"{stem}_variants", ".csv"),
                 mime="text/csv",
             )
-        else:
-            d4.caption("_condition_mining.csv is only emitted in data-driven mode._")
+            d3.download_button(
+                "case_variant_map.csv", data=synth["case_map_csv"],
+                file_name=_safe_download_name(
+                    f"{stem}_case_variant_map", ".csv"),
+                mime="text/csv",
+            )
+            if synth["condition_csv"] is not None:
+                d4.download_button(
+                    "condition_mining.csv",
+                    data=synth["condition_csv"],
+                    file_name=_safe_download_name(
+                        f"{stem}_condition_mining", ".csv"
+                    ),
+                    mime="text/csv",
+                )
+            else:
+                d4.caption(
+                    "_condition_mining.csv is only emitted in "
+                    "data-driven mode._"
+                )
 
 # ===== Family view ========================================================
 if _view == "Family":
@@ -2581,32 +2661,18 @@ if _view == "Family":
                         "**Mine model family**."
                     )
             else:
-                fm1, fm2, fm3, fm4, fm5 = st.columns(5)
+                # Variation-point / plug-in counts come from the umbrella,
+                # which is now assembled only when the user prepares
+                # downloads — so they are shown there, next to the umbrella
+                # download, rather than in this always-on row.
+                fm1, fm2, fm3 = st.columns(3)
                 fm1.metric("Models mined", fam["n_cells"])
                 fm2.metric("Skipped cells", fam["n_skipped"])
-                fm3.metric(
-                    "Variation points",
-                    fam["n_variation_points"],
-                    help=(
-                        "Dynamic stubs on the umbrella's root map — "
-                        "the places where the cell processes actually "
-                        "diverge. Structure outside the stubs is "
-                        "shared by every combination."
-                    ),
-                )
-                fm4.metric(
-                    "Variant plug-ins", fam["n_plugins"],
-                    help=(
-                        "Total conditioned plug-in maps across the "
-                        "variation points, after merging behaviourally "
-                        "identical variants (when enabled)."
-                    ),
-                )
                 fcov = (
                     fam["covered_cases"] / fam["total_cases"] * 100
                     if fam["total_cases"] else 0.0
                 )
-                fm5.metric("Case coverage", f"{fcov:.1f}%")
+                fm3.metric("Case coverage", f"{fcov:.1f}%")
 
                 # SVG is the default grid view: one 2-D vector matrix,
                 # crisp at any zoom with selectable text, and cheap to
@@ -2667,96 +2733,128 @@ if _view == "Family":
 
                 st.subheader("Downloads")
                 stem = Path(log_name).stem
-                fd1, fd2, fd3, fd4, fd5 = st.columns(5)
-                fd1.download_button(
-                    "Per-cell models (.zip)", data=fam["zip"],
-                    file_name=_safe_download_name(f"{stem}_family", ".zip"),
-                    mime="application/zip",
-                )
-                fd2.download_button(
-                    "Combined .jucm", data=fam["combined_jucm"],
-                    file_name=_safe_download_name(
-                        f"{stem}_family_combined", ".jucm",
-                    ),
-                    mime="application/xml",
-                    help="Every cell model as an independent root map "
-                         "in one file (shared definitions).",
-                )
-                fd3.download_button(
-                    "Umbrella .jucm (dynamic stub)",
-                    data=fam["umbrella_jucm"],
-                    file_name=_safe_download_name(
-                        f"{stem}_family_umbrella", ".jucm",
-                    ),
-                    mime="application/xml",
-                    help="Overarching model: dynamic stub + one "
-                         "conditioned plug-in per (merged) cell + one "
-                         "strategy per combination.",
-                )
-                if grid_svg is not None:
-                    fd4.download_button(
-                        "Grid SVG", data=grid_svg.encode("utf-8"),
-                        file_name=_safe_download_name(
-                            f"{stem}_family_grid_{style}", ".svg",
-                        ),
-                        mime="image/svg+xml",
-                        help="Vector grid — crisp at any zoom, text "
-                             "selectable.",
+                _fam_fp = st.session_state["family_fp"]
+                # The download files (per-cell zip, combined and umbrella
+                # .jucm, grid PNG, interactive report) are the expensive,
+                # download-only artifacts — the umbrella and combined
+                # assemblies alone dominate a family mine. They are built
+                # only when the user asks, on one button, so mining a family
+                # just to browse the grid stays fast. The flag is keyed by
+                # the mine fingerprint, so a re-mine collapses it again.
+                _dl_ready = f"family_dl::{_fam_fp}"
+                if not st.session_state.get(_dl_ready):
+                    st.caption(
+                        "Prepares the model files — per-cell models (.zip), "
+                        "combined and umbrella `.jucm`, the raster grid PNG, "
+                        "and the interactive report — plus the umbrella's "
+                        "variation-point counts. Built only when you ask, so "
+                        "mining stays fast. (The grid SVG above is already "
+                        "vector-quality.)"
                     )
-                elif grid_svg_err:
-                    fd4.caption(f"SVG unavailable: {grid_svg_err}")
-
-                # Grid PNG — a raster download, rendered ONLY when asked
-                # (SVG is the default view). Keyed by family + notation.
-                _grid_png_key = (
-                    f"family_grid_png::{st.session_state['family_fp']}"
-                    f"::{style}"
-                )
-                if grid_png is None and _grid_png_key in st.session_state:
-                    grid_png = st.session_state[_grid_png_key]
-                if grid_png is not None:
-                    fd4.download_button(
-                        "Grid PNG", data=grid_png,
-                        file_name=_safe_download_name(
-                            f"{stem}_family_grid_{style}", ".png",
-                        ),
-                        mime="image/png", key="family_grid_png_download",
-                    )
-                elif fd4.button(
-                    "Prepare Grid PNG…", key="family_grid_png_prepare",
-                    help="Render a raster PNG to download (SVG is the "
-                         "default; PNG is generated only when you ask).",
-                ):
-                    with st.spinner(f"Rendering family grid PNG "
-                                    f"({notation})..."):
-                        _gp, _, _ge = _render_family_grid(
-                            st.session_state["family_fp"], style,
-                            fam["family"],
-                        )
-                    if _gp is not None:
-                        st.session_state[_grid_png_key] = _gp
+                    if st.button("⬇ Prepare downloads", type="primary",
+                                 key="family_prep_dl"):
+                        st.session_state[_dl_ready] = True
                         st.rerun()
-                    else:
-                        fd4.caption(f"PNG unavailable: {_ge}")
-                report_bytes, report_error = _build_family_report(
-                    st.session_state["family_fp"], style,
-                    fam["family"], fam["stats"],
-                )
-                if report_bytes is not None:
-                    fd5.download_button(
-                        "Interactive report (.html)", data=report_bytes,
-                        file_name=_safe_download_name(
-                            f"{stem}_family_report", ".html",
+                else:
+                    with st.spinner("Building download files…"):
+                        _df = _load_log_df(
+                            log_bytes, log_kind, csv_columns, file_hash)
+                        _umb_bytes, _n_vp, _n_pl = _family_umbrella(
+                            _fam_fp, fam["family"], _df, family_dedup,
+                            overlay_nodes, overlay_edges)
+                        _combined = _family_combined_jucm(
+                            _fam_fp, fam["family"], _df,
+                            overlay_nodes, overlay_edges)
+                        _zip = _family_zip_bytes(_fam_fp, fam["family"])
+                        _report_bytes, _report_error = _build_family_report(
+                            _fam_fp, style, fam["family"], fam["stats"])
+                        _grid_png, _, _grid_png_err = _render_family_grid(
+                            _fam_fp, style, fam["family"])
+
+                    # Umbrella-derived metrics, shown here beside the umbrella
+                    # file because that is what they describe (and what was
+                    # just assembled to compute them).
+                    umc1, umc2 = st.columns(2)
+                    umc1.metric(
+                        "Variation points", _n_vp,
+                        help=(
+                            "Dynamic stubs on the umbrella's root map — "
+                            "the places where the cell processes actually "
+                            "diverge. Structure outside the stubs is "
+                            "shared by every combination."
                         ),
-                        mime="text/html",
-                        help="Self-contained statistics report — "
-                             "sortable tables, heatmaps, pairwise "
-                             "process comparison with model images. "
-                             "Opens offline in any browser; see the "
-                             "Compare tab for the interactive version.",
                     )
-                elif report_error:
-                    fd5.caption(f"Report unavailable: {report_error}")
+                    umc2.metric(
+                        "Variant plug-ins", _n_pl,
+                        help=(
+                            "Total conditioned plug-in maps across the "
+                            "variation points, after merging behaviourally "
+                            "identical variants (when enabled)."
+                        ),
+                    )
+
+                    fd1, fd2, fd3, fd4, fd5 = st.columns(5)
+                    fd1.download_button(
+                        "Per-cell models (.zip)", data=_zip,
+                        file_name=_safe_download_name(f"{stem}_family", ".zip"),
+                        mime="application/zip",
+                    )
+                    fd2.download_button(
+                        "Combined .jucm", data=_combined,
+                        file_name=_safe_download_name(
+                            f"{stem}_family_combined", ".jucm",
+                        ),
+                        mime="application/xml",
+                        help="Every cell model as an independent root map "
+                             "in one file (shared definitions).",
+                    )
+                    fd3.download_button(
+                        "Umbrella .jucm (dynamic stub)", data=_umb_bytes,
+                        file_name=_safe_download_name(
+                            f"{stem}_family_umbrella", ".jucm",
+                        ),
+                        mime="application/xml",
+                        help="Overarching model: dynamic stub + one "
+                             "conditioned plug-in per (merged) cell + one "
+                             "strategy per combination.",
+                    )
+                    if grid_svg is not None:
+                        fd4.download_button(
+                            "Grid SVG", data=grid_svg.encode("utf-8"),
+                            file_name=_safe_download_name(
+                                f"{stem}_family_grid_{style}", ".svg",
+                            ),
+                            mime="image/svg+xml",
+                            help="Vector grid — crisp at any zoom, text "
+                                 "selectable.",
+                        )
+                    elif grid_svg_err:
+                        fd4.caption(f"SVG unavailable: {grid_svg_err}")
+                    if _grid_png is not None:
+                        fd4.download_button(
+                            "Grid PNG", data=_grid_png,
+                            file_name=_safe_download_name(
+                                f"{stem}_family_grid_{style}", ".png",
+                            ),
+                            mime="image/png", key="family_grid_png_download",
+                        )
+                    elif _grid_png_err:
+                        fd4.caption(f"PNG unavailable: {_grid_png_err}")
+                    if _report_bytes is not None:
+                        fd5.download_button(
+                            "Interactive report (.html)", data=_report_bytes,
+                            file_name=_safe_download_name(
+                                f"{stem}_family_report", ".html",
+                            ),
+                            mime="text/html",
+                            help="Self-contained statistics report — "
+                                 "sortable tables, heatmaps, pairwise "
+                                 "process comparison with model images. "
+                                 "Opens offline in any browser; see the "
+                                 "Compare tab for the interactive version.",
+                        )
+                    elif _report_error:
+                        fd5.caption(f"Report unavailable: {_report_error}")
 
 # ===== Compare view =======================================================
 if _view == "Compare":
