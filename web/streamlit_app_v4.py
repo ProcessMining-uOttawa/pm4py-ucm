@@ -701,11 +701,15 @@ def _apply_log_filters(log, filter_spec):
     empty, which is a no-op) so it can be part of a ``@st.cache_data`` key.
     Each filter is a standard pm4py log filter, applied in turn:
 
-    * ``keep_top_activities`` (int) — keep only the N most frequent activities;
+    * ``activity_ranks`` ``(lo, hi)`` — keep activities whose 1-based
+      frequency rank falls in ``[lo, hi]`` (rank 1 = most frequent), so a
+      range slider can keep the most, the least, or a middle band;
     * ``exclude_activities`` (tuple) — drop these activity names;
-    * ``top_variants`` (int) — keep only the K most frequent trace variants;
-    * ``time_from`` / ``time_to`` (``"%Y-%m-%d %H:%M:%S"`` strings) — keep
-      cases intersecting the window.
+    * ``variant_ranks`` ``(lo, hi)`` — keep trace variants ranked in
+      ``[lo, hi]`` by frequency;
+    * ``time_from`` / ``time_to`` (``"%Y-%m-%d %H:%M:%S"`` strings) +
+      ``time_mode`` (``"traces_intersecting"`` / ``"traces_contained"``) —
+      keep cases in the window.
 
     Activity filters remove the matching events from every trace (the process
     then flows around them); the model is re-mined on the filtered log.
@@ -715,45 +719,55 @@ def _apply_log_filters(log, filter_spec):
     spec = dict(filter_spec)
     df = log if isinstance(log, pd.DataFrame) else pm4py.convert_to_dataframe(log)
 
-    keep_k = spec.get("keep_top_activities")
+    ranks = spec.get("activity_ranks")
     exclude = spec.get("exclude_activities")
-    if keep_k is not None or exclude:
-        counts = df["concept:name"].value_counts()
-        keep = set(counts.index[:keep_k]) if keep_k is not None \
-            else set(counts.index)
+    if ranks or exclude:
+        counts = df["concept:name"].value_counts()  # descending frequency
+        keep = set(counts.index)
+        if ranks:
+            lo, hi = ranks
+            keep = set(counts.index[lo - 1:hi])
         keep -= set(exclude or ())
         df = pm4py.filter_event_attribute_values(
             df, "concept:name", keep, level="event", retain=True)
 
-    top_v = spec.get("top_variants")
-    if top_v is not None:
-        df = pm4py.filter_variants_top_k(df, int(top_v))
+    vranks = spec.get("variant_ranks")
+    if vranks:
+        lo, hi = vranks
+        ranked = sorted(pm4py.get_variants(df).items(),
+                        key=lambda kv: kv[1], reverse=True)
+        selected = [k for k, _ in ranked[lo - 1:hi]]
+        if selected:
+            df = pm4py.filter_variants(df, selected, retain=True)
 
     t_from, t_to = spec.get("time_from"), spec.get("time_to")
     if t_from or t_to:
+        mode = spec.get("time_mode", "traces_intersecting")
         ts = pd.to_datetime(df["time:timestamp"], utc=True, errors="coerce")
         lo = t_from or ts.min().strftime("%Y-%m-%d %H:%M:%S")
         hi = t_to or ts.max().strftime("%Y-%m-%d %H:%M:%S")
-        df = pm4py.filter_time_range(df, lo, hi, mode="traces_intersecting")
+        df = pm4py.filter_time_range(df, lo, hi, mode=mode)
 
     return df
 
 
 def _filter_summary(filter_spec) -> str:
     """A short human label for the active log filters (empty when none) —
-    e.g. ``"top 10 activities, −2 activities, top 20 variants,
-    2022-09-09→2023-01-10"``. Used to name a pinned filtered model."""
+    e.g. ``"activities 5–15, −2 activities, variants 1–20, 2022-09→2023-01"``.
+    Used to name a pinned filtered model."""
     if not filter_spec:
         return ""
     spec = dict(filter_spec)
     parts = []
-    if "keep_top_activities" in spec:
-        parts.append(f"top {spec['keep_top_activities']} activities")
+    if "activity_ranks" in spec:
+        lo, hi = spec["activity_ranks"]
+        parts.append(f"activities {lo}–{hi}")
     if "exclude_activities" in spec:
         n = len(spec["exclude_activities"])
         parts.append(f"−{n} activit{'y' if n == 1 else 'ies'}")
-    if "top_variants" in spec:
-        parts.append(f"top {spec['top_variants']} variants")
+    if "variant_ranks" in spec:
+        lo, hi = spec["variant_ranks"]
+        parts.append(f"variants {lo}–{hi}")
     if "time_from" in spec or "time_to" in spec:
         lo = (spec.get("time_from") or "")[:10]
         hi = (spec.get("time_to") or "")[:10]
@@ -765,8 +779,9 @@ def _filter_summary(filter_spec) -> str:
 def _log_filter_options(log_bytes: bytes, log_kind: str, csv_columns,
                         _file_hash: str):
     """Choices for the log-filter UI, from the **unfiltered** log: the
-    activity names by descending frequency, the trace-variant count, and the
-    date span (ISO ``YYYY-MM-DD`` strings, or ``None``). Cached; only read
+    activity names by descending frequency, the trace-variant count, the date
+    span (ISO ``YYYY-MM-DD`` strings, or ``None``), and the total case and
+    event counts (for the Model view's now/total metrics). Cached; only read
     when filtering is enabled."""
     df = _load_log_df(log_bytes, log_kind, csv_columns, _file_hash)
     acts = list(df["concept:name"].value_counts().index)
@@ -778,7 +793,8 @@ def _log_filter_options(log_bytes: bytes, log_kind: str, csv_columns,
     dmax = ts.max()
     return (acts, n_variants,
             None if pd.isna(dmin) else dmin.date().isoformat(),
-            None if pd.isna(dmax) else dmax.date().isoformat())
+            None if pd.isna(dmax) else dmax.date().isoformat(),
+            int(df["case:concept:name"].nunique()), int(len(df)))
 
 
 # ---------------------------------------------------------------------------
@@ -2194,6 +2210,10 @@ decomposition_spec = st.session_state["applied_decomp"]
 # are keyed per log so a new log starts unfiltered rather than carrying stale
 # activity/variant selections whose options no longer exist.
 filter_spec: Tuple = ()
+# (n_activities, n_cases, n_events) of the FULL log, for the Model view's
+# now/total metrics — only computed when filtering is on (the log is parsed
+# for the filter options anyway); None means "no filter, so now == total".
+_filter_totals = None
 with st.sidebar:
     # Collapsed by default like the other advanced groups; rendered on the
     # expander container so the block stays flat.
@@ -2201,53 +2221,71 @@ with st.sidebar:
     _filter_on = _flt_exp.checkbox(
         "Filter the event log", value=False, key="log_filter_on",
         help="Pre-filter the log before mining the model and synthesizing "
-             "scenarios: keep the most frequent activities, drop specific "
-             "ones, keep the most frequent trace variants, or restrict to a "
-             "time window. Changing a filter re-mines. (The Family and "
-             "Compare views use the full log for now.)",
+             "scenarios. The range sliders have two handles — keep the most "
+             "or the least frequent, or a band in the middle. Changing a "
+             "filter re-mines. (The Family and Compare views use the full "
+             "log for now.)",
     )
     if _filter_on:
         _flt: Dict[str, Any] = {}
         try:
-            _f_acts, _f_nvar, _f_dmin, _f_dmax = _log_filter_options(
+            (_f_acts, _f_nvar, _f_dmin, _f_dmax,
+             _f_ncases, _f_nev) = _log_filter_options(
                 log_bytes, log_kind, csv_columns, file_hash)
         except Exception as _f_exc:
-            _f_acts, _f_nvar, _f_dmin, _f_dmax = [], 0, None, None
+            (_f_acts, _f_nvar, _f_dmin, _f_dmax,
+             _f_ncases, _f_nev) = [], 0, None, None, 0, 0
             _flt_exp.warning(f"Could not read filter options: {_f_exc}")
+        _filter_totals = (len(_f_acts), _f_ncases, _f_nev)
         _k = file_hash
+        # Activities by frequency rank — a two-handled range slider.
         if len(_f_acts) > 1:
-            _keepk = _flt_exp.slider(
-                "Keep the N most frequent activities", 1, len(_f_acts),
-                value=len(_f_acts), key=f"flt_keep::{_k}",
-                help="1 = only the single most frequent activity; the max "
-                     "keeps them all (no filter).")
-            if _keepk < len(_f_acts):
-                _flt["keep_top_activities"] = int(_keepk)
+            _na = len(_f_acts)
+            _ar = _flt_exp.slider(
+                "Activities by frequency rank", 1, _na, value=(1, _na),
+                key=f"flt_arank::{_k}",
+                help="Rank 1 = most frequent. Drag the ends to keep the most "
+                     "frequent, the least frequent, or a middle band; the "
+                     "full range keeps them all.")
+            if tuple(_ar) != (1, _na):
+                _flt["activity_ranks"] = (int(_ar[0]), int(_ar[1]))
         if _f_acts:
             _excl = _flt_exp.multiselect(
                 "Exclude activities", options=_f_acts, default=[],
                 key=f"flt_excl::{_k}",
-                help="Remove these activities from every trace before mining.")
+                help="Also drop these specific activities from every trace.")
             if _excl:
                 _flt["exclude_activities"] = tuple(sorted(_excl))
+        # Variants by frequency rank — a two-handled range slider.
         if _f_nvar > 1:
-            _topv = _flt_exp.slider(
-                "Keep the K most frequent variants", 1, _f_nvar,
-                value=_f_nvar, key=f"flt_vars::{_k}",
-                help="A variant is a distinct ordered activity sequence; the "
-                     "max keeps them all (no filter).")
-            if _topv < _f_nvar:
-                _flt["top_variants"] = int(_topv)
+            _vr = _flt_exp.slider(
+                "Variants by frequency rank", 1, _f_nvar, value=(1, _f_nvar),
+                key=f"flt_vrank::{_k}",
+                help="A variant is a distinct ordered activity sequence; "
+                     "rank 1 = most frequent. The full range keeps them all.")
+            if tuple(_vr) != (1, _f_nvar):
+                _flt["variant_ranks"] = (int(_vr[0]), int(_vr[1]))
+        # Date range — a two-handled slider over the log's own span (fewer
+        # clicks than two calendars).
         if _f_dmin and _f_dmax and _f_dmin != _f_dmax:
             _lo, _hi = date.fromisoformat(_f_dmin), date.fromisoformat(_f_dmax)
-            _dr = _flt_exp.date_input(
-                "Time range (cases intersecting)", value=(_lo, _hi),
-                min_value=_lo, max_value=_hi, key=f"flt_time::{_k}",
-                help="Keep cases that overlap this window.")
+            _dr = _flt_exp.slider(
+                "Date range", min_value=_lo, max_value=_hi, value=(_lo, _hi),
+                key=f"flt_date::{_k}",
+                help="Drag the ends to restrict the time window.")
             if (isinstance(_dr, (list, tuple)) and len(_dr) == 2
                     and (_dr[0] != _lo or _dr[1] != _hi)):
                 _flt["time_from"] = _dr[0].strftime("%Y-%m-%d 00:00:00")
                 _flt["time_to"] = _dr[1].strftime("%Y-%m-%d 23:59:59")
+                _tmode = _flt_exp.radio(
+                    "Cases in the window", ["intersecting", "fully inside"],
+                    horizontal=True, key=f"flt_tmode::{_k}",
+                    help="'intersecting' keeps cases that overlap the window; "
+                         "'fully inside' keeps only cases that start and end "
+                         "within it.")
+                _flt["time_mode"] = (
+                    "traces_contained" if _tmode == "fully inside"
+                    else "traces_intersecting")
         filter_spec = tuple(sorted(_flt.items()))
         if filter_spec:
             _flt_exp.caption(
@@ -2360,10 +2398,21 @@ if _view == "Model":
         f"{_version_text} — by [Daniel Amyot](https://damyot.github.io/), "
         "University of Ottawa, Canada."
     )
+    # Activities / cases / events read "selected / total" when a log filter
+    # is active (so the effect of a filter is visible at a glance), and just
+    # the count otherwise. Notation and decomposition are in the diagram
+    # caption below, so the row now spends its width on these counts.
+    def _now_total(now: int, idx: int) -> str:
+        if _filter_totals is not None:
+            return f"{now:,} / {_filter_totals[idx]:,}"
+        return f"{now:,}"
+
     m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Activities", f"{mined['n_activities']:,}")
-    m2.metric("Notation", notation)
-    m3.metric("Decomposition", decomposition_preset)
+    m1.metric(
+        "Activities", _now_total(mined["n_activities"], 0),
+        help="Selected / total when a log filter is active, else the count.")
+    m2.metric("Cases", _now_total(mined["n_cases"], 1))
+    m3.metric("Events", _now_total(mined["n_events"], 2))
     m4.metric("Maps", mined["n_maps"])
     m5.metric("Nodes", mined["n_nodes"])
 
@@ -2862,21 +2911,9 @@ if _view == "Family":
             pm3.metric("Case coverage", f"{cov:.1f}%")
             pm4.metric("Dropped cases", preview["dropped_cases"])
 
-            family_dedup = st.checkbox(
-                "Merge behaviourally identical plug-ins (umbrella)",
-                value=False,
-                help=(
-                    "Combinations whose mined process trees are "
-                    "identical share one plug-in map; its selection "
-                    "condition becomes the simplified OR of the "
-                    "member conditions. The shared plug-ins show "
-                    "which sub-populations follow the same process. "
-                    "Off by default — it only shapes the umbrella `.jucm` "
-                    "download (built on request), and the merge costs extra "
-                    "CPU. Toggling it does not re-mine the family."
-                ),
-            )
-
+            # The "merge identical plug-ins" option only shapes the umbrella
+            # .jucm download, so it lives down in the Prepare-downloads
+            # section (near the buttons it affects), not here before mining.
             run_family = st.button(
                 "Mine model family", type="primary", key="run_family",
                 disabled=preview["n_cells"] == 0,
@@ -3050,6 +3087,18 @@ if _view == "Family":
                         st.session_state[_dl_ready] = True
                         st.rerun()
                 else:
+                    # Shapes only the umbrella .jucm, so it sits here by the
+                    # downloads. Keyed on the mine fingerprint (per family).
+                    # Toggling it rebuilds just the umbrella (which caches on
+                    # it), never the family.
+                    family_dedup = st.checkbox(
+                        "Merge behaviourally identical plug-ins (umbrella)",
+                        value=False, key=f"family_dedup::{_fam_fp}",
+                        help="Combinations whose mined process trees are "
+                             "identical share one plug-in map, its condition "
+                             "the simplified OR of the members'. Off by "
+                             "default — it only shapes the umbrella `.jucm` "
+                             "below and the merge costs extra CPU.")
                     with st.spinner("Building download files…"):
                         _df = _load_log_df(
                             log_bytes, log_kind, csv_columns, file_hash)
