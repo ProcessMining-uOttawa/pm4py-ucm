@@ -780,21 +780,57 @@ def _log_filter_options(log_bytes: bytes, log_kind: str, csv_columns,
                         _file_hash: str):
     """Choices for the log-filter UI, from the **unfiltered** log: the
     activity names by descending frequency, the trace-variant count, the date
-    span (ISO ``YYYY-MM-DD`` strings, or ``None``), and the total case and
-    event counts (for the Model view's now/total metrics). Cached; only read
-    when filtering is enabled."""
+    span (ISO ``YYYY-MM-DD`` strings, or ``None``), the total case and event
+    counts (for the Model view's now/total metrics), and the *cumulative case
+    coverage* per variant rank — ``variant_cum[r - 1]`` is the percentage of
+    cases covered by the ``r`` most-frequent variants (so the variant slider
+    can be driven by, and kept in sync with, a coverage-percentage box).
+    Cached; only read when filtering is enabled."""
     df = _load_log_df(log_bytes, log_kind, csv_columns, _file_hash)
     acts = list(df["concept:name"].value_counts().index)
     ordered = df.sort_values(["case:concept:name", "time:timestamp"])
     variants = ordered.groupby("case:concept:name")["concept:name"].agg(tuple)
     n_variants = int(variants.nunique())
+    # Case counts per variant, descending (rank 1 = most frequent) → the
+    # cumulative share of cases covered by the top-r variants. Tie order does
+    # not matter: the cumulative sum at each rank is the same regardless.
+    _vsizes = variants.value_counts()  # descending
+    _total_cases = int(_vsizes.sum()) or 1
+    variant_cum = tuple(
+        round(c / _total_cases * 100.0, 1)
+        for c in _vsizes.cumsum().tolist())
     ts = pd.to_datetime(df["time:timestamp"], utc=True, errors="coerce")
     dmin = ts.min()
     dmax = ts.max()
     return (acts, n_variants,
             None if pd.isna(dmin) else dmin.date().isoformat(),
             None if pd.isna(dmax) else dmax.date().isoformat(),
-            int(df["case:concept:name"].nunique()), int(len(df)))
+            int(df["case:concept:name"].nunique()), int(len(df)),
+            variant_cum)
+
+
+@st.cache_data(show_spinner=False)
+def _filtered_log_export(log_bytes: bytes, log_kind: str, csv_columns,
+                         filter_spec: Tuple, _file_hash: str):
+    """Serialize the (optionally filtered) event log as ``(xes_bytes,
+    csv_bytes, n_cases, n_events)`` for download.
+
+    Applies the same :func:`_apply_log_filters` transform used before mining,
+    so the exported log is exactly the one the Model view mined from. Cached
+    on the log + filter, and built only when the user asks (XES serialization
+    is not free on a large log)."""
+    df = _load_log_df(log_bytes, log_kind, csv_columns, _file_hash)
+    if filter_spec:
+        df = _apply_log_filters(df, filter_spec)
+        if not isinstance(df, pd.DataFrame):
+            df = pm4py.convert_to_dataframe(df)
+    csv_bytes = df.to_csv(index=False).encode("utf-8")
+    with tempfile.TemporaryDirectory() as td:
+        xes_path = Path(td) / "log.xes"
+        pm4py.write_xes(df, str(xes_path), case_id_key="case:concept:name")
+        xes_bytes = xes_path.read_bytes()
+    n_cases = int(df["case:concept:name"].nunique())
+    return xes_bytes, csv_bytes, n_cases, int(len(df))
 
 
 # ---------------------------------------------------------------------------
@@ -2230,11 +2266,11 @@ with st.sidebar:
         _flt: Dict[str, Any] = {}
         try:
             (_f_acts, _f_nvar, _f_dmin, _f_dmax,
-             _f_ncases, _f_nev) = _log_filter_options(
+             _f_ncases, _f_nev, _f_vcum) = _log_filter_options(
                 log_bytes, log_kind, csv_columns, file_hash)
         except Exception as _f_exc:
             (_f_acts, _f_nvar, _f_dmin, _f_dmax,
-             _f_ncases, _f_nev) = [], 0, None, None, 0, 0
+             _f_ncases, _f_nev, _f_vcum) = [], 0, None, None, 0, 0, ()
             _flt_exp.warning(f"Could not read filter options: {_f_exc}")
         _filter_totals = (len(_f_acts), _f_ncases, _f_nev)
         _k = file_hash
@@ -2251,18 +2287,69 @@ with st.sidebar:
                 _flt["activity_ranks"] = (int(_ar[0]), int(_ar[1]))
         if _f_acts:
             _excl = _flt_exp.multiselect(
-                "Exclude activities", options=_f_acts, default=[],
+                "Exclude activities", options=sorted(_f_acts), default=[],
                 key=f"flt_excl::{_k}",
-                help="Also drop these specific activities from every trace.")
+                help="Also drop these specific activities from every trace. "
+                     "Sorted alphabetically.")
             if _excl:
                 _flt["exclude_activities"] = tuple(sorted(_excl))
-        # Variants by frequency rank — a two-handled range slider.
+        # Variants by frequency rank — a two-handled range slider, kept in
+        # sync with a "case coverage %" box. The box is only meaningful when
+        # the low handle is at rank 1 (i.e. we are keeping the *top* variants):
+        # it shows the share of CASES covered by variants 1…hi, editing it
+        # snaps the slider so the top variants cover at least that share, and
+        # moving the slider updates it. When the low handle leaves rank 1 the
+        # box is blanked (a middle/least band has no "top coverage").
         if _f_nvar > 1:
+            _vrank_key = f"flt_vrank::{_k}"
+            _vpct_key = f"flt_vpct::{_k}"
+            # Both widgets are controlled purely via session_state (no
+            # ``value=`` passed) so the callbacks can drive either one without
+            # tripping Streamlit's "default value but also set via Session
+            # State" warning — passing ``value=`` *and* mutating session_state
+            # for the same key conflicts, and the mutation is then ignored
+            # (which silently broke the slider→box direction). Seeded once per
+            # log, keyed by file_hash so a new log starts fresh. The box is
+            # seeded to ``None`` (blank + nullable float, its type inferred
+            # from the float min/max/step) so it can be blanked when the low
+            # handle leaves rank 1.
+            if _vrank_key not in st.session_state:
+                st.session_state[_vrank_key] = (1, _f_nvar)
+            if _vpct_key not in st.session_state:
+                st.session_state[_vpct_key] = None
+
+            def _pct_to_hi(_pct: float) -> int:
+                """Smallest 1-based rank whose cumulative coverage ≥ pct."""
+                for _i, _c in enumerate(_f_vcum):
+                    if _c >= _pct:
+                        return _i + 1
+                return _f_nvar
+
+            def _sync_pct_from_slider():
+                _lo, _hi = st.session_state[_vrank_key]
+                st.session_state[_vpct_key] = (
+                    _f_vcum[_hi - 1] if (_lo == 1 and _f_vcum) else None)
+
+            def _sync_slider_from_pct():
+                _p = st.session_state.get(_vpct_key)
+                if _p is None:
+                    return
+                st.session_state[_vrank_key] = (1, _pct_to_hi(float(_p)))
+
             _vr = _flt_exp.slider(
-                "Variants by frequency rank", 1, _f_nvar, value=(1, _f_nvar),
-                key=f"flt_vrank::{_k}",
+                "Variants by frequency rank", 1, _f_nvar,
+                key=_vrank_key, on_change=_sync_pct_from_slider,
                 help="A variant is a distinct ordered activity sequence; "
                      "rank 1 = most frequent. The full range keeps them all.")
+            _flt_exp.number_input(
+                "…or top variants by case coverage (%)",
+                min_value=0.0, max_value=100.0, step=0.5,
+                key=_vpct_key, on_change=_sync_slider_from_pct,
+                help="The share of CASES covered by the most-frequent "
+                     "variants (1…N). Typing a percentage snaps the slider so "
+                     "those top variants cover at least that share; moving the "
+                     "slider updates this. Blank when the low handle is not at "
+                     "rank 1.")
             if tuple(_vr) != (1, _f_nvar):
                 _flt["variant_ranks"] = (int(_vr[0]), int(_vr[1]))
         # Date range — a two-handled slider over the log's own span (fewer
@@ -2534,6 +2621,46 @@ if _view == "Model":
             }
             st.session_state["goto_view"] = "Dashboards"
             st.rerun()
+
+    # ---- Event-log export (XES / CSV) --------------------------------------
+    # The exact log the model was mined from — the FILTERED log when a filter
+    # is active, otherwise the full log — as its own downloadable asset in
+    # both XES and CSV. Built only on demand (XES serialization is not free on
+    # a large log), keyed on the log + filter so a re-filter re-arms it.
+    _log_filtered = bool(filter_spec)
+    st.markdown("**Event-log export**")
+    _logexp_caption = (
+        ("The filtered log " if _log_filtered else "The full log ")
+        + "the model was mined from, as XES or CSV.")
+    if _log_filtered:
+        _logexp_caption += f" Active filter: {_filter_summary(filter_spec)}."
+    st.caption(_logexp_caption)
+    _logexp_key = f"logexp::{file_hash}::{_arg_fingerprint(filter_spec)}"
+    if _logexp_key not in st.session_state:
+        if st.button("⬇ Prepare log export", key="logexp_prepare",
+                     help="Serialize the (filtered) log to XES and CSV. Built "
+                          "only when you ask."):
+            with st.spinner("Serializing the event log…"):
+                try:
+                    st.session_state[_logexp_key] = _filtered_log_export(
+                        log_bytes, log_kind, csv_columns, filter_spec,
+                        file_hash)
+                except Exception as _lx_exc:
+                    st.warning(f"Log export failed: {_lx_exc}")
+            st.rerun()
+    else:
+        _xes_b, _csv_b, _lx_nc, _lx_ne = st.session_state[_logexp_key]
+        _lx_stem = Path(log_name).stem + ("_filtered" if _log_filtered else "")
+        st.caption(f"{_lx_nc:,} cases · {_lx_ne:,} events.")
+        lx1, lx2 = st.columns(2)
+        lx1.download_button(
+            "Download XES", data=_xes_b,
+            file_name=_safe_download_name(_lx_stem, ".xes"),
+            mime="application/xml", key="logexp_xes")
+        lx2.download_button(
+            "Download CSV", data=_csv_b,
+            file_name=_safe_download_name(_lx_stem, ".csv"),
+            mime="text/csv", key="logexp_csv")
 
 # ===== Scenarios view =====================================================
 if _view == "Scenarios":
