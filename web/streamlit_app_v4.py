@@ -272,7 +272,7 @@ def _log_and_tree(
                 renames[resource_col] = "org:resource"
             if renames:
                 df = df.rename(columns=renames)
-            log = df
+            log = _coerce_str_object(df)
         else:
             is_zip = (
                 log_kind == "zip"
@@ -462,6 +462,25 @@ def _render_png(ucm, style: str, out_path: str) -> str:
 # Scenario synthesis (cached)
 # ---------------------------------------------------------------------------
 
+def _coerce_str_object(df):
+    """Coerce pandas ``string`` (arrow-backed) columns to plain ``object``.
+
+    ``pm4py.format_dataframe`` gives a CSV import's ``concept:name`` /
+    ``case:concept:name`` the pandas ``StringDtype`` (arrow-backed), whereas
+    ``pm4py.read_xes`` yields plain ``object`` strings. On an arrow-string
+    column, ``groupby(...).agg(tuple)`` produces an arrow ``list<string>``
+    whose ``.nunique()`` / ``.value_counts()`` raises
+    ``ArrowNotImplementedError: Function 'unique' has no kernel ...`` — which
+    broke the variant filter options for *every* CSV log. Coercing to object
+    makes CSV logs behave exactly like XES logs everywhere (variant options,
+    filters, export, mining)."""
+    if isinstance(df, pd.DataFrame):
+        cols = list(df.select_dtypes(include=["string"]).columns)
+        if cols:
+            df = df.astype({c: object for c in cols})
+    return df
+
+
 def _read_log_for_scenarios(log_bytes: bytes, log_kind: str, csv_columns):
     """Materialise the log as a DataFrame / EventLog, without mining.
 
@@ -485,7 +504,7 @@ def _read_log_for_scenarios(log_bytes: bytes, log_kind: str, csv_columns):
             renames[resource_col] = "org:resource"
         if renames:
             df = df.rename(columns=renames)
-        return df
+        return _coerce_str_object(df)
 
     is_zip = (
         log_kind == "zip"
@@ -778,35 +797,53 @@ def _filter_summary(filter_spec) -> str:
 @st.cache_data(show_spinner=False)
 def _log_filter_options(log_bytes: bytes, log_kind: str, csv_columns,
                         _file_hash: str):
-    """Choices for the log-filter UI, from the **unfiltered** log: the
-    activity names by descending frequency, the trace-variant count, the date
-    span (ISO ``YYYY-MM-DD`` strings, or ``None``), the total case and event
-    counts (for the Model view's now/total metrics), and the *cumulative case
-    coverage* per variant rank — ``variant_cum[r - 1]`` is the percentage of
-    cases covered by the ``r`` most-frequent variants (so the variant slider
-    can be driven by, and kept in sync with, a coverage-percentage box).
-    Cached; only read when filtering is enabled."""
+    """Upstream choices for the log-filter UI, from the **unfiltered** log:
+    the activity names by descending frequency, the date span (ISO
+    ``YYYY-MM-DD`` strings, or ``None``), and the total case and event counts
+    (for the Model view's now/total metrics). The variant count and per-rank
+    case coverage are *not* here — they depend on the activity + date filters,
+    so they are recomputed by :func:`_variant_filter_options`. Cached; only
+    read when filtering is enabled."""
     df = _load_log_df(log_bytes, log_kind, csv_columns, _file_hash)
     acts = list(df["concept:name"].value_counts().index)
-    ordered = df.sort_values(["case:concept:name", "time:timestamp"])
-    variants = ordered.groupby("case:concept:name")["concept:name"].agg(tuple)
-    n_variants = int(variants.nunique())
-    # Case counts per variant, descending (rank 1 = most frequent) → the
-    # cumulative share of cases covered by the top-r variants. Tie order does
-    # not matter: the cumulative sum at each rank is the same regardless.
-    _vsizes = variants.value_counts()  # descending
-    _total_cases = int(_vsizes.sum()) or 1
-    variant_cum = tuple(
-        round(c / _total_cases * 100.0, 1)
-        for c in _vsizes.cumsum().tolist())
     ts = pd.to_datetime(df["time:timestamp"], utc=True, errors="coerce")
     dmin = ts.min()
     dmax = ts.max()
-    return (acts, n_variants,
+    return (acts,
             None if pd.isna(dmin) else dmin.date().isoformat(),
             None if pd.isna(dmax) else dmax.date().isoformat(),
-            int(df["case:concept:name"].nunique()), int(len(df)),
-            variant_cum)
+            int(df["case:concept:name"].nunique()), int(len(df)))
+
+
+@st.cache_data(show_spinner=False)
+def _variant_filter_options(log_bytes: bytes, log_kind: str, csv_columns,
+                            partial_spec: Tuple, _file_hash: str):
+    """The variant count and per-rank cumulative case coverage, computed on
+    the log **after** the activity + date filters in ``partial_spec`` are
+    applied — so both reflect the current upstream filtering (excluding an
+    activity or narrowing the date range changes which traces, hence which
+    variants, exist). ``partial_spec`` is the hashable filter tuple with any
+    ``variant_ranks`` removed.
+
+    Returns ``(n_variants, variant_cum)`` where ``variant_cum[r - 1]`` is the
+    percentage of (filtered) cases covered by the ``r`` most-frequent
+    variants. Tie order does not matter: the cumulative sum at each rank is
+    the same regardless."""
+    df = _load_log_df(log_bytes, log_kind, csv_columns, _file_hash)
+    if partial_spec:
+        df = _apply_log_filters(df, partial_spec)
+        if not isinstance(df, pd.DataFrame):
+            df = pm4py.convert_to_dataframe(df)
+    if df is None or len(df) == 0:
+        return 0, ()
+    ordered = df.sort_values(["case:concept:name", "time:timestamp"])
+    variants = ordered.groupby("case:concept:name")["concept:name"].agg(tuple)
+    vsizes = variants.value_counts()  # descending
+    total_cases = int(vsizes.sum()) or 1
+    variant_cum = tuple(
+        round(c / total_cases * 100.0, 1)
+        for c in vsizes.cumsum().tolist())
+    return int(vsizes.size), variant_cum
 
 
 @st.cache_data(show_spinner=False)
@@ -2265,12 +2302,12 @@ with st.sidebar:
     if _filter_on:
         _flt: Dict[str, Any] = {}
         try:
-            (_f_acts, _f_nvar, _f_dmin, _f_dmax,
-             _f_ncases, _f_nev, _f_vcum) = _log_filter_options(
+            (_f_acts, _f_dmin, _f_dmax,
+             _f_ncases, _f_nev) = _log_filter_options(
                 log_bytes, log_kind, csv_columns, file_hash)
         except Exception as _f_exc:
-            (_f_acts, _f_nvar, _f_dmin, _f_dmax,
-             _f_ncases, _f_nev, _f_vcum) = [], 0, None, None, 0, 0, ()
+            (_f_acts, _f_dmin, _f_dmax,
+             _f_ncases, _f_nev) = [], None, None, 0, 0
             _flt_exp.warning(f"Could not read filter options: {_f_exc}")
         _filter_totals = (len(_f_acts), _f_ncases, _f_nev)
         _k = file_hash
@@ -2293,26 +2330,64 @@ with st.sidebar:
                      "Sorted alphabetically.")
             if _excl:
                 _flt["exclude_activities"] = tuple(sorted(_excl))
-        # Variants by frequency rank — a two-handled range slider, kept in
-        # sync with a "case coverage %" box. The box is only meaningful when
-        # the low handle is at rank 1 (i.e. we are keeping the *top* variants):
-        # it shows the share of CASES covered by variants 1…hi, editing it
-        # snaps the slider so the top variants cover at least that share, and
-        # moving the slider updates it. When the low handle leaves rank 1 the
-        # box is blanked (a middle/least band has no "top coverage").
+        # Date range — a two-handled slider over the log's own span (fewer
+        # clicks than two calendars). Placed before the variant filter so the
+        # variant count/coverage below can be recomputed on the date-narrowed
+        # log.
+        if _f_dmin and _f_dmax and _f_dmin != _f_dmax:
+            _lo, _hi = date.fromisoformat(_f_dmin), date.fromisoformat(_f_dmax)
+            _dr = _flt_exp.slider(
+                "Date range", min_value=_lo, max_value=_hi, value=(_lo, _hi),
+                key=f"flt_date::{_k}",
+                help="Drag the ends to restrict the time window.")
+            if (isinstance(_dr, (list, tuple)) and len(_dr) == 2
+                    and (_dr[0] != _lo or _dr[1] != _hi)):
+                _flt["time_from"] = _dr[0].strftime("%Y-%m-%d 00:00:00")
+                _flt["time_to"] = _dr[1].strftime("%Y-%m-%d 23:59:59")
+                _tmode = _flt_exp.radio(
+                    "Cases in the window", ["intersecting", "fully inside"],
+                    horizontal=True, key=f"flt_tmode::{_k}",
+                    help="'intersecting' keeps cases that overlap the window; "
+                         "'fully inside' keeps only cases that start and end "
+                         "within it.")
+                _flt["time_mode"] = (
+                    "traces_contained" if _tmode == "fully inside"
+                    else "traces_intersecting")
+        # Variants by frequency rank — LAST, because the variant count and the
+        # per-rank case coverage are recomputed on the log AFTER the activity +
+        # date filters above (excluding an activity or narrowing the window
+        # changes which traces, hence which variants, exist). The variant
+        # widgets are keyed on a signature of those upstream filters, so
+        # changing an upstream filter re-mints them (resetting to the full,
+        # recomputed range) rather than leaving a now-out-of-range selection.
+        _partial_spec = tuple(sorted(_flt.items()))
+        try:
+            _f_nvar, _f_vcum = _variant_filter_options(
+                log_bytes, log_kind, csv_columns, _partial_spec, file_hash)
+        except Exception as _v_exc:
+            _f_nvar, _f_vcum = 0, ()
+            _flt_exp.warning(f"Could not read variant options: {_v_exc}")
+        # A two-handled range slider kept in sync with a "case coverage %" box.
+        # The box is only meaningful when the low handle is at rank 1 (keeping
+        # the *top* variants): it shows the share of CASES covered by variants
+        # 1…hi, editing it snaps the slider so the top variants cover at least
+        # that share, and moving the slider updates it. When the low handle
+        # leaves rank 1 the box is blanked (a middle/least band has no "top
+        # coverage").
         if _f_nvar > 1:
-            _vrank_key = f"flt_vrank::{_k}"
-            _vpct_key = f"flt_vpct::{_k}"
+            _vsig = _arg_fingerprint(_partial_spec)
+            _vrank_key = f"flt_vrank::{_k}::{_vsig}"
+            _vpct_key = f"flt_vpct::{_k}::{_vsig}"
             # Both widgets are controlled purely via session_state (no
             # ``value=`` passed) so the callbacks can drive either one without
             # tripping Streamlit's "default value but also set via Session
             # State" warning — passing ``value=`` *and* mutating session_state
             # for the same key conflicts, and the mutation is then ignored
             # (which silently broke the slider→box direction). Seeded once per
-            # log, keyed by file_hash so a new log starts fresh. The box is
-            # seeded to ``None`` (blank + nullable float, its type inferred
-            # from the float min/max/step) so it can be blanked when the low
-            # handle leaves rank 1.
+            # (log, upstream-filter) signature. The box is seeded to ``None``
+            # (blank + nullable float, its type inferred from the float
+            # min/max/step) so it can be blanked when the low handle leaves
+            # rank 1.
             if _vrank_key not in st.session_state:
                 st.session_state[_vrank_key] = (1, _f_nvar)
             if _vpct_key not in st.session_state:
@@ -2340,39 +2415,19 @@ with st.sidebar:
                 "Variants by frequency rank", 1, _f_nvar,
                 key=_vrank_key, on_change=_sync_pct_from_slider,
                 help="A variant is a distinct ordered activity sequence; "
-                     "rank 1 = most frequent. The full range keeps them all.")
+                     "rank 1 = most frequent. Recomputed on the activity/date-"
+                     "filtered log. The full range keeps them all.")
             _flt_exp.number_input(
                 "…or top variants by case coverage (%)",
                 min_value=0.0, max_value=100.0, step=0.5,
                 key=_vpct_key, on_change=_sync_slider_from_pct,
-                help="The share of CASES covered by the most-frequent "
-                     "variants (1…N). Typing a percentage snaps the slider so "
-                     "those top variants cover at least that share; moving the "
-                     "slider updates this. Blank when the low handle is not at "
-                     "rank 1.")
+                help="The share of (filtered) CASES covered by the most-"
+                     "frequent variants (1…N). Typing a percentage snaps the "
+                     "slider so those top variants cover at least that share; "
+                     "moving the slider updates this. Blank when the low handle "
+                     "is not at rank 1.")
             if tuple(_vr) != (1, _f_nvar):
                 _flt["variant_ranks"] = (int(_vr[0]), int(_vr[1]))
-        # Date range — a two-handled slider over the log's own span (fewer
-        # clicks than two calendars).
-        if _f_dmin and _f_dmax and _f_dmin != _f_dmax:
-            _lo, _hi = date.fromisoformat(_f_dmin), date.fromisoformat(_f_dmax)
-            _dr = _flt_exp.slider(
-                "Date range", min_value=_lo, max_value=_hi, value=(_lo, _hi),
-                key=f"flt_date::{_k}",
-                help="Drag the ends to restrict the time window.")
-            if (isinstance(_dr, (list, tuple)) and len(_dr) == 2
-                    and (_dr[0] != _lo or _dr[1] != _hi)):
-                _flt["time_from"] = _dr[0].strftime("%Y-%m-%d 00:00:00")
-                _flt["time_to"] = _dr[1].strftime("%Y-%m-%d 23:59:59")
-                _tmode = _flt_exp.radio(
-                    "Cases in the window", ["intersecting", "fully inside"],
-                    horizontal=True, key=f"flt_tmode::{_k}",
-                    help="'intersecting' keeps cases that overlap the window; "
-                         "'fully inside' keeps only cases that start and end "
-                         "within it.")
-                _flt["time_mode"] = (
-                    "traces_contained" if _tmode == "fully inside"
-                    else "traces_intersecting")
         filter_spec = tuple(sorted(_flt.items()))
         if filter_spec:
             _flt_exp.caption(
@@ -2650,7 +2705,14 @@ if _view == "Model":
             st.rerun()
     else:
         _xes_b, _csv_b, _lx_nc, _lx_ne = st.session_state[_logexp_key]
-        _lx_stem = Path(log_name).stem + ("_filtered" if _log_filtered else "")
+        # Encode the active filter in the filename (as the dashboard pin does),
+        # so several exports of the same log with different filters are
+        # distinguishable in one folder. _safe_download_name sanitizes the
+        # "activities 5–15, variants 1–20"-style summary to a filesystem-safe
+        # stem.
+        _lx_stem = Path(log_name).stem
+        if _log_filtered:
+            _lx_stem += "_filtered_" + _filter_summary(filter_spec)
         st.caption(f"{_lx_nc:,} cases · {_lx_ne:,} events.")
         lx1, lx2 = st.columns(2)
         lx1.download_button(
