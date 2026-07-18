@@ -53,10 +53,15 @@ jobs:
         # Passing the top package plus its direct children makes pdoc
         # expand each subpackage to its full module tree (the landing page
         # stays the curated public API; every submodule gets its own page).
+        # --logo / --favicon brand the generated API site with the project
+        # logo (raw URL on main, so it resolves once this is merged).
+        env:
+          LOGO_URL: https://raw.githubusercontent.com/ProcessMining-uOttawa/pm4py-ucm/main/web/assets/logo.png
         run: |
           MODULES=$(python -c "import pkgutil, pm4py_ucm; print(' '.join(['pm4py_ucm'] + [m.name for m in pkgutil.iter_modules(pm4py_ucm.__path__, 'pm4py_ucm.')]))")
           echo "Documenting: $MODULES"
-          pdoc $MODULES -o docs/api --docformat numpy
+          pdoc $MODULES -o docs/api --docformat numpy \
+            --logo "$LOGO_URL" --favicon "$LOGO_URL"
 
       - name: Configure Pages
         # enablement: true turns the repository's Pages on (source =

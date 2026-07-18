@@ -1,4 +1,8 @@
-# pm4py-ucm
+<p align="center">
+  <img src="web/assets/logo.png" alt="PM4Py-UCM — Process Mining with Use Case Maps" width="380">
+</p>
+
+<h1 align="center">pm4py-ucm</h1>
 
 [![tests](https://github.com/ProcessMining-uOttawa/pm4py-ucm/actions/workflows/tests.yml/badge.svg)](https://github.com/ProcessMining-uOttawa/pm4py-ucm/actions/workflows/tests.yml)
 [![docs](https://github.com/ProcessMining-uOttawa/pm4py-ucm/actions/workflows/docs.yml/badge.svg)](https://processmining-uottawa.github.io/pm4py-ucm/)
