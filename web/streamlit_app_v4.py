@@ -1250,74 +1250,89 @@ def _open_image_in_tab_button(png_b64: str, label: str = "Open image "
     )
 
 
-def _svg_viewer(svg: str, *, height: int = 620, key: str = "svgview") -> None:
-    """Show an SVG model inline with wheel-zoom and drag-to-pan.
-
-    SVG is the on-screen default: it stays crisp at any zoom and its text
-    is selectable. It is embedded through ``st.iframe`` (Streamlit's
-    markdown sanitiser strips raw ``<svg>``) and carried base64-encoded so
-    nothing in the diagram — a stray ``</script>`` in a label, a non-ASCII
-    map name — can break the surrounding HTML. The SVG fits the width on
-    load; the wheel zooms and dragging pans, so a tall decomposed stack is
-    navigable without leaving the page.
-    """
-    b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
-    _embed_html(
-        f"""
+#: The inline SVG viewer. Plain template (``__HEIGHT__`` / ``__SVG_B64__``
+#: replaced at call time) rather than an f-string, so the CSS/JS braces need
+#: no doubling. The diagram is sized in real pixels and the stage scrolls
+#: (``overflow: auto``): the scrollbars therefore reflect the diagram's
+#: actual size and grow / shrink as the wheel zooms it — a plain CSS
+#: ``transform: scale`` would leave the scrollbars stuck at the unzoomed
+#: size. Wheel zooms toward the cursor, dragging pans, and a stub click
+#: scrolls to its plug-in.
+_SVG_VIEWER_TEMPLATE = r"""
 <style>
-  html, body {{ margin: 0; height: 100%; }}
-  #stage {{
+  html, body { margin: 0; height: 100%; }
+  #stage {
     position: relative;
-    width: 100%; height: {height}px; overflow: hidden;
+    width: 100%; height: __HEIGHT__px; overflow: auto;
     border: 1px solid #e2dfd8; border-radius: 8px; background: #fff;
-    touch-action: none; cursor: grab;
-  }}
-  #stage svg {{ width: 100%; height: auto; display: block;
-    transform-origin: 0 0; user-select: none; }}
+    cursor: grab; touch-action: none; overscroll-behavior: contain;
+  }
+  #canvas { position: relative; width: max-content; }
+  #canvas svg { display: block; user-select: none; max-width: none; }
   /* Dynamic-stub picker: a plug-in chooser shown at the click. */
-  .pm-menu {{ position: absolute; z-index: 20; min-width: 180px;
+  .pm-menu { position: absolute; z-index: 20; min-width: 180px;
     max-width: 320px; background: #fff; border: 1px solid #cfc9bf;
     border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.18);
-    overflow: hidden; font-family: Arial, sans-serif; }}
-  .pm-menu-head {{ padding: 6px 10px; font-size: 11px; font-weight: 700;
+    overflow: hidden; font-family: Arial, sans-serif; }
+  .pm-menu-head { padding: 6px 10px; font-size: 11px; font-weight: 700;
     color: #6b6459; background: #f4f1ea; border-bottom: 1px solid #e2dfd8;
-    text-transform: uppercase; letter-spacing: .03em; }}
-  .pm-menu-item {{ padding: 7px 10px; cursor: pointer;
-    border-bottom: 1px solid #f0ede6; }}
-  .pm-menu-item:last-child {{ border-bottom: none; }}
-  .pm-menu-item:hover {{ background: #f7f4ee; }}
-  .pm-menu-label {{ font-size: 13px; color: #202020; font-weight: 600; }}
-  .pm-menu-cond {{ font-size: 11px; color: #8a8478; margin-top: 2px;
+    text-transform: uppercase; letter-spacing: .03em; }
+  .pm-menu-item { padding: 7px 10px; cursor: pointer;
+    border-bottom: 1px solid #f0ede6; }
+  .pm-menu-item:last-child { border-bottom: none; }
+  .pm-menu-item:hover { background: #f7f4ee; }
+  .pm-menu-label { font-size: 13px; color: #202020; font-weight: 600; }
+  .pm-menu-cond { font-size: 11px; color: #8a8478; margin-top: 2px;
     font-family: ui-monospace, Menlo, Consolas, monospace;
-    white-space: pre-wrap; word-break: break-word; }}
+    white-space: pre-wrap; word-break: break-word; }
 </style>
-<div id="stage"></div>
+<div id="stage"><div id="canvas"></div></div>
 <script>
-(() => {{
+(() => {
   const stage = document.getElementById("stage");
+  const canvas = document.getElementById("canvas");
   // Decode as UTF-8 so accented map names survive.
-  const bytes = Uint8Array.from(atob("{b64}"), c => c.charCodeAt(0));
-  stage.innerHTML = new TextDecoder("utf-8").decode(bytes);
-  const svg = stage.querySelector("svg");
+  const bytes = Uint8Array.from(atob("__SVG_B64__"), c => c.charCodeAt(0));
+  canvas.innerHTML = new TextDecoder("utf-8").decode(bytes);
+  const svg = canvas.querySelector("svg");
   if (!svg) return;
-  let scale = 1, tx = 0, ty = 0, drag = false, px = 0, py = 0, moved = 0;
+  // Natural size from the viewBox; drop the fixed pt width/height so the px
+  // sizes set below drive the render and the scroll area.
+  const vb = svg.viewBox && svg.viewBox.baseVal;
+  const natW = (vb && vb.width) || parseFloat(svg.getAttribute("width")) || 100;
+  const natH = (vb && vb.height) || parseFloat(svg.getAttribute("height")) || 100;
+  const aspect = natW / natH;
+  svg.removeAttribute("width"); svg.removeAttribute("height");
+  let zoom = 1;                               // 1 == fit the width
+  const MIN = 0.2, MAX = 12;
+  const fitW = () => stage.clientWidth - 2;   // minus the 1px borders
+  const applyZoom = () => {
+    const w = fitW() * zoom;
+    svg.style.width = w + "px";
+    svg.style.height = (w / aspect) + "px";
+  };
+  const clampZoom = (z) => Math.min(MAX, Math.max(MIN, z));
+  applyZoom();
+  // A tall diagram grows a vertical scrollbar, which narrows clientWidth;
+  // re-fit once so the width still fits and no phantom horizontal bar shows.
+  setTimeout(() => { const w = fitW() * zoom;
+    if (Math.abs(parseFloat(svg.style.width) - w) > 1) applyZoom(); }, 0);
+
   let menuEl = null;
-  const apply = () => svg.style.transform =
-    `translate(${{tx}}px,${{ty}}px) scale(${{scale}})`;
-  const closeMenu = () => {{ if (menuEl) {{ menuEl.remove(); menuEl = null; }} }};
-  // Pan so the target panel's top meets the viewport.
-  const panTo = (href) => {{
-    const target = svg.querySelector(href);
-    if (!target) return;
-    const tr = target.getBoundingClientRect();
-    const sr = stage.getBoundingClientRect();
-    ty += (sr.top - tr.top) + 10;
-    apply();
-  }};
+  const closeMenu = () => { if (menuEl) { menuEl.remove(); menuEl = null; } };
+  // Scroll a panel's top (near) to the top of the viewport.
+  const panTo = (href) => {
+    const t = svg.querySelector(href); if (!t) return;
+    const tr = t.getBoundingClientRect(), sr = stage.getBoundingClientRect();
+    stage.scrollTop += (tr.top - sr.top) - 10;
+    stage.scrollLeft += (tr.left - sr.left) - 10;
+  };
   // A dynamic stub links to a hidden <g id="pm-stub-menu-…"> carrying one
-  // <g class="pm-binding" data-target/label/cond> per plug-in. Show them
-  // as a picker at the click; choosing one pans to that plug-in's panel.
-  const showMenu = (menuHref, cx, cy) => {{
+  // <g class="pm-binding" data-target/label/cond> per plug-in. Show them as
+  // a picker at the click; choosing one scrolls to that plug-in's panel. The
+  // menu lives in #canvas and is placed in content coordinates, so it scrolls
+  // with the diagram.
+  const showMenu = (menuHref, cx, cy) => {
     closeMenu();
     const menu = svg.querySelector(menuHref);
     if (!menu) return;
@@ -1326,14 +1341,14 @@ def _svg_viewer(svg: str, *, height: int = 620, key: str = "svgview") -> None:
     const el = document.createElement("div");
     el.className = "pm-menu";
     const sr = stage.getBoundingClientRect();
-    el.style.left = Math.min(Math.max(4, cx - sr.left), sr.width - 190) + "px";
-    el.style.top = Math.max(4, cy - sr.top) + "px";
+    el.style.left = Math.max(4, cx - sr.left + stage.scrollLeft) + "px";
+    el.style.top = Math.max(4, cy - sr.top + stage.scrollTop) + "px";
     const head = document.createElement("div");
     head.className = "pm-menu-head";
     const stub = menu.getAttribute("data-stub") || "";
     head.textContent = "Go to plug-in" + (stub ? ": " + stub : "");
     el.appendChild(head);
-    rows.forEach((r) => {{
+    rows.forEach((r) => {
       const item = document.createElement("div");
       item.className = "pm-menu-item";
       const lab = document.createElement("div");
@@ -1341,71 +1356,97 @@ def _svg_viewer(svg: str, *, height: int = 620, key: str = "svgview") -> None:
       lab.textContent = r.getAttribute("data-label") || "plug-in";
       item.appendChild(lab);
       const cond = r.getAttribute("data-cond");
-      if (cond) {{
+      if (cond) {
         const c = document.createElement("div");
         c.className = "pm-menu-cond";
         c.textContent = "[" + cond + "]";
         item.appendChild(c);
-      }}
-      item.addEventListener("click", (ev) => {{
+      }
+      item.addEventListener("click", (ev) => {
         ev.stopPropagation();
         const t = r.getAttribute("data-target");
         closeMenu();
         if (t) panTo(t);
-      }});
+      });
       el.appendChild(item);
-    }});
-    stage.appendChild(el);
+    });
+    canvas.appendChild(el);
     menuEl = el;
-  }};
-  stage.addEventListener("wheel", (e) => {{
-    e.preventDefault();
-    closeMenu();
-    const f = e.deltaY < 0 ? 1.1 : 1 / 1.1;
-    scale = Math.min(12, Math.max(0.2, scale * f));
-    apply();
-  }}, {{ passive: false }});
-  stage.addEventListener("pointerdown", (e) => {{
+  };
+  // Wheel zooms toward the cursor: resize the diagram, then adjust the scroll
+  // offset so the point under the cursor stays put.
+  stage.addEventListener("wheel", (e) => {
+    e.preventDefault(); closeMenu();
+    const r = stage.getBoundingClientRect();
+    const ox = e.clientX - r.left + stage.scrollLeft;
+    const oy = e.clientY - r.top + stage.scrollTop;
+    const old = zoom;
+    zoom = clampZoom(zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
+    applyZoom();
+    const f = zoom / old;
+    stage.scrollLeft = ox * f - (e.clientX - r.left);
+    stage.scrollTop = oy * f - (e.clientY - r.top);
+  }, { passive: false });
+  // Drag pans by scrolling — so the native scrollbars and the drag agree.
+  let drag = false, px = 0, py = 0, moved = 0;
+  stage.addEventListener("pointerdown", (e) => {
     if (e.target.closest && e.target.closest(".pm-menu")) return;
     closeMenu();
     drag = true; moved = 0; px = e.clientX; py = e.clientY;
     stage.setPointerCapture(e.pointerId); stage.style.cursor = "grabbing";
-  }});
-  stage.addEventListener("pointermove", (e) => {{
+  });
+  stage.addEventListener("pointermove", (e) => {
     if (!drag) return;
     const dx = e.clientX - px, dy = e.clientY - py;
     moved += Math.abs(dx) + Math.abs(dy);
-    tx += dx; ty += dy; px = e.clientX; py = e.clientY;
-    apply();
-  }});
-  const stop = () => {{ drag = false; stage.style.cursor = "grab"; }};
+    stage.scrollLeft -= dx; stage.scrollTop -= dy;
+    px = e.clientX; py = e.clientY;
+  });
+  const stop = () => { drag = false; stage.style.cursor = "grab"; };
   stage.addEventListener("pointerup", stop);
   stage.addEventListener("pointerleave", stop);
-  // Click a stub / sub-process to navigate. graphviz emits an SVG anchor;
-  // a static stub links #pm-map-N (pan to that panel), a dynamic stub
-  // links #pm-stub-menu-N (open the plug-in picker). Suppressed after a
-  // drag so panning never triggers a jump.
-  stage.addEventListener("click", (e) => {{
+  // Click a stub / sub-process to navigate. graphviz emits an SVG anchor; a
+  // static stub links #pm-map-N (scroll to that panel), a dynamic stub links
+  // #pm-stub-menu-N (open the plug-in picker). Suppressed after a drag so
+  // panning never triggers a jump. Drag-start calls setPointerCapture(stage),
+  // which retargets the click to #stage — so resolve the node by coordinates.
+  stage.addEventListener("click", (e) => {
     if (moved > 6) return;
-    // Drag-start calls setPointerCapture(#stage), which retargets the
-    // click event to #stage — so e.target is NOT the node under the
-    // cursor and closest("a") would miss every stub. Resolve the real
-    // element by coordinates instead.
     const hit = document.elementFromPoint(e.clientX, e.clientY) || e.target;
     if (hit && hit.closest && hit.closest(".pm-menu")) return;
     const a = hit && hit.closest ? hit.closest("a") : null;
     if (!a) return;
     const href = a.getAttribute("xlink:href") || a.getAttribute("href") || "";
-    if (href.startsWith("#pm-stub-menu-")) {{
+    if (href.startsWith("#pm-stub-menu-")) {
       e.preventDefault();
       showMenu(href, e.clientX, e.clientY);
-    }} else if (href.startsWith("#pm-map-")) {{
+    } else if (href.startsWith("#pm-map-")) {
       e.preventDefault();
       panTo(href);
-    }}
-  }});
-}})();
-</script>""",
+    }
+  });
+  window.addEventListener("resize", applyZoom);
+})();
+</script>"""
+
+
+def _svg_viewer(svg: str, *, height: int = 620, key: str = "svgview") -> None:
+    """Show an SVG model inline with scrollbars, wheel-zoom and drag-to-pan.
+
+    SVG is the on-screen default: it stays crisp at any zoom and its text
+    is selectable. It is embedded through ``st.iframe`` (Streamlit's
+    markdown sanitiser strips raw ``<svg>``) and carried base64-encoded so
+    nothing in the diagram — a stray ``</script>`` in a label, a non-ASCII
+    map name — can break the surrounding HTML. The SVG fits the width on
+    load; the wheel zooms, dragging pans, and the stage scrolls, so the
+    scrollbars track the zoomed diagram's real size (see
+    :data:`_SVG_VIEWER_TEMPLATE`).
+    """
+    b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    _embed_html(
+        _SVG_VIEWER_TEMPLATE
+        .replace("__HEIGHT__", str(height))
+        .replace("__SVG_B64__", b64),
         height=height + 6,
     )
 
