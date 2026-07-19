@@ -2186,6 +2186,13 @@ def _apply_project_config(cfg, fh, csv_columns=None):
     if _fa:
         ss["family_attr1"] = _fa[0]
         ss["family_attr2"] = _fa[1] if len(_fa) > 1 else _NONE_OPT
+        # Unlike the Model/Dashboards views (which recompute on render), the
+        # Family view mines only on a button click, so a resumed project would
+        # otherwise show its restored attributes but no mined family — and
+        # Compare, which reads the mined family, would stay empty. Flag a
+        # one-shot auto-mine so opening the Family tab reproduces the family
+        # (and therefore Compare) the way the other views already reproduce.
+        ss["_family_auto_mine"] = True
     if "family_min_cases" in cfg:
         pr["cfg_family_min_cases"] = int(cfg["family_min_cases"])
     if "family_max_values" in cfg:
@@ -2195,12 +2202,19 @@ def _apply_project_config(cfg, fh, csv_columns=None):
     for pair in (cfg.get("family_include_values") or []):
         _attr, _labels = tuple(pair)
         pr[f"family_values_{_attr}"] = list(_labels)
+    # Compare's cell selectboxes pass index=, so they restore through the
+    # slot (read via _rv to compute the index), not a direct key-set which
+    # would clash with index= and warn. Applied best-effort once the family is
+    # mined; a cell that no longer exists falls back to the default (§8).
     if cfg.get("compare_a") is not None:
-        ss["cmp_cell_a"] = cfg["compare_a"]
+        pr["cmp_cell_a"] = cfg["compare_a"]
     if cfg.get("compare_b") is not None:
-        ss["cmp_cell_b"] = cfg["compare_b"]
+        pr["cmp_cell_b"] = cfg["compare_b"]
     if cfg.get("family_dedup"):
         notes.append("family de-dup re-applies after you mine the family.")
+    if _fa:
+        notes.append("the Family tab re-mines automatically when you open it; "
+                     "Compare then follows.")
     if "active_view" in cfg:
         ss["view"] = cfg["active_view"]
     ss["_project_restore"] = pr
@@ -3763,7 +3777,16 @@ if _view == "Family":
                 "Mine model family", type="primary", key="run_family",
                 disabled=preview["n_cells"] == 0,
             )
+            # A project resumed with family attributes auto-mines the family
+            # once, so opening this tab reproduces the family (and Compare)
+            # rather than showing only the coverage preview. Consumed once.
+            _family_auto = False
+            if (not run_family and preview["n_cells"] > 0
+                    and st.session_state.pop("_family_auto_mine", False)):
+                run_family = True
+                _family_auto = True
             if preview["n_cells"] == 0:
+                st.session_state.pop("_family_auto_mine", False)
                 st.warning(
                     "No combination reaches the minimum case count — "
                     "lower 'Min cases per cell' or pick different "
@@ -3815,6 +3838,9 @@ if _view == "Family":
                         status.update(label="Done.", state="complete")
                     st.session_state["family_fp"] = _family_fp
                     st.session_state["family_result"] = fam
+                    if _family_auto:
+                        st.caption("Re-mined automatically from the loaded "
+                                   "project.")
                 except Exception as exc:
                     st.error(
                         f"Family mining failed: "
@@ -4100,11 +4126,21 @@ if _view == "Compare":
 
         # ---- pair selection --------------------------------------------
         sc1, sc2 = st.columns(2)
-        _a_label = sc1.selectbox("Process A", _labels, index=0,
-                                 key="cmp_cell_a")
+        # Restore a saved A/B pair best-effort (a resumed project); an unknown
+        # label (the family re-mined to different cells) falls back to the
+        # default. Read through _rv so the restore rides index=, not a
+        # key-set that would clash with it.
+        _ra, _rb = _rv("cmp_cell_a", None), _rv("cmp_cell_b", None)
+        _a_label = sc1.selectbox(
+            "Process A", _labels,
+            index=_labels.index(_ra) if _ra in _labels else 0,
+            key="cmp_cell_a",
+        )
         _b_label = sc2.selectbox(
             "Process B", _labels,
-            index=min(1, len(_labels) - 1), key="cmp_cell_b",
+            index=(_labels.index(_rb) if _rb in _labels
+                   else min(1, len(_labels) - 1)),
+            key="cmp_cell_b",
         )
         _ia, _ib = _labels.index(_a_label), _labels.index(_b_label)
         _A, _B = _stats.cells[_ia], _stats.cells[_ib]
