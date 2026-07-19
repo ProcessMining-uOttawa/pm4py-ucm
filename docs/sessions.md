@@ -228,6 +228,21 @@ and the export can't drift. If the island can't answer (older embed), the
 project simply omits dashboards and says so — dashboards then remain saveable
 via their own existing HTML/session-report export.
 
+**As implemented.** The bridge is `web/dashboards_bridge/` — a *declared*
+Streamlit component (one hand-written static `frontend/index.html`, no build
+step, no new dependency). Because it is served from the app's own origin it
+shares the island's `localStorage`, so it reads the island's registry
+(`pm4py-ucm:dash:{file_hash}:set`) straight back to Python on **save**, and
+writes a resumed project's registry there on **load** (idempotently, once per
+restore token). The versioned envelope — `{"version", "registry"}` — lives in
+`web/sessions/dashboards.py` (`wrap_registry` / `unwrap_registry`, Streamlit-
+free and unit-tested). The component renders invisibly in the **main** area
+(not the sidebar, which unmounts when collapsed) so save-capture and
+restore-write are always live. One wrinkle it handles: Streamlit keeps an
+unchanged island iframe across reruns, so after a same-log restore the app
+bumps a *restore generation* appended to the island HTML, forcing a single
+reload so the on-screen dashboards refresh without the user navigating away.
+
 ## 12. Security & privacy
 
 - **Data, not code.** Project files are JSON (and gzipped log bytes in a
@@ -278,12 +293,15 @@ A small **Project** group in the rail:
 
 ## 16. Phased rollout
 
-1. **P0 — keys + registry + round-trip test.** Give widgets keys (§7), build
-   the registry (§5), the drift guard (§6), and the headless round-trip test.
-   No UI yet. This is the risky/foundational part; land it first.
+1. **P0 — keys + registry + round-trip test.** ✅ *Done.* Give widgets keys
+   (§7), build the registry (§5), the drift guard (§6), and the headless
+   round-trip test. No UI yet. This is the risky/foundational part; land it
+   first.
 2. **P1 — Save/Load UI, settings file + bundle** (§9, §15), log matching (§8),
-   migrations scaffold (§10). Dashboards saved *separately* for now.
+   migrations scaffold (§10). ✅ *Done.* Dashboards saved *separately* for now.
 3. **P2 — dashboards bridge** (§11): fold dashboards into the project.
+   ✅ *Done* — implemented as `web/dashboards_bridge/` (a small bidirectional
+   component) plus `web/sessions/dashboards.py` (the versioned envelope).
 4. **P3 (optional) — browser auto-save** of the config to `localStorage` so a
    refresh restores the last session without a file (log re-prompt on hash
    mismatch).

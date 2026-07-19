@@ -1987,6 +1987,14 @@ st.markdown(
       [data-testid="stMainBlockContainer"], .block-container {
         padding-top: 4rem !important;
       }
+      /* The dashboards bridge is an invisible transport (a zero-height
+         component), but Streamlit still lays out its element container and the
+         vertical-block gap around it, leaving a dead strip at the top of every
+         view. Collapse the container entirely — a display:none iframe still
+         loads, runs its script, and exchanges postMessages, so the bridge keeps
+         working while taking no space. */
+      [data-testid="stElementContainer"]:has(
+        iframe[src*="ucm_dashboards_bridge"]) { display: none !important; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -2013,6 +2021,17 @@ try:
 except Exception:  # pragma: no cover
     _sessions = None
     _SESSIONS_OK = False
+
+# The dashboards bridge (web/dashboards_bridge/): a bidirectional component that
+# reads the Dashboards island's localStorage back to Python (to fold into a
+# saved project) and writes a restored registry back on resume. Guarded on its
+# own — if it fails to load, Save/Load still works, just without dashboards.
+try:
+    from dashboards_bridge import sync_dashboards as _sync_dashboards
+    _BRIDGE_OK = _SESSIONS_OK
+except Exception:  # pragma: no cover
+    _sync_dashboards = None
+    _BRIDGE_OK = False
 
 
 def _accept_log_bytes(name: str, payload: bytes) -> None:
@@ -2188,6 +2207,57 @@ def _apply_project_config(cfg, fh, csv_columns=None):
     return notes
 
 
+def _stash_pending_dashboards(payload, fh):
+    """Queue a project's dashboards to be written into the island's localStorage
+    by the bridge (docs/sessions.md §11). No-op if the bridge is unavailable or
+    the project carries no usable dashboards. The registry goes to the browser,
+    not session_state, so it rides its own channel rather than the config."""
+    if not _BRIDGE_OK or not payload:
+        return
+    _reg = _sessions.unwrap_registry(payload)
+    if _reg is None:
+        return
+    # A token stable across reruns so the bridge applies this restore once. The
+    # loaded-id already uniquely identifies this Load action; pair it with the
+    # log hash (the registry is namespaced by hash).
+    _token = f"restore:{fh}:{st.session_state.get('project_loaded_id', '')}"
+    st.session_state["pending_dashboards"] = {
+        "registry": _reg, "token": _token, "storage_key": fh,
+    }
+
+
+def _run_dashboards_bridge(fh):
+    """Render the invisible dashboards bridge, keep the save snapshot fresh, and
+    apply a pending restore exactly once. Returns the dashboards payload to store
+    in a saved project (the versioned envelope), or ``None`` when the browser
+    holds no dashboards for this log."""
+    pending = st.session_state.get("pending_dashboards")
+    write = token = None
+    if pending and pending.get("storage_key") == fh:
+        write, token = pending["registry"], pending["token"]
+    nonce = int(st.session_state.get("dash_bridge_nonce", 0))
+    result = _sync_dashboards(fh, write=write, write_token=token or "",
+                              nonce=nonce)
+    if isinstance(result, dict):
+        # Reflect the browser's current dashboards for saving (None if none).
+        st.session_state["dashboards_snapshot"] = _sessions.wrap_registry(
+            result.get("registry"))
+        # Once the bridge confirms the restore, drop it and rerun a single time
+        # so the island re-reads the freshly written localStorage.
+        if token and result.get("applied_token") == token:
+            st.session_state.pop("pending_dashboards", None)
+            if st.session_state.get("_dash_restored_token") != token:
+                st.session_state["_dash_restored_token"] = token
+                # Bump the restore generation so the Dashboards view's island
+                # HTML changes once, forcing the (otherwise-cached) iframe to
+                # reload and re-read the freshly written localStorage even if
+                # it's already on screen for the same log.
+                st.session_state["_dash_gen"] = int(
+                    st.session_state.get("_dash_gen", 0)) + 1
+                st.rerun()
+    return st.session_state.get("dashboards_snapshot")
+
+
 # A bundle or sample project attaches its log and applies immediately, here at
 # the top; a settings-only file for an *uploaded* log waits for that upload and
 # is applied just after the log source below.
@@ -2204,6 +2274,8 @@ if "pending_project" in st.session_state:
         st.session_state["project_notes"] = _apply_project_config(
             _pp.get("config", {}), st.session_state["log_hash"],
             _pp.get("csv_columns"))
+        _stash_pending_dashboards(
+            _pp.get("dashboards"), st.session_state["log_hash"])
         st.session_state.pop("pending_project", None)
         st.rerun()
 
@@ -2447,6 +2519,7 @@ if _SESSIONS_OK:
             _pdoc, _plog = _sessions.load(_lp_up.getvalue())
             st.session_state["pending_project"] = {
                 "config": _pdoc.config,
+                "dashboards": _pdoc.dashboards,
                 "log_source": _pdoc.log.source,
                 "log_name": _pdoc.log.name,
                 "expected_sha": _pdoc.log.sha256,
@@ -2558,11 +2631,24 @@ if "pending_project" in st.session_state:
     _pp = st.session_state.pop("pending_project")
     _notes = _apply_project_config(
         _pp.get("config", {}), file_hash, _pp.get("csv_columns"))
+    _stash_pending_dashboards(_pp.get("dashboards"), file_hash)
     if _pp.get("expected_sha") and _pp["expected_sha"] != file_hash:
         _notes.insert(0, "the loaded log differs from the one this project "
                       "was saved with — settings were applied anyway.")
     st.session_state["project_notes"] = _notes
     st.rerun()
+
+# Dashboards bridge (docs/sessions.md §11): exchange the Dashboards island's
+# localStorage with Python. Rendered here in the MAIN area — always mounted,
+# unlike the sidebar (which unmounts when collapsed) — so a saved project always
+# captures the current dashboards and a resume always writes them back. It keeps
+# ``dashboards_snapshot`` in session_state, which the sidebar's Save UI reads;
+# the component itself is invisible (zero height).
+if _BRIDGE_OK:
+    try:
+        _run_dashboards_bridge(file_hash)
+    except Exception:  # a bridge hiccup must never break the app
+        pass
 
 # ---- CSV column mapping ----------------------------------------------------
 csv_columns: Optional[Tuple[str, str, str, str, str]] = None
@@ -2994,6 +3080,10 @@ with st.sidebar:
     # bundle (config + the event log). Loading a project to *resume* is the
     # next step; here we only save/share.
     _proj_exp = st.expander("Project", expanded=False)
+    # The dashboards snapshot is produced by the bridge in the main area (always
+    # mounted); the Save UI just reads it.
+    _dash_snapshot = (st.session_state.get("dashboards_snapshot")
+                      if _BRIDGE_OK else None)
     try:
         _proj_values = {
             "noise_threshold": float(noise_threshold),
@@ -3036,6 +3126,7 @@ with st.sidebar:
                 sha256=file_hash,
                 csv_columns=list(csv_columns) if csv_columns else None),
             config=_sessions.collect(_proj_values),
+            dashboards=_dash_snapshot,
             app_version=_version)
         _proj_stem = _safe_download_name(Path(log_name).stem or "project", "")
         _proj_exp.download_button(
@@ -3051,6 +3142,28 @@ with st.sidebar:
             mime="application/zip", width="stretch",
             help="Everything, including the event log — self-contained and "
                  "one-click to resume, but it ships the data.")
+        # What the save will carry for dashboards, so it's clear they travel
+        # with the project — and a manual refresh in case the user just edited
+        # them (island edits don't trigger a Streamlit rerun on their own).
+        if _BRIDGE_OK:
+            _dash_regs = ((_dash_snapshot or {}).get("registry") or {}).get(
+                "dashboards") or []
+            if _dash_regs:
+                _dash_w = sum(len(d.get("specs") or []) for d in _dash_regs)
+                _proj_exp.caption(
+                    f"Includes **{len(_dash_regs)}** dashboard"
+                    f"{'s' if len(_dash_regs) != 1 else ''} "
+                    f"({_dash_w} widget{'s' if _dash_w != 1 else ''}).")
+            else:
+                _proj_exp.caption("No saved dashboards yet — build one in the "
+                                  "**Dashboards** view to include it.")
+            if _proj_exp.button("↻ Refresh dashboards from browser",
+                                width="stretch",
+                                help="Re-read the Dashboards view's current "
+                                     "widgets before saving."):
+                st.session_state["dash_bridge_nonce"] = int(
+                    st.session_state.get("dash_bridge_nonce", 0)) + 1
+                st.rerun()
         _proj_exp.caption("Resume a saved project from the **log source** "
                           "area (top of the page).")
     except Exception as _proj_exc:  # never let this break the rail
@@ -4409,6 +4522,16 @@ if _view == "Dashboards":
                               .replace("</", "<\\/"),
             1,
         )
+
+    # Restore generation: bumped when the bridge writes a resumed project's
+    # dashboards into localStorage (see _run_dashboards_bridge). Appended as an
+    # HTML comment so the island's srcdoc changes exactly once per restore,
+    # forcing the (otherwise-cached, unchanged) iframe to reload and re-read the
+    # freshly written registry — without which a same-log resume would leave the
+    # on-screen island stale until the user navigates away and back.
+    _dash_gen = int(st.session_state.get("_dash_gen", 0))
+    if _dash_gen:
+        _html = _html + f"\n<!-- dash-restore-gen:{_dash_gen} -->"
 
     # The island owns its own scrolling; a fixed height keeps the page
     # from growing an outer scrollbar around an inner one.

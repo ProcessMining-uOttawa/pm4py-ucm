@@ -26,6 +26,20 @@ from sessions import (  # noqa: E402
     save_settings,
 )
 from sessions.bundle import read_bundle, write_bundle  # noqa: E402
+from sessions.dashboards import (  # noqa: E402
+    BRIDGE_VERSION,
+    unwrap_registry,
+    wrap_registry,
+)
+
+
+_REGISTRY = {
+    "active": "d1",
+    "dashboards": [
+        {"id": "d1", "name": "Ops", "specs": [{"id": "w1"}], "filters": []},
+        {"id": "d2", "name": "SLA", "specs": [], "filters": []},
+    ],
+}
 
 
 def _doc(**over):
@@ -123,3 +137,34 @@ def test_future_schema_version_still_loads():
     raw["config"]["brand_new"] = "keep me"
     doc = ProjectDoc.from_dict(raw)                     # must not raise
     assert doc.to_dict()["config"]["brand_new"] == "keep me"
+
+
+# -- dashboards bridge envelope (docs/sessions.md §11) ---------------------
+
+def test_dashboards_wrap_unwrap_round_trip():
+    payload = wrap_registry(_REGISTRY)
+    assert payload == {"version": BRIDGE_VERSION, "registry": _REGISTRY}
+    assert unwrap_registry(payload) == _REGISTRY
+
+
+def test_dashboards_wrap_empty_is_none():
+    # Nothing to save → omit dashboards entirely.
+    assert wrap_registry(None) is None
+    assert wrap_registry({}) is None
+    assert wrap_registry({"active": "d1", "dashboards": []}) is None
+
+
+def test_dashboards_unwrap_is_tolerant():
+    # A bare registry (no envelope) still restores — forward/legacy compat.
+    assert unwrap_registry(_REGISTRY) == _REGISTRY
+    # Junk / unusable payloads restore nothing rather than raising.
+    assert unwrap_registry(None) is None
+    assert unwrap_registry({"version": 99}) is None
+    assert unwrap_registry({"registry": {"dashboards": "nope"}}) is None
+
+
+def test_dashboards_survive_a_project_round_trip():
+    doc = _doc(dashboards=wrap_registry(_REGISTRY))
+    again = loads(dumps(doc))
+    assert again.dashboards == {"version": BRIDGE_VERSION, "registry": _REGISTRY}
+    assert unwrap_registry(again.dashboards) == _REGISTRY
