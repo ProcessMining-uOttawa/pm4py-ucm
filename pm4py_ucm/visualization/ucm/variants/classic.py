@@ -478,6 +478,41 @@ def _edge_perf_metric_value(c: "UCM.NodeConnection",
     return None
 
 
+#: Routing waypoints a path segment passes *through* — the overlay never
+#: annotates an arc leaving one, so the heat-map carries the segment's value
+#: across them. A real node (responsibility, stub, fork/join, start/end) ends
+#: the segment, and the colour changes there.
+_HEAT_ROUTING_TYPES = (UCM.EmptyPoint, UCM.DirectionArrow)
+
+
+def _segment_metric_value(c: "UCM.NodeConnection",
+                          metric: str) -> "Optional[float]":
+    """The value of the path *segment* ``c`` belongs to.
+
+    The overlay annotates only a segment's first arc (the one leaving a real
+    node); every later arc of that segment starts at a routing waypoint (an
+    empty point or direction arrow) and carries no metadata, so it would render
+    black. This walks such an arc back through the routing chain to the
+    segment's first arc and returns its value — so the whole run of line
+    between two real nodes shares one colour and thickness, exactly as a single
+    conceptual path should. Returns ``None`` when the segment has no value or
+    the chain fans in ambiguously at a waypoint."""
+    arc = c
+    seen = set()
+    while True:
+        v = _edge_perf_metric_value(arc, metric)
+        if v is not None:
+            return v
+        src = arc.source
+        if not isinstance(src, _HEAT_ROUTING_TYPES) or id(arc) in seen:
+            return None
+        seen.add(id(arc))
+        preds = getattr(src, "pred_connections", None) or []
+        if len(preds) != 1:      # a real fan-in (a join) is a segment boundary
+            return None
+        arc = preds[0]
+
+
 def _heat_normalize(values: Dict[int, float]) -> Dict[int, float]:
     """Map each raw value to ``t`` in ``[0, 1]`` by the diagram-local
     min/max. A diagram whose values are all equal (or has a single value)
@@ -711,11 +746,15 @@ def _emit_map(
     edge_heat_time = False
     if heatmap_edge:
         _metric, edge_heat_time = heatmap_edge
-        edge_heat = _heat_normalize({
-            id(c): _edge_perf_metric_value(c, _metric)
-            for c in ucm_map.connections
-            if _edge_perf_metric_value(c, _metric) is not None
-        })
+        # Each arc takes its whole segment's value (propagated across empty
+        # points), so a path reads as one coloured/thick line up to the next
+        # real node rather than only its first arc being emphasised.
+        _evals: Dict[int, float] = {}
+        for c in ucm_map.connections:
+            v = _segment_metric_value(c, _metric)
+            if v is not None:
+                _evals[id(c)] = v
+        edge_heat = _heat_normalize(_evals)
 
     def emit_node(g_target: Digraph, node: "UCM.PathNode") -> None:
         attrs = _node_style(node, style_table, style_name)

@@ -14,8 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the value of the **first** selected metric of each layer, **scaled within
   each diagram** (so every sub-map reads on its own scale under decomposition).
   A time metric drives a **red** ramp, any other a **blue** one; lighter/thinner
-  = lower, darker/thicker = higher (contours up to 5×, edges up to 8×). In BPMN
-  the activity box contour is emphasised; in UCM the responsibility marker
+  = lower, darker/thicker = higher (contours up to 5×, edges up to 8×). A path
+  keeps one colour and thickness across its routing points (empty points) up to
+  the next real node, so a segment reads as a single line. In BPMN the activity
+  box contour is emphasised; in UCM the responsibility marker
   itself is. It is a render-time overlay of the existing `perf_<metric>`
   metadata — the on-screen SVG, the SVG and the PNG downloads all agree, and the
   `.jucm` is unchanged. No metric selected on a layer → that layer is unchanged.

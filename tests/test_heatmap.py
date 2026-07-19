@@ -62,6 +62,58 @@ def test_heat_color_endpoints_and_ramp():
     assert mid not in ("#96c3fa", "#14378c") and mid.startswith("#")
 
 
+# -- segment propagation across empty points --------------------------------
+
+def _chain(n_empty):
+    """A → (n_empty empty points) → B, wired, with frequency=42 on A's arc.
+    Returns (arcs, A, B)."""
+    from pm4py_ucm import UCM
+    a = UCM.RespRef(name="A")
+    b = UCM.RespRef(name="B")
+    mids = [UCM.EmptyPoint(name=f"ep{i}") for i in range(n_empty)]
+    chain = [a, *mids, b]
+    arcs = [UCM.NodeConnection(chain[i], chain[i + 1])
+            for i in range(len(chain) - 1)]
+    a.add_metadata("perf_branch0_frequency", "42")
+    return arcs, a, b
+
+
+def test_segment_value_direct_on_first_arc():
+    arcs, _, _ = _chain(0)                 # A -> B directly
+    assert _classic._segment_metric_value(arcs[0], "frequency") == 42.0
+
+
+def test_segment_value_carries_across_empty_points():
+    arcs, _, _ = _chain(2)                 # A -> ep0 -> ep1 -> B
+    # Every arc of the segment resolves to the same value, so the whole run
+    # of line is coloured/thickened alike.
+    for arc in arcs:
+        assert _classic._segment_metric_value(arc, "frequency") == 42.0
+
+
+def test_segment_value_stops_at_a_real_node():
+    from pm4py_ucm import UCM
+    arcs, _, b = _chain(1)                 # A -> ep -> B
+    c = UCM.RespRef(name="C")
+    onward = UCM.NodeConnection(b, c)      # B -> C, no value on B
+    # A responsibility ends the segment; B's outgoing arc has no value of its
+    # own, so it is not coloured by A's segment.
+    assert _classic._segment_metric_value(onward, "frequency") is None
+
+
+def test_segment_value_bails_on_ambiguous_fanin():
+    from pm4py_ucm import UCM
+    a = UCM.RespRef(name="A")
+    a2 = UCM.RespRef(name="A2")
+    ep = UCM.EmptyPoint(name="ep")
+    b = UCM.RespRef(name="B")
+    UCM.NodeConnection(a, ep)
+    UCM.NodeConnection(a2, ep)             # ep has TWO predecessors (a join)
+    out = UCM.NodeConnection(ep, b)
+    a.add_metadata("perf_branch0_frequency", "42")
+    assert _classic._segment_metric_value(out, "frequency") is None
+
+
 # -- end-to-end render ------------------------------------------------------
 
 _GRAPHVIZ = shutil.which("dot") is not None
