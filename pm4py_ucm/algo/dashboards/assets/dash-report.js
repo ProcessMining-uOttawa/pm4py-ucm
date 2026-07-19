@@ -313,17 +313,58 @@ export class Report {
  * widget would otherwise open on a corner.
  */
 function panZoom(box, opts) {
-  let scale = 1, tx = 0, ty = 0, dragging = false, px = 0, py = 0, moved = 0;
-  const apply = () => {
-    const inner = box.firstElementChild;
-    if (inner) inner.style.transform = `translate(${tx}px,${ty}px) scale(${scale})`;
+  const inner = box.firstElementChild;
+  if (!inner) return;
+  // Size the diagram in REAL pixels inside a scrollable box (not a CSS
+  // transform in a clipped box): native scrollbars then appear and track the
+  // zoom and the diagram's real extent, so a model taller or wider than the
+  // card can be scrolled — the same model the Model view's viewer shows.
+  box.style.overflow = "auto";
+  inner.style.transform = "none";
+  inner.style.transformOrigin = "0 0";
+  inner.style.maxWidth = "none";
+  inner.style.display = "block";
+
+  // Natural aspect (width / height) from the SVG viewBox or the image, so the
+  // px height can be derived from the px width at any zoom.
+  let aspect = 0;
+  const svg0 = inner.tagName.toLowerCase() === "svg"
+    ? inner : (inner.querySelector ? inner.querySelector("svg") : null);
+  if (svg0 && svg0.viewBox && svg0.viewBox.baseVal && svg0.viewBox.baseVal.height)
+    aspect = svg0.viewBox.baseVal.width / svg0.viewBox.baseVal.height;
+  else if (inner.tagName === "IMG" && inner.naturalHeight)
+    aspect = inner.naturalWidth / inner.naturalHeight;
+
+  let zoom = 1;
+  // At zoom 1 the diagram spans the box width (fit-to-width); the wheel scales
+  // that width. A model taller than the box then grows a vertical scrollbar.
+  const size = () => {
+    const bw = box.clientWidth;
+    if (!bw) return false;
+    const w = bw * zoom;
+    inner.style.width = w + "px";
+    inner.style.height = aspect ? (w / aspect) + "px" : "auto";
+    return true;
   };
+
   box.addEventListener("wheel", (e) => {
     e.preventDefault();
     const f = e.deltaY < 0 ? 1.1 : 1 / 1.1;
-    scale = Math.min(8, Math.max(0.2, scale * f));
-    apply();
+    const z0 = zoom;
+    zoom = Math.min(8, Math.max(0.2, zoom * f));
+    // Keep the point under the cursor fixed while the px size changes.
+    const r = box.getBoundingClientRect();
+    const cx = e.clientX - r.left, cy = e.clientY - r.top;
+    const ox = box.scrollLeft + cx, oy = box.scrollTop + cy;
+    if (size()) {
+      const k = zoom / z0;
+      box.scrollLeft = ox * k - cx;
+      box.scrollTop = oy * k - cy;
+    }
   }, { passive: false });
+
+  // Drag to pan — via native scroll, so it composes with the scrollbars.
+  let dragging = false, px = 0, py = 0, moved = 0;
   box.addEventListener("pointerdown", (e) => {
     dragging = true; moved = 0; px = e.clientX; py = e.clientY;
     box.setPointerCapture(e.pointerId); box.style.cursor = "grabbing";
@@ -332,18 +373,16 @@ function panZoom(box, opts) {
     if (!dragging) return;
     const dx = e.clientX - px, dy = e.clientY - py;
     moved += Math.abs(dx) + Math.abs(dy);
-    tx += dx; ty += dy; px = e.clientX; py = e.clientY;
-    apply();
+    box.scrollLeft -= dx; box.scrollTop -= dy;
+    px = e.clientX; py = e.clientY;
   });
   const stop = () => { dragging = false; box.style.cursor = "grab"; };
   box.addEventListener("pointerup", stop);
   box.addEventListener("pointerleave", stop);
-  // Click a stub to jump to its plug-in panel — the decomposed model is
-  // stacked in one SVG, so navigating is panning that panel to the top.
-  // setPointerCapture (drag-start) retargets the click to the box, so
-  // resolve the clicked node by coordinates, not e.target. (The embedded
-  // model is the mined model, which only has single-plug-in #pm-map-N
-  // links; dynamic-stub pickers do not reach this section.)
+  // Click a stub to scroll its plug-in panel into view — the decomposed model
+  // is stacked in one SVG, so navigating is scrolling that panel to the top.
+  // setPointerCapture (drag-start) retargets the click to the box, so resolve
+  // the clicked node by coordinates, not e.target.
   box.addEventListener("click", (e) => {
     if (moved > 6) return;
     const hit = document.elementFromPoint(e.clientX, e.clientY) || e.target;
@@ -356,42 +395,29 @@ function panZoom(box, opts) {
     const target = svg && svg.querySelector(href);
     if (!target) return;
     const tr = target.getBoundingClientRect(), br = box.getBoundingClientRect();
-    ty += (br.top - tr.top) + 10;
-    apply();
+    box.scrollTop += (tr.top - br.top) - 10;
   });
   box.style.cursor = "grab";
-  const inner = box.firstElementChild;
-  if (inner) { inner.style.transformOrigin = "0 0"; inner.style.maxWidth = "none"; }
-  if (opts && opts.fit && inner) {
-    const fit = () => {
-      const bw = box.clientWidth, bh = box.clientHeight;
-      const ir = inner.getBoundingClientRect();
-      const iw = ir.width, ih = ir.height;
-      if (!bw || !bh || !iw || !ih) return false;
-      // The rect is already scaled by the current transform; divide it out
-      // to recover the untransformed size before computing the fit scale.
-      const iw0 = iw / scale, ih0 = ih / scale;
-      scale = Math.min(1, bw / iw0, bh / ih0);
-      tx = Math.max(0, (bw - iw0 * scale) / 2);
-      ty = Math.max(0, (bh - ih0 * scale) / 2);
-      apply();
-      return true;
+
+  // The box is built detached (0 width) and attached by the caller, so size on
+  // the next macrotask, with a bounded retry for a late layout pass. setTimeout
+  // is used over rAF / ResizeObserver deliberately: those are paused in a
+  // backgrounded tab (the model would stay unsized until focus), while
+  // setTimeout still fires and layout is computed even while hidden. A second
+  // pass 40 ms later re-measures clientWidth after a tall model has grown a
+  // vertical scrollbar, so no phantom horizontal bar remains.
+  const settle = () => setTimeout(size, 40);
+  if (size()) settle();
+  else {
+    let tries = 0;
+    const retry = () => {
+      if (size()) settle();
+      else if (++tries < 20) setTimeout(retry, 30);
     };
-    // The box is built detached and attached by the caller, so it has no
-    // size yet; fit on the next macrotask, by when it is laid out. setTimeout
-    // is used deliberately over rAF / ResizeObserver: those are paused in a
-    // backgrounded tab, which would leave the model unframed until the tab
-    // is focused, whereas setTimeout still fires (and layout is computed even
-    // while hidden). A short bounded retry covers a late layout pass.
-    if (!fit()) {
-      let tries = 0;
-      const retry = () => { if (!fit() && ++tries < 20) setTimeout(retry, 30); };
-      setTimeout(retry, 0);
-    }
-    // An <img> may not have measured until it loads, so refit on load too.
-    if (inner.tagName === "IMG" && !inner.complete)
-      inner.addEventListener("load", fit, { once: true });
+    setTimeout(retry, 0);
   }
+  if (inner.tagName === "IMG" && !inner.complete)
+    inner.addEventListener("load", () => { size(); settle(); }, { once: true });
 }
 
 /**
