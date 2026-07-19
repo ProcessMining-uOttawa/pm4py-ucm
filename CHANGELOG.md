@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-07-19
+
+**Save, share and resume a whole analysis session.** A configured session —
+log reference, CSV mapping, renaming, filters, performers, overlays,
+decomposition, family and scenario settings, the open view, **and the
+Dashboards** — round-trips through a project file, so an analysis can be put
+down and picked back up, or handed to a colleague.
+
+### Added — Web app (V5)
+
+- **Save a project** from the sidebar's **Project** group, as either a small
+  **settings file** (`<log>.ucmproj.json`, configuration only — email-able, no
+  event data) or a self-contained **project bundle** (`<log>.ucmproj.zip`,
+  configuration + the event log). (#63)
+- **Resume a project** from the **log-source** area: a bundle brings its own
+  log; a settings file re-uses the current log or re-requests it, warning on a
+  hash mismatch. Every restored setting re-seeds its widget, and the caches
+  recompute the model, scenarios, family and reports from the restored
+  configuration. (#64)
+- **Dashboards travel with a project.** A small, versioned, build-free
+  bidirectional component bridges the browser-island dashboards back to the
+  host on save and restores them on resume, so a saved project carries every
+  dashboard you built (widgets, targets, segments, the pinned model). (#65)
+
+### Fixed — Web app (V5)
+
+- **The Family and Compare tabs now reproduce on resume.** Unlike the Model and
+  Dashboards views, the Family view mines only on demand, so a resumed project
+  used to show its restored attributes but no mined family — leaving Compare
+  (which reads the family) empty. Opening the Family tab after a load now
+  **re-mines the family automatically once**, and Compare's process pair is
+  restored best-effort. (#66)
+
+### Internal
+
+- A **Session Parameter Registry** (`web/sessions/`) is the single source of
+  truth for what a project persists, with a CI drift guard that fails if a keyed
+  configuration widget is neither registered nor explicitly ignored — so
+  persistence keeps working as the app grows. Streamlit-free and unit-tested.
+  (#62, #63)
+- Replaced the deprecated `use_container_width` with `width="stretch"` for
+  Streamlit 1.57. (#60)
+
+See [`docs/sessions.md`](docs/sessions.md) for the full design.
+
 ## [0.7.0] — 2026-07-18
 
 **Global log filtering and activity renaming across the whole web app**, a

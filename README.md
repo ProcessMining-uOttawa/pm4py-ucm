@@ -121,6 +121,17 @@ interactive HTML file (or as a multi-section session report). See
 
 ![Dashboards view](web/PM4Py-UCM-Dashboard.png)
 
+**Save, share & resume.** A configured session — the log reference, CSV
+mapping, renaming, filters, performers, overlays, decomposition, family and
+scenario settings, the open view, **and your dashboards** — round-trips through
+a project file, so you can put an analysis down and pick it back up, or hand it
+to a colleague. Save from the sidebar's **Project** group as a small
+**settings file** (`.ucmproj.json`, configuration only — no event data) or a
+self-contained **project bundle** (`.ucmproj.zip`, configuration + the log);
+resume either from the **log-source** area. Only *inputs* are stored — the
+model, scenarios, family and reports recompute on load. See
+[`docs/sessions.md`](docs/sessions.md).
+
 Run locally with:
 
 ```bash

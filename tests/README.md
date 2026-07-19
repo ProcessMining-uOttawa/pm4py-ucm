@@ -33,10 +33,10 @@
 |  | [`test_visualization.py`](test_visualization.py) | Tests for the graphviz-based UCM visualiser. | 35 |
 | | _Visualization subtotal_ | | **47** |
 | **Dashboards** | [`test_dashboards.py`](test_dashboards.py) | Tests for user-defined dashboards: the client contract, the metric engine, and the parity of the Python engine with its JS counterpart. | 371 |
-| **Progress / infrastructure** | [`test_progress.py`](test_progress.py) | Tests for the progress-reporting layer and the vectorized DataFrame resource miner. | 15 |
-| **Other** | [`test_sessions.py`](test_sessions.py) | Tests for the project save/share/resume core (``web/sessions``). | 13 |
+| **Sessions (save / share / resume)** | [`test_sessions.py`](test_sessions.py) | Tests for the project save/share/resume core (``web/sessions``). | 13 |
 |  | [`test_sessions_registry.py`](test_sessions_registry.py) | Tests for the Session Parameter Registry (``web/sessions/registry.py``). | 5 |
-| | _Other subtotal_ | | **18** |
+| | _Sessions (save / share / resume) subtotal_ | | **18** |
+| **Progress / infrastructure** | [`test_progress.py`](test_progress.py) | Tests for the progress-reporting layer and the vectorized DataFrame resource miner. | 15 |
 | | **Total** | | **834** |
 
 See the repository [`README.md`](../README.md#testing) for how to run the suite, and [`docs/metrics.md`](../docs/metrics.md) for the metric definitions the validation tests enforce.

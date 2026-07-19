@@ -402,6 +402,32 @@ The canonical specification is the module docstring of
 [`docs/dashboards.md`](../docs/dashboards.md) for how it fits the rest of
 the engine.
 
+### 9 · Save, share & resume a project
+
+The whole session is a project you can put down and pick back up, or hand to
+a colleague. The sidebar's **Project** group offers two saves:
+
+- **⬇ Save settings** → `<log>.ucmproj.json` — the *configuration only* (miner
+  settings, CSV mapping, renaming, filters, performers, overlays,
+  decomposition, family and scenario settings, the open view, and your
+  dashboards). Small and email-able; carries **no event data**, so it's the
+  privacy-preserving way to share when the log is sensitive.
+- **⬇ Save project bundle** → `<log>.ucmproj.zip` — everything above **plus the
+  event log**, so it is self-contained and one-click to resume (it does ship
+  the data).
+
+Resume either from **↻ Resume a saved project** in the log-source area: a
+bundle brings its own log; a settings file re-uses the loaded log or asks you
+to re-supply it (matched by hash, with a warning on a mismatch). Only *inputs*
+are stored — the model, scenarios, family, reports and dashboards **recompute**
+on load, so project files stay tiny and never go stale against a change in how
+a model is mined. Dashboards travel through a small versioned bridge that reads
+the browser-island widgets back on save and restores them on resume; the Family
+tab re-mines automatically the first time you open it after a load, and Compare
+follows. The design and its future-proofing (a single parameter registry, a CI
+drift guard, versioned schema) are documented in
+[`docs/sessions.md`](../docs/sessions.md).
+
 ## Deploy to Streamlit Community Cloud
 
 1. Push this repo to GitHub.

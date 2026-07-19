@@ -75,6 +75,10 @@ AREAS: dict[str, list[str]] = {
     "Dashboards": [
         "test_dashboards.py",
     ],
+    "Sessions (save / share / resume)": [
+        "test_sessions.py",
+        "test_sessions_registry.py",
+    ],
     "Progress / infrastructure": [
         "test_progress.py",
     ],
