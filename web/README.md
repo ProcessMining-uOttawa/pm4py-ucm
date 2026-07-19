@@ -426,7 +426,9 @@ the browser-island widgets back on save and restores them on resume; the Family
 tab re-mines automatically the first time you open it after a load, and Compare
 follows. The design and its future-proofing (a single parameter registry, a CI
 drift guard, versioned schema) are documented in
-[`docs/sessions.md`](../docs/sessions.md).
+[`docs/sessions.md`](../docs/sessions.md), and
+[`demo/sessions_tutorial.ipynb`](../demo/sessions_tutorial.ipynb) is a runnable
+walkthrough of the underlying `web/sessions` API.
 
 ## Deploy to Streamlit Community Cloud
 
