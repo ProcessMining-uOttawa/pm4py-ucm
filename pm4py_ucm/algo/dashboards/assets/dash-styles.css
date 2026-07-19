@@ -1012,7 +1012,9 @@
   overflow: hidden;
   touch-action: none;
 }
-.pm-model__pan { width: 100%; height: 100%; }
+/* The scroll container: panZoom sizes the diagram in real px inside it, so
+   native scrollbars appear and track the zoom. */
+.pm-model__pan { width: 100%; height: 100%; overflow: auto; }
 .pm-model__pan svg, .pm-model__pan img {
-  display: block; max-width: 100%; height: auto; user-select: none;
+  display: block; user-select: none;
 }

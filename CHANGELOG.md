@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Web app (V5)
+
+- **The Family and Compare view settings no longer reset when you navigate
+  away and back.** Their config widgets live in the main area, and Streamlit
+  discards the state of any widget not rendered on a run (sidebar widgets are
+  immune because they always render), so leaving the Family tab reset the
+  attribute, the max-values / min-cases / bins, and the value filters to their
+  defaults. Those widgets are now made *sticky* (mirrored into a persistent
+  key), so a selection survives view switches — independent of save/resume.
+- **Pinned process-model widgets on a dashboard now have scrollbars.** The
+  model widget (and the session report's model section) is sized in real
+  pixels inside a scrollable box, so zooming grows native scrollbars that
+  track the diagram — a model larger than the card can now be scrolled, not
+  only dragged.
+
 ## [0.7.1] — 2026-07-19
 
 **Save, share and resume a whole analysis session.** A configured session —

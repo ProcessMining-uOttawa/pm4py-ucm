@@ -2082,6 +2082,47 @@ def _rv(key, default):
     return st.session_state.get("_project_restore", {}).pop(key, default)
 
 
+def _sticky(key, factory, options=None):
+    """Make a **main-area** widget's value survive leaving and returning to its
+    view.
+
+    Streamlit discards the ``session_state`` of any keyed widget that is *not
+    rendered* on a run, so a config widget in the Family or Compare view (which
+    only renders while that view is open) resets to its default every time you
+    navigate away and back. Sidebar widgets are immune because they render on
+    every run; these are not.
+
+    The fix is to mirror the value into a ``_keep::`` key we own (a plain
+    ``session_state`` entry is never garbage-collected). Call this **before** the
+    widget — which must then pass **no** ``value=``/``index=``/``default=`` (it
+    reads the seeded key instead, so there is no "set via Session State API"
+    clash) — and :func:`_sticky_save` **after**.
+
+    ``factory`` supplies the value on the very first render only (so a project
+    restore's :func:`_rv` is consumed exactly once); ``options``, when given,
+    clamps a restored value to what the current log actually offers.
+    """
+    ss = st.session_state
+    keep = f"_keep::{key}"
+    if key not in ss:
+        ss[key] = ss[keep] if keep in ss else factory()
+    if options is not None:
+        cur = ss[key]
+        if isinstance(cur, (list, tuple)):
+            valid = [x for x in cur if x in options]
+            ss[key] = valid if valid else list(factory() or [])
+        elif cur not in options:
+            ss[key] = factory()
+    return ss[key]
+
+
+def _sticky_save(key):
+    """Remember a sticky widget's current value (see :func:`_sticky`)."""
+    ss = st.session_state
+    if key in ss:
+        ss[f"_keep::{key}"] = ss[key]
+
+
 def _apply_filter_spec_to_state(fspec, fh, pr):
     """Reverse-map a saved ``filter_spec`` onto the filter widgets. ``pr`` is
     the restore slot for the value=/default= widgets."""
@@ -3654,15 +3695,22 @@ if _view == "Family":
         attr_names = [r["attribute"] for r in attr_rows]
         attr_type = {r["attribute"]: r["type"] for r in attr_rows}
 
+        # These config widgets live in the main area, so their state must be
+        # made sticky (see _sticky) or navigating away and back resets them.
         pc1, pc2 = st.columns(2)
+        _sticky("family_attr1", lambda: attr_names[0], options=attr_names)
         attr1 = pc1.selectbox(
             "First attribute", options=attr_names, key="family_attr1",
         )
+        _sticky_save("family_attr1")
+        _attr2_opts = [_NONE_OPT] + [a for a in attr_names if a != attr1]
+        _sticky("family_attr2", lambda: _NONE_OPT, options=_attr2_opts)
         attr2 = pc2.selectbox(
             "Second attribute (optional)",
-            options=[_NONE_OPT] + [a for a in attr_names if a != attr1],
+            options=_attr2_opts,
             key="family_attr2",
         )
+        _sticky_save("family_attr2")
         selected_attrs: Tuple[str, ...] = (
             (attr1,) if attr2 == _NONE_OPT else (attr1, attr2)
         )
@@ -3670,31 +3718,36 @@ if _view == "Family":
         st.session_state["cfg_family_attrs"] = list(selected_attrs)
 
         pc3, pc4, pc5 = st.columns(3)
+        _sticky("cfg_family_min_cases",
+                lambda: int(_rv("cfg_family_min_cases", 10)))
         family_min_cases = pc3.number_input(
             "Min cases per cell", min_value=1, max_value=100_000,
-            value=_rv("cfg_family_min_cases", 10), step=1,
-            key="cfg_family_min_cases",
+            step=1, key="cfg_family_min_cases",
             help=(
                 "Combinations with fewer cases are skipped (shown "
                 "grayed in the grid). Models mined from a handful of "
                 "traces overfit badly."
             ),
         )
+        _sticky_save("cfg_family_min_cases")
+        _sticky("cfg_family_max_values",
+                lambda: int(_rv("cfg_family_max_values", 8)))
         family_max_values = pc4.number_input(
             "Max values per attribute", min_value=2, max_value=20,
-            value=_rv("cfg_family_max_values", 8), step=1,
-            key="cfg_family_max_values",
+            step=1, key="cfg_family_max_values",
             help=(
                 "Cardinality cap per axis; the least frequent values "
                 "merge into an 'Other' bucket."
             ),
         )
+        _sticky_save("cfg_family_max_values")
         _any_numeric = any(
             attr_type.get(a) == "integer" for a in selected_attrs
         )
+        _sticky("cfg_family_bins", lambda: int(_rv("cfg_family_bins", 4)))
         family_bins = pc5.number_input(
             "Bins (numeric attributes)", min_value=2, max_value=10,
-            value=_rv("cfg_family_bins", 4), step=1, disabled=not _any_numeric,
+            step=1, disabled=not _any_numeric,
             key="cfg_family_bins",
             help=(
                 "Numeric attributes (e.g. age) are partitioned into "
@@ -3703,6 +3756,7 @@ if _view == "Family":
                 "1-5) gets one bin per value instead of ranges."
             ),
         )
+        _sticky_save("cfg_family_bins")
 
         # Coverage heatmap BEFORE mining — see the cell sizes before
         # committing to mining N models. A first (unfiltered) pass
@@ -3723,16 +3777,19 @@ if _view == "Family":
                 display = (attr[len("case:"):]
                            if attr.startswith("case:") else attr)
                 options = base_preview["axes"].get(display, [])
+                _vkey = f"family_values_{attr}"
+                _sticky(_vkey, lambda o=options: list(_rv(_vkey, o)),
+                        options=options)
                 picked = filter_cols[i].multiselect(
                     f"Values of {display}",
                     options=options,
-                    default=_rv(f"family_values_{attr}", options),
-                    key=f"family_values_{attr}",
+                    key=_vkey,
                     help=(
                         "Deselect values to exclude them from the "
                         "family — their cases are dropped entirely."
                     ),
                 )
+                _sticky_save(_vkey)
                 if picked and len(picked) < len(options):
                     selections[attr] = tuple(picked)
             family_include_values = (
@@ -4125,23 +4182,19 @@ if _view == "Compare":
         st.divider()
 
         # ---- pair selection --------------------------------------------
+        # Main-area selectboxes, so make them sticky (survive leaving/returning
+        # to the view). The first-render default comes from a resumed project
+        # best-effort (_rv), clamped to the cells the family actually has.
         sc1, sc2 = st.columns(2)
-        # Restore a saved A/B pair best-effort (a resumed project); an unknown
-        # label (the family re-mined to different cells) falls back to the
-        # default. Read through _rv so the restore rides index=, not a
-        # key-set that would clash with it.
-        _ra, _rb = _rv("cmp_cell_a", None), _rv("cmp_cell_b", None)
-        _a_label = sc1.selectbox(
-            "Process A", _labels,
-            index=_labels.index(_ra) if _ra in _labels else 0,
-            key="cmp_cell_a",
-        )
-        _b_label = sc2.selectbox(
-            "Process B", _labels,
-            index=(_labels.index(_rb) if _rb in _labels
-                   else min(1, len(_labels) - 1)),
-            key="cmp_cell_b",
-        )
+        _sticky("cmp_cell_a", lambda: _rv("cmp_cell_a", None) or _labels[0],
+                options=_labels)
+        _a_label = sc1.selectbox("Process A", _labels, key="cmp_cell_a")
+        _sticky_save("cmp_cell_a")
+        _sticky("cmp_cell_b",
+                lambda: _rv("cmp_cell_b", None) or _labels[min(1, len(_labels) - 1)],
+                options=_labels)
+        _b_label = sc2.selectbox("Process B", _labels, key="cmp_cell_b")
+        _sticky_save("cmp_cell_b")
         _ia, _ib = _labels.index(_a_label), _labels.index(_b_label)
         _A, _B = _stats.cells[_ia], _stats.cells[_ib]
 
