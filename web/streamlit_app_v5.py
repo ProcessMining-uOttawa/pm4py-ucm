@@ -2005,6 +2005,15 @@ _version_text = (
     f"v{_version})"
 )
 
+# Project save/share/resume (web/sessions/, on sys.path for the app). Guarded
+# so a packaging hiccup disables Save/Load rather than breaking the app.
+try:
+    import sessions as _sessions
+    _SESSIONS_OK = True
+except Exception:  # pragma: no cover
+    _sessions = None
+    _SESSIONS_OK = False
+
 
 def _accept_log_bytes(name: str, payload: bytes) -> None:
     new_hash = hashlib.sha256(payload).hexdigest()[:16]
@@ -2037,6 +2046,168 @@ def _accept_log_bytes(name: str, payload: bytes) -> None:
             st.session_state.pop(k, None)
 
 
+# ---- Resume a saved project (see docs/sessions.md) -------------------------
+# Restoring a widget has two channels, to avoid Streamlit's "default value but
+# also set via Session State API" warning:
+#   * widgets that pass NO value=/default= (selectbox/radio index, key-only
+#     multiselects, the variant sliders) — seed the widget's key directly;
+#   * widgets that DO pass value=/default= — seed a restore slot
+#     (``_project_restore``) that the widget reads via ``_rv`` as its default,
+#     so its own key is never API-set.
+
+def _rv(key, default):
+    """The restored default for a widget from a loaded project (else
+    ``default``). Consumed once (popped) the first time the widget renders, so
+    a later re-render — e.g. re-enabling the filter — starts from the real
+    default rather than re-restoring the loaded value."""
+    return st.session_state.get("_project_restore", {}).pop(key, default)
+
+
+def _apply_filter_spec_to_state(fspec, fh, pr):
+    """Reverse-map a saved ``filter_spec`` onto the filter widgets. ``pr`` is
+    the restore slot for the value=/default= widgets."""
+    ss = st.session_state
+    spec = {k: v for k, v in (tuple(pair) for pair in (fspec or []))}
+    if "rename_map" in spec:
+        ss["rename_map_applied"] = {
+            str(a): str(b) for a, b in (tuple(p) for p in spec["rename_map"])}
+    if any(k in spec for k in ("activity_ranks", "exclude_activities",
+                               "variant_ranks", "time_from", "time_to")):
+        pr["log_filter_on"] = True
+    if "activity_ranks" in spec:
+        _lo, _hi = spec["activity_ranks"]
+        pr[f"flt_arank::{fh}"] = (int(_lo), int(_hi))
+    if "exclude_activities" in spec:
+        pr[f"flt_excl::{fh}"] = list(spec["exclude_activities"])
+    if "time_from" in spec or "time_to" in spec:
+        _lo, _hi = spec.get("time_from"), spec.get("time_to")
+        if _lo and _hi:
+            pr[f"flt_date::{fh}"] = (
+                date.fromisoformat(_lo[:10]), date.fromisoformat(_hi[:10]))
+        _mode = spec.get("time_mode", "traces_intersecting")
+        ss[f"flt_tmode::{fh}"] = (
+            "fully inside" if _mode == "traces_contained" else "intersecting")
+    if "variant_ranks" in spec:
+        # The variant widget's key embeds a fingerprint of the OTHER filters
+        # (rename + activity + date); rebuild it here with the SAME types the
+        # app uses so the fingerprint — hence the key — matches exactly. This
+        # slider takes no value=, so seed its key directly.
+        partial = {}
+        if "rename_map" in spec:
+            partial["rename_map"] = tuple(
+                (str(a), str(b))
+                for a, b in (tuple(p) for p in spec["rename_map"]))
+        if "activity_ranks" in spec:
+            partial["activity_ranks"] = (int(spec["activity_ranks"][0]),
+                                         int(spec["activity_ranks"][1]))
+        if "exclude_activities" in spec:
+            partial["exclude_activities"] = tuple(spec["exclude_activities"])
+        for tk in ("time_from", "time_to", "time_mode"):
+            if tk in spec:
+                partial[tk] = spec[tk]
+        _vsig = _arg_fingerprint(tuple(sorted(partial.items())))
+        _lo, _hi = spec["variant_ranks"]
+        ss[f"flt_vrank::{fh}::{_vsig}"] = (int(_lo), int(_hi))
+
+
+def _apply_project_config(cfg, fh, csv_columns=None):
+    """Seed session_state from a project's config. Returns human notes about
+    anything only partially applied."""
+    ss = st.session_state
+    pr = {}          # restore slot for value=/default= widgets (see _rv)
+    notes = []
+    # noise / min_support render before the log gate, so they've already been
+    # drawn (key set) by the time a project loads — the restore slot can't
+    # override an existing key, so set these keys directly (their widgets pass
+    # no value=, so this is warning-free).
+    if "noise_threshold" in cfg:
+        ss["cfg_noise"] = float(cfg["noise_threshold"])
+    if "min_support" in cfg:
+        ss["cfg_min_support"] = float(cfg["min_support"])
+    if "notation" in cfg:
+        ss["cfg_notation"] = "BPMN" if cfg["notation"] == "bpmn" else "UCM"
+    if "decomposition" in cfg:
+        _dec = cfg["decomposition"]
+        if _dec == "off":
+            ss["applied_decomp"] = "off"
+            ss["cfg_decomp_preset"] = "off"
+        else:
+            ss["applied_decomp"] = tuple(sorted(
+                (str(k), v) for k, v in (tuple(p) for p in _dec)))
+            ss["cfg_decomp_preset"] = "auto"
+            notes.append("decomposition was restored as its effective spec; "
+                         "the preset selector may read 'auto'.")
+    if "resource_attribute" in cfg:
+        _ra = cfg["resource_attribute"]
+        if _ra in ("org:role", "org:resource"):
+            ss["cfg_resource_choice"] = _ra
+        elif _ra == "":
+            ss["cfg_resource_choice"] = "(none)"
+        else:
+            ss["cfg_resource_choice"] = "Other..."
+            pr["cfg_resource_custom"] = _ra
+    if "overlay_nodes" in cfg:
+        ss[f"overlay_nodes::{fh}"] = list(cfg["overlay_nodes"])
+    if "overlay_edges" in cfg:
+        ss[f"overlay_edges::{fh}"] = list(cfg["overlay_edges"])
+    _cols = csv_columns or cfg.get("csv_columns")
+    if _cols:
+        ss["applied_csv_columns"] = tuple(_cols)
+        ss["csv_seeded_for_hash"] = fh
+    _apply_filter_spec_to_state(cfg.get("filter_spec", []), fh, pr)
+    if "scenario_strategy" in cfg:
+        ss["cond_strategy"] = cfg["scenario_strategy"]
+    if "scenario_group_name" in cfg:
+        pr["cfg_group_name"] = cfg["scenario_group_name"]
+    if "scenario_max_loop_iterations" in cfg:
+        pr["cfg_scn_max_loop"] = int(cfg["scenario_max_loop_iterations"])
+    if "scenario_decision_tree_max_depth" in cfg:
+        pr["cfg_scn_dt_depth"] = int(cfg["scenario_decision_tree_max_depth"])
+    _fa = cfg.get("family_attrs") or []
+    if _fa:
+        ss["family_attr1"] = _fa[0]
+        ss["family_attr2"] = _fa[1] if len(_fa) > 1 else _NONE_OPT
+    if "family_min_cases" in cfg:
+        pr["cfg_family_min_cases"] = int(cfg["family_min_cases"])
+    if "family_max_values" in cfg:
+        pr["cfg_family_max_values"] = int(cfg["family_max_values"])
+    if "family_bins" in cfg:
+        pr["cfg_family_bins"] = int(cfg["family_bins"])
+    for pair in (cfg.get("family_include_values") or []):
+        _attr, _labels = tuple(pair)
+        pr[f"family_values_{_attr}"] = list(_labels)
+    if cfg.get("compare_a") is not None:
+        ss["cmp_cell_a"] = cfg["compare_a"]
+    if cfg.get("compare_b") is not None:
+        ss["cmp_cell_b"] = cfg["compare_b"]
+    if cfg.get("family_dedup"):
+        notes.append("family de-dup re-applies after you mine the family.")
+    if "active_view" in cfg:
+        ss["view"] = cfg["active_view"]
+    ss["_project_restore"] = pr
+    return notes
+
+
+# A bundle or sample project attaches its log and applies immediately, here at
+# the top; a settings-only file for an *uploaded* log waits for that upload and
+# is applied just after the log source below.
+if "pending_project" in st.session_state:
+    _pp = st.session_state["pending_project"]
+    _pbytes = _pp.get("log_bytes")
+    if _pbytes is None and _pp.get("log_source") == "sample":
+        for _sp in _list_samples():
+            if _sp.name == _pp.get("log_name"):
+                _pbytes = _sp.read_bytes()
+                break
+    if _pbytes is not None:
+        _accept_log_bytes(_pp.get("log_name") or "log.xes", _pbytes)
+        st.session_state["project_notes"] = _apply_project_config(
+            _pp.get("config", {}), st.session_state["log_hash"],
+            _pp.get("csv_columns"))
+        st.session_state.pop("pending_project", None)
+        st.rerun()
+
+
 # Sidebar — miner config (decomposition affects the Model tab only; the
 # Scenarios tab always runs flat).
 with st.sidebar:
@@ -2067,9 +2238,10 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
     st.header("Inductive miner")
+    st.session_state.setdefault("cfg_noise", 0.2)   # default; a project overrides
     noise_threshold = st.slider(
         "Noise threshold", min_value=0.0, max_value=1.0,
-        value=0.2, step=0.05,
+        step=0.05, key="cfg_noise",
         help=(
             "IMf threshold. 0.0 = classic Inductive Miner. "
             "0.2 is a common practical default."
@@ -2080,7 +2252,7 @@ with st.sidebar:
     decomposition_preset = st.selectbox(
         "Decomposition",
         options=["off", "auto", "aggressive"],
-        index=0,
+        index=0, key="cfg_decomp_preset",
         help=(
             "Splits the Model tab's UCM into a root map + plug-ins. "
             "The Scenarios tab always runs flat (decomposition=None) "
@@ -2174,21 +2346,23 @@ with st.sidebar:
     resource_choice = _perf_exp.selectbox(
         "Resource attribute",
         options=_RES_BUILTIN + [_RES_OTHER, "(none)"],
-        index=0,
+        index=0, key="cfg_resource_choice",
     )
     if resource_choice == _RES_OTHER:
         resource_attribute = _perf_exp.text_input(
             "Custom attribute(s)",
-            value="org:role, org:resource, org:group",
+            value=_rv("cfg_resource_custom", "org:role, org:resource, org:group"),
+            key="cfg_resource_custom",
         )
     elif resource_choice == "(none)":
         resource_attribute = ""
     else:
         resource_attribute = resource_choice
     _min_support_disabled = not resource_attribute.strip()
+    st.session_state.setdefault("cfg_min_support", 0.0)
     min_support = _perf_exp.slider(
         "Min support", min_value=0.0, max_value=1.0,
-        value=0.0, step=0.05,
+        step=0.05, key="cfg_min_support",
         disabled=_min_support_disabled,
     )
 
@@ -2249,12 +2423,43 @@ with st.sidebar:
     st.divider()
     notation = st.radio(
         "Notation (Model tab)",
-        options=["UCM", "BPMN"], index=0,
+        options=["UCM", "BPMN"], index=0, key="cfg_notation",
     )
 
 
 # ---- Log source ------------------------------------------------------------
 samples = _list_samples()
+
+# Resume a saved project (see docs/sessions.md) — placed BEFORE the "upload a
+# log" gate so a fresh session can load one. A bundle brings its own log; a
+# settings file re-uses the current log or asks for a re-supplied one.
+if _SESSIONS_OK:
+    _load_exp = st.expander("↻ Resume a saved project", expanded=False)
+    _lp_up = _load_exp.file_uploader(
+        "Load project (.ucmproj.json / .ucmproj.zip)", type=["json", "zip"],
+        key="project_uploader",
+        help="Restores the whole session: miner settings, filters, renaming, "
+             "performers, overlays, family and scenario settings, and the "
+             "open view.")
+    _lp_id = (f"{_lp_up.name}:{_lp_up.size}" if _lp_up is not None else None)
+    if _lp_up is not None and st.session_state.get("project_loaded_id") != _lp_id:
+        try:
+            _pdoc, _plog = _sessions.load(_lp_up.getvalue())
+            st.session_state["pending_project"] = {
+                "config": _pdoc.config,
+                "log_source": _pdoc.log.source,
+                "log_name": _pdoc.log.name,
+                "expected_sha": _pdoc.log.sha256,
+                "csv_columns": _pdoc.log.csv_columns,
+                "log_bytes": _plog[1] if _plog is not None else None,
+            }
+            st.session_state["project_loaded_id"] = _lp_id
+            st.rerun()
+        except Exception as _lexc:
+            _load_exp.error(f"Could not load project: {_lexc}")
+    for _n in st.session_state.get("project_notes", []):
+        _load_exp.caption(f"ℹ️ {_n}")
+
 src_tabs = (
     st.tabs(["Sample log", "Upload your own"])
     if samples else (None, st.container())
@@ -2333,7 +2538,12 @@ if uploaded is not None:
         st.session_state["last_uploader_hash"] = _uploaded_hash
 
 if "log_bytes" not in st.session_state:
-    st.info("Upload a log to begin.")
+    if "pending_project" in st.session_state:
+        _need = st.session_state["pending_project"].get("log_name", "the log")
+        st.info(f"This project needs its event log — upload **{_need}** "
+                "(or any log) above to finish loading it.")
+    else:
+        st.info("Upload a log to begin.")
     st.stop()
 
 log_bytes = st.session_state["log_bytes"]
@@ -2341,6 +2551,18 @@ log_name = st.session_state["log_name"]
 log_kind = st.session_state["log_kind"]
 file_hash = st.session_state["log_hash"]
 style = notation.lower()
+
+# A settings-only project (saved for an uploaded log) is applied once a log is
+# loaded — the bundle/sample case was already handled at the top of the run.
+if "pending_project" in st.session_state:
+    _pp = st.session_state.pop("pending_project")
+    _notes = _apply_project_config(
+        _pp.get("config", {}), file_hash, _pp.get("csv_columns"))
+    if _pp.get("expected_sha") and _pp["expected_sha"] != file_hash:
+        _notes.insert(0, "the loaded log differs from the one this project "
+                      "was saved with — settings were applied anyway.")
+    st.session_state["project_notes"] = _notes
+    st.rerun()
 
 # ---- CSV column mapping ----------------------------------------------------
 csv_columns: Optional[Tuple[str, str, str, str, str]] = None
@@ -2528,7 +2750,8 @@ with st.sidebar:
     # expander container so the block stays flat.
     _flt_exp = st.expander("Log filters", expanded=False)
     _filter_on = _flt_exp.checkbox(
-        "Filter the event log", value=False, key="log_filter_on",
+        "Filter the event log", value=_rv("log_filter_on", False),
+        key="log_filter_on",
         help="Pre-filter the log before mining. The range sliders have two "
              "handles — keep the most or the least frequent, or a band in the "
              "middle. Changing a filter re-mines. The filter is global: every "
@@ -2550,7 +2773,8 @@ with st.sidebar:
         if len(_f_acts) > 1:
             _na = len(_f_acts)
             _ar = _flt_exp.slider(
-                "Activities by frequency rank", 1, _na, value=(1, _na),
+                "Activities by frequency rank", 1, _na,
+                value=_rv(f"flt_arank::{_k}", (1, _na)),
                 key=f"flt_arank::{_k}",
                 help="Rank 1 = most frequent. Drag the ends to keep the most "
                      "frequent, the least frequent, or a middle band; the "
@@ -2559,7 +2783,8 @@ with st.sidebar:
                 _flt["activity_ranks"] = (int(_ar[0]), int(_ar[1]))
         if _f_acts:
             _excl = _flt_exp.multiselect(
-                "Exclude activities", options=sorted(_f_acts), default=[],
+                "Exclude activities", options=sorted(_f_acts),
+                default=_rv(f"flt_excl::{_k}", []),
                 key=f"flt_excl::{_k}",
                 help="Also drop these specific activities from every trace. "
                      "Sorted alphabetically.")
@@ -2572,7 +2797,8 @@ with st.sidebar:
         if _f_dmin and _f_dmax and _f_dmin != _f_dmax:
             _lo, _hi = date.fromisoformat(_f_dmin), date.fromisoformat(_f_dmax)
             _dr = _flt_exp.slider(
-                "Date range", min_value=_lo, max_value=_hi, value=(_lo, _hi),
+                "Date range", min_value=_lo, max_value=_hi,
+                value=_rv(f"flt_date::{_k}", (_lo, _hi)),
                 key=f"flt_date::{_k}",
                 help="Drag the ends to restrict the time window.")
             if (isinstance(_dr, (list, tuple)) and len(_dr) == 2
@@ -2769,8 +2995,6 @@ with st.sidebar:
     # next step; here we only save/share.
     _proj_exp = st.expander("Project", expanded=False)
     try:
-        import sessions as _sessions  # web/ is on sys.path for the app
-
         _proj_values = {
             "noise_threshold": float(noise_threshold),
             "min_support": float(min_support),
@@ -2827,7 +3051,8 @@ with st.sidebar:
             mime="application/zip", width="stretch",
             help="Everything, including the event log — self-contained and "
                  "one-click to resume, but it ships the data.")
-        _proj_exp.caption("Loading a project to resume is coming next.")
+        _proj_exp.caption("Resume a saved project from the **log source** "
+                          "area (top of the page).")
     except Exception as _proj_exc:  # never let this break the rail
         _proj_exp.warning(f"Project save unavailable: {_proj_exc}")
 
@@ -3075,14 +3300,15 @@ if _view == "Scenarios":
             key="cond_strategy",
         )
         group_name = st.text_input(
-            "Scenario group name", value="MinedScenarios",
+            "Scenario group name",
+            value=_rv("cfg_group_name", "MinedScenarios"),
             key="cfg_group_name",
             help="Becomes the <scenarioGroups name=…> attribute in the .jucm.",
         )
     with cfg_right:
         max_loop_iterations = st.slider(
             "max_loop_iterations", min_value=1, max_value=10,
-            value=2, step=1, key="cfg_scn_max_loop",
+            value=_rv("cfg_scn_max_loop", 2), step=1, key="cfg_scn_max_loop",
             help=(
                 "Per-variant cap on the loop counter initialisation "
                 "value. Default 2 keeps scenarios short to step through "
@@ -3092,7 +3318,7 @@ if _view == "Scenarios":
         )
         decision_tree_max_depth = st.slider(
             "decision_tree_max_depth", min_value=1, max_value=6,
-            value=3, step=1, key="cfg_scn_dt_depth",
+            value=_rv("cfg_scn_dt_depth", 3), step=1, key="cfg_scn_dt_depth",
             disabled=(condition_strategy != "data-driven"),
             help=(
                 "Per-OR-fork DecisionTreeClassifier max depth. Higher "
@@ -3319,7 +3545,8 @@ if _view == "Family":
         pc3, pc4, pc5 = st.columns(3)
         family_min_cases = pc3.number_input(
             "Min cases per cell", min_value=1, max_value=100_000,
-            value=10, step=1, key="cfg_family_min_cases",
+            value=_rv("cfg_family_min_cases", 10), step=1,
+            key="cfg_family_min_cases",
             help=(
                 "Combinations with fewer cases are skipped (shown "
                 "grayed in the grid). Models mined from a handful of "
@@ -3328,7 +3555,8 @@ if _view == "Family":
         )
         family_max_values = pc4.number_input(
             "Max values per attribute", min_value=2, max_value=20,
-            value=8, step=1, key="cfg_family_max_values",
+            value=_rv("cfg_family_max_values", 8), step=1,
+            key="cfg_family_max_values",
             help=(
                 "Cardinality cap per axis; the least frequent values "
                 "merge into an 'Other' bucket."
@@ -3339,7 +3567,7 @@ if _view == "Family":
         )
         family_bins = pc5.number_input(
             "Bins (numeric attributes)", min_value=2, max_value=10,
-            value=4, step=1, disabled=not _any_numeric,
+            value=_rv("cfg_family_bins", 4), step=1, disabled=not _any_numeric,
             key="cfg_family_bins",
             help=(
                 "Numeric attributes (e.g. age) are partitioned into "
@@ -3370,7 +3598,8 @@ if _view == "Family":
                 options = base_preview["axes"].get(display, [])
                 picked = filter_cols[i].multiselect(
                     f"Values of {display}",
-                    options=options, default=options,
+                    options=options,
+                    default=_rv(f"family_values_{attr}", options),
                     key=f"family_values_{attr}",
                     help=(
                         "Deselect values to exclude them from the "
