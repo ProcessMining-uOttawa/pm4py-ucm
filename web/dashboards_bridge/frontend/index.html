@@ -1,0 +1,83 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>dashboards bridge</title></head>
+<body style="margin:0">
+<!--
+  The Streamlit ⇆ dashboard-island bridge (docs/sessions.md §11). Invisible: it
+  is a transport, not UI. Shares the island's localStorage because it is served
+  from the app's own origin (a declared component under /component/...), so it
+  can read back what the srcdoc island wrote and write a restored registry in.
+
+  It implements the Streamlit component protocol by hand (no streamlit-
+  component-lib, no build): announce ready, then on each `streamlit:render`
+  read/write localStorage and post the result back as the component value.
+-->
+<script>
+(function () {
+  function post(type, extra) {
+    window.parent.postMessage(
+      Object.assign({ isStreamlitMessage: true, type: type }, extra || {}), "*");
+  }
+  function setValue(v) { post("streamlit:setComponentValue", { value: v, dataType: "json" }); }
+  function setHeight(h) { post("streamlit:setFrameHeight", { height: h }); }
+
+  // Must match dash-ui.js: _regKey() = `pm4py-ucm:dash:${storageKey}:set`.
+  function regKey(sk) { return "pm4py-ucm:dash:" + sk + ":set"; }
+  // Where we remember which restore tokens we've already applied, so a resume
+  // re-sent on every rerun writes exactly once.
+  function tokKey(sk) { return "pm4py-ucm:dash:" + sk + ":set:restored"; }
+
+  function readRegistry(sk) {
+    try {
+      var raw = localStorage.getItem(regKey(sk));
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+
+  function appliedTokens(sk) {
+    try { return JSON.parse(localStorage.getItem(tokKey(sk)) || "[]"); }
+    catch (e) { return []; }
+  }
+
+  function applyWrite(sk, registry, token) {
+    var done = appliedTokens(sk);
+    if (done.indexOf(token) !== -1) return true;     // already restored once
+    try {
+      localStorage.setItem(regKey(sk), JSON.stringify(registry));
+      localStorage.setItem(
+        tokKey(sk), JSON.stringify(done.concat(token).slice(-20)));
+      return true;
+    } catch (e) {
+      // Storage blocked/full: resume just keeps whatever the browser had.
+      return false;
+    }
+  }
+
+  function onRender(ev) {
+    var d = ev.data;
+    if (!d || d.type !== "streamlit:render") return;
+    var a = d.args || {};
+    var sk = a.storage_key || "";
+    var applied = "";
+
+    if (sk && a.write && a.write_token) {
+      if (applyWrite(sk, a.write, a.write_token)) applied = a.write_token;
+    } else if (sk && a.write_token &&
+               appliedTokens(sk).indexOf(a.write_token) !== -1) {
+      // The token was applied on an earlier run; report it so the host stops
+      // re-sending the (already-applied) restore.
+      applied = a.write_token;
+    }
+
+    setValue({ registry: sk ? readRegistry(sk) : null, applied_token: applied });
+    setHeight(0);
+  }
+
+  window.addEventListener("message", onRender);
+  // Handshake: Streamlit sends the first `streamlit:render` after this.
+  post("streamlit:componentReady", { apiVersion: 1 });
+  setHeight(0);
+})();
+</script>
+</body>
+</html>

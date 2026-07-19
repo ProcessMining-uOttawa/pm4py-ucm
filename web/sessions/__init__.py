@@ -12,9 +12,13 @@ Public surface:
   :func:`save_bundle`, :func:`load`.
 * registry — the persisted-parameter registry and :func:`collect_config` /
   :func:`apply_config` (added in P0's registry step).
+* dashboards — :func:`wrap_registry` / :func:`unwrap_registry`, the versioned
+  envelope for the browser-island dashboards a project carries (§11); the
+  Streamlit-side transport lives in ``web/dashboards_bridge``.
 """
 from __future__ import annotations
 
+from .dashboards import BRIDGE_VERSION, unwrap_registry, wrap_registry
 from .io import dumps, load, loads, save_bundle, save_settings
 from .registry import REGISTRY, Param, collect, param_ids
 from .schema import (
@@ -40,4 +44,7 @@ __all__ = [
     "load",
     "save_settings",
     "save_bundle",
+    "BRIDGE_VERSION",
+    "wrap_registry",
+    "unwrap_registry",
 ]
