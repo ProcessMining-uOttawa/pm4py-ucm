@@ -16,6 +16,7 @@ Public surface:
 from __future__ import annotations
 
 from .io import dumps, load, loads, save_bundle, save_settings
+from .registry import REGISTRY, Param, collect, param_ids
 from .schema import (
     FORMAT,
     SCHEMA_VERSION,
@@ -30,6 +31,10 @@ __all__ = [
     "LogRef",
     "ProjectDoc",
     "ProjectError",
+    "REGISTRY",
+    "Param",
+    "collect",
+    "param_ids",
     "dumps",
     "loads",
     "load",

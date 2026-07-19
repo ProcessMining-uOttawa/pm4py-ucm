@@ -2762,6 +2762,75 @@ with st.sidebar:
         "Views", _VIEWS, label_visibility="collapsed", key="view",
     )
 
+    # ---- Project — save the whole session (see docs/sessions.md) ----------
+    # Gather the current settings into the registry-validated config and offer
+    # two downloads: a small settings file (config only) and a self-contained
+    # bundle (config + the event log). Loading a project to *resume* is the
+    # next step; here we only save/share.
+    _proj_exp = st.expander("Project", expanded=False)
+    try:
+        import sessions as _sessions  # web/ is on sys.path for the app
+
+        _proj_values = {
+            "noise_threshold": float(noise_threshold),
+            "min_support": float(min_support),
+            "notation": style,
+            "decomposition": decomposition_spec,
+            "resource_attribute": resource_attribute,
+            "overlay_nodes": list(overlay_nodes),
+            "overlay_edges": list(overlay_edges),
+            "filter_spec": filter_spec,
+            "csv_columns": list(csv_columns) if csv_columns else None,
+            "scenario_strategy": st.session_state.get(
+                "cond_strategy", "variant"),
+            "scenario_group_name": st.session_state.get(
+                "cfg_group_name", "MinedScenarios"),
+            "scenario_max_loop_iterations": int(st.session_state.get(
+                "cfg_scn_max_loop", 2)),
+            "scenario_decision_tree_max_depth": int(st.session_state.get(
+                "cfg_scn_dt_depth", 3)),
+            "family_attrs": list(st.session_state.get("cfg_family_attrs", [])),
+            "family_min_cases": int(st.session_state.get(
+                "cfg_family_min_cases", 10)),
+            "family_max_values": int(st.session_state.get(
+                "cfg_family_max_values", 8)),
+            "family_bins": int(st.session_state.get("cfg_family_bins", 4)),
+            "family_include_values": st.session_state.get(
+                "cfg_family_include_values"),
+            "family_dedup": bool(st.session_state.get(
+                "cfg_family_dedup", False)),
+            "compare_a": st.session_state.get("cmp_cell_a"),
+            "compare_b": st.session_state.get("cmp_cell_b"),
+            "active_view": st.session_state.get("view", "Model"),
+        }
+        _proj_source = ("sample"
+                        if log_name in {p.name for p in samples}
+                        else "upload")
+        _proj_doc = _sessions.ProjectDoc(
+            log=_sessions.LogRef(
+                source=_proj_source, name=log_name, kind=log_kind,
+                sha256=file_hash,
+                csv_columns=list(csv_columns) if csv_columns else None),
+            config=_sessions.collect(_proj_values),
+            app_version=_version)
+        _proj_stem = _safe_download_name(Path(log_name).stem or "project", "")
+        _proj_exp.download_button(
+            "⬇ Save settings", data=_sessions.save_settings(_proj_doc),
+            file_name=f"{_proj_stem}.ucmproj.json",
+            mime="application/json", width="stretch",
+            help="The configuration only — small and shareable (no event "
+                 "data). On resume you re-supply the log.")
+        _proj_exp.download_button(
+            "⬇ Save project bundle",
+            data=_sessions.save_bundle(_proj_doc, log_name, log_bytes),
+            file_name=f"{_proj_stem}.ucmproj.zip",
+            mime="application/zip", width="stretch",
+            help="Everything, including the event log — self-contained and "
+                 "one-click to resume, but it ships the data.")
+        _proj_exp.caption("Loading a project to resume is coming next.")
+    except Exception as _proj_exc:  # never let this break the rail
+        _proj_exp.warning(f"Project save unavailable: {_proj_exc}")
+
 # ---- Views -----------------------------------------------------------------
 st.markdown(
     f'<div class="pm-viewhead">{_view}</div>', unsafe_allow_html=True,
@@ -3007,12 +3076,13 @@ if _view == "Scenarios":
         )
         group_name = st.text_input(
             "Scenario group name", value="MinedScenarios",
+            key="cfg_group_name",
             help="Becomes the <scenarioGroups name=…> attribute in the .jucm.",
         )
     with cfg_right:
         max_loop_iterations = st.slider(
             "max_loop_iterations", min_value=1, max_value=10,
-            value=2, step=1,
+            value=2, step=1, key="cfg_scn_max_loop",
             help=(
                 "Per-variant cap on the loop counter initialisation "
                 "value. Default 2 keeps scenarios short to step through "
@@ -3022,7 +3092,7 @@ if _view == "Scenarios":
         )
         decision_tree_max_depth = st.slider(
             "decision_tree_max_depth", min_value=1, max_value=6,
-            value=3, step=1,
+            value=3, step=1, key="cfg_scn_dt_depth",
             disabled=(condition_strategy != "data-driven"),
             help=(
                 "Per-OR-fork DecisionTreeClassifier max depth. Higher "
@@ -3243,11 +3313,13 @@ if _view == "Family":
         selected_attrs: Tuple[str, ...] = (
             (attr1,) if attr2 == _NONE_OPT else (attr1, attr2)
         )
+        # Stash for the project gather (which runs on any view).
+        st.session_state["cfg_family_attrs"] = list(selected_attrs)
 
         pc3, pc4, pc5 = st.columns(3)
         family_min_cases = pc3.number_input(
             "Min cases per cell", min_value=1, max_value=100_000,
-            value=10, step=1,
+            value=10, step=1, key="cfg_family_min_cases",
             help=(
                 "Combinations with fewer cases are skipped (shown "
                 "grayed in the grid). Models mined from a handful of "
@@ -3256,7 +3328,7 @@ if _view == "Family":
         )
         family_max_values = pc4.number_input(
             "Max values per attribute", min_value=2, max_value=20,
-            value=8, step=1,
+            value=8, step=1, key="cfg_family_max_values",
             help=(
                 "Cardinality cap per axis; the least frequent values "
                 "merge into an 'Other' bucket."
@@ -3268,6 +3340,7 @@ if _view == "Family":
         family_bins = pc5.number_input(
             "Bins (numeric attributes)", min_value=2, max_value=10,
             value=4, step=1, disabled=not _any_numeric,
+            key="cfg_family_bins",
             help=(
                 "Numeric attributes (e.g. age) are partitioned into "
                 "this many quantile ranges. A column with at most this "
@@ -3309,6 +3382,8 @@ if _view == "Family":
             family_include_values = (
                 tuple(sorted(selections.items())) if selections else None
             )
+            st.session_state["cfg_family_include_values"] = (
+                family_include_values)
             preview = (
                 base_preview if family_include_values is None
                 else _family_preview(
@@ -3527,6 +3602,7 @@ if _view == "Family":
                              "the simplified OR of the members'. Off by "
                              "default — it only shapes the umbrella `.jucm` "
                              "below and the merge costs extra CPU.")
+                    st.session_state["cfg_family_dedup"] = family_dedup
                     with st.spinner("Building download files…"):
                         _df = _filtered_log_df(
                             log_bytes, log_kind, csv_columns, filter_spec,
