@@ -71,6 +71,7 @@ AREAS: dict[str, list[str]] = {
     "Visualization": [
         "test_visualization.py",
         "test_ucm_svg.py",
+        "test_heatmap.py",
     ],
     "Dashboards": [
         "test_dashboards.py",

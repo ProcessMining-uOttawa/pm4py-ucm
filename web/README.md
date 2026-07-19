@@ -240,6 +240,19 @@ stub opens a picker of its preconditioned plug-ins). Downloads:
   view. The pinned widget is itself a zoom / pan viewer — scroll to zoom,
   drag to pan, click a stub to jump to its sub-map — not a flat image.
 
+**Performance overlay & heat-map.** The sidebar's **Performance overlay** group
+annotates the model with up to two activity metrics and two edge metrics
+(frequency, coverage, service / waiting / sojourn times, an OR-fork branch's
+share …) — shown as a small gray sub-line and written to the `.jucm` as
+jUCMNav metadata. Tick **Heat-map emphasis** to additionally colour and thicken
+activities and edges by the value of the **first** metric of each layer, scaled
+**within each diagram** (so each sub-map of a decomposed model reads on its own
+scale): a **time** metric drives a **red** ramp, any other a **blue** one, with
+lighter/thinner = lower and darker/thicker = higher (contours up to 5×, edges up
+to 8×). In BPMN the activity box contour carries the emphasis; in UCM the
+responsibility marker does. It is a render-time overlay — the SVG and PNG match
+it, and the `.jucm` is unchanged.
+
 ### 5 · Scenarios
 
 Choose a **condition strategy** — *variant-driven* (lossless; every OR-fork

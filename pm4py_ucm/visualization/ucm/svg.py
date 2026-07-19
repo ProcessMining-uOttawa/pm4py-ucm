@@ -182,7 +182,10 @@ def _inject_stub_menus(svg: str, menus: List[Any]) -> str:
 
 
 def model_to_svg(ucm: "UCM", style: str = "ucm", *,
-                 id_prefix: str = "", navigable: bool = True) -> str:
+                 id_prefix: str = "", navigable: bool = True,
+                 heatmap: bool = False,
+                 node_metric: Optional[str] = None,
+                 edge_metric: Optional[str] = None) -> str:
     """One model as a single inline SVG string.
 
     A single-map model renders directly. A decomposed (multi-map) model
@@ -198,8 +201,16 @@ def model_to_svg(ucm: "UCM", style: str = "ucm", *,
     classic renderer's ``"ucm"`` / ``"bpmn"`` notation.
     """
     style = (style or "ucm").lower()
+    # Performance heat-map (optional): pass the driving metric + its time-ness
+    # to the classic renderer, which colours/thickens per diagram. ``None``
+    # when off or no metric, so every existing caller renders unchanged.
+    heat_node = ((node_metric, node_metric.endswith("_time"))
+                 if heatmap and node_metric else None)
+    heat_edge = ((edge_metric, edge_metric.endswith("_time"))
+                 if heatmap and edge_metric else None)
+    _heat = {"heatmap_node": heat_node, "heatmap_edge": heat_edge}
     if len(ucm.maps) <= 1:
-        gviz = _visualizer.apply(ucm, parameters={"style": style})
+        gviz = _visualizer.apply(ucm, parameters={"style": style, **_heat})
         return svg_body(gviz.pipe(format="svg").decode("utf-8"))
 
     stub_links: Dict[int, Any] = {}
@@ -240,7 +251,8 @@ def model_to_svg(ucm: "UCM", style: str = "ucm", *,
     for idx, ucm_map in enumerate(ucm.maps):
         gviz = _classic.apply(
             ucm, parameters={"style": style, "map_index": idx,
-                             "format": "svg", "stub_links": stub_links})
+                             "format": "svg", "stub_links": stub_links,
+                             **_heat})
         name = ucm_map.name or f"Map{idx}"
         panels.append((name, svg_body(gviz.pipe(format="svg").decode("utf-8"))))
     return _inject_stub_menus(stack_svgs(panels, id_prefix=id_prefix), menus)
