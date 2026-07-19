@@ -2051,7 +2051,7 @@ with st.sidebar:
         # otherwise hugs the rail's left edge). The 1:2:1 split renders the
         # logo at ~half the rail width (~120 px).
         _lc = st.columns([1, 2, 1])
-        _lc[1].image(str(_LOGO_PATH), use_container_width=True)
+        _lc[1].image(str(_LOGO_PATH), width="stretch")
     else:  # fallback to the wordmark if the asset is missing
         st.markdown(
             f'<div class="pm-brand">'
@@ -2456,14 +2456,14 @@ def _rename_dialog(orig_acts, applied_map, seed_suffix):
     # on the upload id so a new upload re-seeds it.
     with st.form(f"rename_form::{seed_suffix}::{up_id}", border=False):
         edited = st.data_editor(
-            seed_df, hide_index=True, use_container_width=True,
+            seed_df, hide_index=True, width="stretch",
             disabled=["activity"],
             column_config={
                 "new name": st.column_config.TextColumn(
                     "new name", default="")},
             key=f"rename_dialog_editor::{seed_suffix}::{up_id}")
         submitted = st.form_submit_button(
-            "Apply", type="primary", use_container_width=True)
+            "Apply", type="primary", width="stretch")
     # Build the map from the editor state, treating a cleared cell
     # (None / NaN / blank) as "no rename" so deleting a new name un-renames
     # that activity.
@@ -2485,9 +2485,9 @@ def _rename_dialog(orig_acts, applied_map, seed_suffix):
         "⬇ Export mapping (JSON)",
         data=json.dumps(new_map, indent=2, ensure_ascii=False),
         file_name="activity_rename.json", mime="application/json",
-        disabled=not new_map, use_container_width=True,
+        disabled=not new_map, width="stretch",
         help="The current map, in the same JSON format the loader accepts.")
-    if st.button("Cancel", use_container_width=True):
+    if st.button("Cancel", width="stretch"):
         st.rerun()
 
 
@@ -2505,7 +2505,7 @@ with st.sidebar:
         _orig_acts = []
     _rn_label = (f"✎ Rename activities ({len(rename_map)})"
                  if rename_map else "✎ Rename activities…")
-    if _orig_acts and st.button(_rn_label, use_container_width=True,
+    if _orig_acts and st.button(_rn_label, width="stretch",
                                 key="open_rename"):
         # A fresh editor key per open (seeded from the applied map), so a
         # prior open's cell edits never linger under the new one.
@@ -2878,7 +2878,7 @@ if _view == "Model":
         file_name=_safe_download_name(Path(log_name).stem, ".jucm"),
         mime="application/xml",
     )
-    with d4.popover("Pin to dashboard ▦", use_container_width=True):
+    with d4.popover("Pin to dashboard ▦", width="stretch"):
         st.caption(
             "Adds the model to the Dashboards view as a widget. The pin "
             "is live: it renders whatever the model currently is, so it "
@@ -3116,7 +3116,7 @@ if _view == "Scenarios":
             )
 
         st.subheader("Variants")
-        st.dataframe(synth["variants_df"], use_container_width=True)
+        st.dataframe(synth["variants_df"], width="stretch")
 
         if synth["condition_df"] is not None:
             st.subheader("Condition mining (per OR-fork)")
@@ -3127,7 +3127,7 @@ if _view == "Scenarios":
                 "data-driven path cannot disambiguate from case-level "
                 "attributes."
             )
-            st.dataframe(synth["condition_df"], use_container_width=True)
+            st.dataframe(synth["condition_df"], width="stretch")
 
         st.subheader("Downloads")
         stem = Path(log_name).stem
@@ -3224,7 +3224,7 @@ if _view == "Family":
     else:
         with st.expander("Detected case attributes", expanded=False):
             st.dataframe(
-                pd.DataFrame(attr_rows), use_container_width=True,
+                pd.DataFrame(attr_rows), width="stretch",
                 hide_index=True,
             )
 
@@ -3328,7 +3328,7 @@ if _view == "Family":
         if preview is not None:
             st.markdown("**Case coverage per combination** "
                         "(mined cells need ≥ min cases)")
-            st.dataframe(preview["pivot"], use_container_width=True)
+            st.dataframe(preview["pivot"], width="stretch")
             pm1, pm2, pm3, pm4 = st.columns(4)
             pm1.metric("Cells to mine", preview["n_cells"])
             pm2.metric("Skipped (small)", preview["n_skipped"])
@@ -3486,7 +3486,7 @@ if _view == "Family":
 
                 st.subheader("Cells")
                 st.dataframe(
-                    fam["summary_df"], use_container_width=True,
+                    fam["summary_df"], width="stretch",
                     hide_index=True,
                 )
 
@@ -3669,7 +3669,7 @@ if _view == "Compare":
             else:
                 _proc_fmts[_c] = "{:,.0f}"
         st.dataframe(
-            _heat_styler(_proc, _proc_fmts), use_container_width=True,
+            _heat_styler(_proc, _proc_fmts), width="stretch",
         )
         if not _stats.has_intervals:
             st.caption(
@@ -3895,7 +3895,7 @@ if _view == "Compare":
             _per_case, _m_kind, "activity",
         )
         st.dataframe(
-            _heat_styler(_cmp_df, _cmp_fmts), use_container_width=True,
+            _heat_styler(_cmp_df, _cmp_fmts), width="stretch",
         )
 
         if _stats.edge_names:
@@ -3941,7 +3941,7 @@ if _view == "Compare":
             )
             st.dataframe(
                 _heat_styler(_edge_df, _edge_fmts),
-                use_container_width=True,
+                width="stretch",
             )
             if not _stats.has_intervals:
                 st.caption(
@@ -3986,7 +3986,7 @@ if _view == "Compare":
                 _ch_fmts["n"] = "{:,.0f}"
                 st.dataframe(
                     _heat_styler(_ch_df, _ch_fmts),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
         # ---- report download ----------------------------------------------
