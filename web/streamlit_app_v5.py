@@ -2232,10 +2232,23 @@ def _apply_project_config(cfg, fh, csv_columns=None):
         else:
             ss["cfg_resource_choice"] = "Other..."
             pr["cfg_resource_custom"] = _ra
+    # Seed both the staged multiselect and the applied value (the metrics go
+    # through an Apply button now), so a resumed project's overlay takes effect
+    # immediately instead of showing as an unapplied change.
     if "overlay_nodes" in cfg:
         ss[f"overlay_nodes::{fh}"] = list(cfg["overlay_nodes"])
+        ss[f"overlay_nodes_applied::{fh}"] = list(cfg["overlay_nodes"])
     if "overlay_edges" in cfg:
         ss[f"overlay_edges::{fh}"] = list(cfg["overlay_edges"])
+        ss[f"overlay_edges_applied::{fh}"] = list(cfg["overlay_edges"])
+    # Heat-map on/off + scale (the checkbox / radio carry no value=/index that
+    # clashes with a pre-set key, so seed them directly, warning-free).
+    if "overlay_heatmap" in cfg:
+        ss[f"overlay_heatmap::{fh}"] = bool(cfg["overlay_heatmap"])
+    if "overlay_heatmap_global" in cfg:
+        ss[f"overlay_heat_scope::{fh}"] = (
+            "Global (whole model)" if cfg["overlay_heatmap_global"]
+            else "Local (per map)")
     _cols = csv_columns or cfg.get("csv_columns")
     if _cols:
         ss["applied_csv_columns"] = tuple(_cols)
@@ -3230,6 +3243,8 @@ with st.sidebar:
             "resource_attribute": resource_attribute,
             "overlay_nodes": list(overlay_nodes),
             "overlay_edges": list(overlay_edges),
+            "overlay_heatmap": bool(overlay_heatmap),
+            "overlay_heatmap_global": bool(overlay_heatmap_global),
             "filter_spec": filter_spec,
             "csv_columns": list(csv_columns) if csv_columns else None,
             "scenario_strategy": st.session_state.get(

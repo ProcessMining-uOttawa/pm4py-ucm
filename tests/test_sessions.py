@@ -163,6 +163,17 @@ def test_dashboards_unwrap_is_tolerant():
     assert unwrap_registry({"registry": {"dashboards": "nope"}}) is None
 
 
+def test_heatmap_settings_survive_a_project_round_trip():
+    # The heat-map on/off + scale are persisted like any other overlay setting.
+    doc = _doc(config={"overlay_nodes": ["mean_time"],
+                       "overlay_heatmap": True,
+                       "overlay_heatmap_global": True})
+    back = loads(dumps(doc))
+    assert back.config["overlay_heatmap"] is True
+    assert back.config["overlay_heatmap_global"] is True
+    assert back.config["overlay_nodes"] == ["mean_time"]
+
+
 def test_dashboards_survive_a_project_round_trip():
     doc = _doc(dashboards=wrap_registry(_REGISTRY))
     again = loads(dumps(doc))
