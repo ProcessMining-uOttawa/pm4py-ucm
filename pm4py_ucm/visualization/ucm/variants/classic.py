@@ -409,10 +409,11 @@ def _resp_label(node: "UCM.RespRef") -> str:
 
 #: Activity-contour thickness ceiling, as a multiple of the base penwidth.
 _HEAT_NODE_MAX = 5.0
-#: Edge line-thickness ceiling per style (× the base edge penwidth). UCM paths
-#: are already thick (2.6 pt), so a lower ceiling keeps hot edges legible
-#: rather than slab-like; BPMN's thinner 1 pt base can take more.
-_HEAT_EDGE_MAX = {STYLE_UCM: 4.0, STYLE_BPMN: 8.0}
+#: Edge line thickness per style as an ABSOLUTE ``(min_pt, max_pt)`` range —
+#: the lowest-valued edge in the diagram is ``min_pt``, the highest ``max_pt``.
+#: UCM paths are already ~2.6 pt, so they only reach 6.5 (2.5×); BPMN's thinner
+#: paths start a little heavier and top out at 6.
+_HEAT_EDGE_PW = {STYLE_UCM: (2.6, 6.5), STYLE_BPMN: (1.33, 6.0)}
 #: Contour / marker ramp endpoints (light = lowest value, dark = highest), RGB.
 _HEAT_RED = ((250, 170, 170), (127, 20, 20))    # pinkish → dark red
 _HEAT_BLUE = ((150, 195, 250), (20, 55, 140))   # light blue → dark blue
@@ -421,12 +422,10 @@ _HEAT_BLUE = ((150, 195, 250), (20, 55, 140))   # light blue → dark blue
 #: stronger signal. Endpoints kept lighter than the contour endpoints above.
 _HEAT_RED_FILL = ((253, 236, 236), (244, 176, 176))   # near-white → pastel red
 _HEAT_BLUE_FILL = ((235, 242, 253), (176, 202, 244))  # near-white → pastel blue
-#: UCM responsibility marker: square half-extent (inches) at the lowest and
-#: highest value. The marker grows with the value so a hot responsibility is
-#: easy to spot; the small fixed 0.10 marker was hard to see.
-_HEAT_UCM_MARKER = (0.16, 0.42)
-#: Base edge penwidth per style — kept in sync with the ``edge_attr`` below.
-_EDGE_BASE_PENWIDTH = {STYLE_UCM: 2.6, STYLE_BPMN: 1.0}
+#: UCM responsibility marker: square side (inches) at the lowest and highest
+#: value. The marker grows with the value so a hot responsibility is easy to
+#: spot; the small fixed 0.10 marker was hard to see.
+_HEAT_UCM_MARKER = (0.14, 0.30)
 
 _DURATION_UNITS = {"s": 1.0, "m": 60.0, "h": 3600.0,
                    "d": 86400.0, "y": 365.25 * 86400.0}
@@ -966,14 +965,13 @@ def _emit_map(
         elif (style_name == STYLE_UCM
                 and isinstance(c.target, UCM.RespRef)):
             edge_attrs["arrowhead"] = "none"
-        # Heat-map emphasis: colour the arc on the ramp and scale its penwidth
-        # from the style's base up to _HEAT_EDGE_MAX×. Only arcs that carry the
+        # Heat-map emphasis: colour the arc on the ramp and lerp its penwidth
+        # across the style's _HEAT_EDGE_PW range. Only arcs that carry the
         # metric are touched; the rest keep the default edge colour/weight.
         if id(c) in edge_heat:
             t = edge_heat[id(c)]
-            base = _EDGE_BASE_PENWIDTH.get(style_name, 1.0)
-            emax = _HEAT_EDGE_MAX.get(style_name, 8.0)
+            pmin, pmax = _HEAT_EDGE_PW.get(
+                style_name, _HEAT_EDGE_PW[STYLE_BPMN])
             edge_attrs["color"] = _heat_color(t, edge_heat_time)
-            edge_attrs["penwidth"] = (
-                f"{base * (1.0 + t * (emax - 1.0)):.2f}")
+            edge_attrs["penwidth"] = f"{pmin + t * (pmax - pmin):.2f}"
         g.edge(node_id(c.source), node_id(c.target), **edge_attrs)

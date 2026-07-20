@@ -84,9 +84,14 @@ def test_global_span_overrides_local_range():
     assert _classic._heat_normalize({1: 50.0}, span=(0.0, 40.0))[1] == 1.0
 
 
-def test_edge_thickness_ceiling_is_lower_for_ucm():
-    # UCM paths are already thick, so their heat ceiling is below BPMN's.
-    assert _classic._HEAT_EDGE_MAX["ucm"] < _classic._HEAT_EDGE_MAX["bpmn"]
+def test_edge_thickness_ranges_per_style():
+    ucm_lo, ucm_hi = _classic._HEAT_EDGE_PW["ucm"]
+    bpmn_lo, bpmn_hi = _classic._HEAT_EDGE_PW["bpmn"]
+    # Every hot edge stays within its style's absolute pt range, low < high.
+    assert ucm_lo < ucm_hi and bpmn_lo < bpmn_hi
+    # UCM tops out at 2.5× its base path; BPMN starts a touch heavier than 1 pt.
+    assert ucm_hi == pytest.approx(2.6 * 2.5)
+    assert bpmn_lo > 1.0
 
 
 # -- segment propagation across empty points --------------------------------

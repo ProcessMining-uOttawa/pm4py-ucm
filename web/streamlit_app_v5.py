@@ -2592,7 +2592,11 @@ with st.sidebar:
                  "picks first, then apply them together."):
         st.session_state[_applied_node_key] = list(_staged_nodes)
         st.session_state[_applied_edge_key] = list(_staged_edges)
-        st.rerun()
+        # No st.rerun(): the button click already reruns, and continuing this
+        # run renders the model with the new metrics. An st.rerun() here would
+        # abort before the heat-map checkbox / scale below are rendered, and
+        # Streamlit would then drop their state (turning the heat-map off).
+        _ov_dirty = False
     if _ov_dirty:
         _ovl_exp.caption("Unapplied metric changes — click **Apply metric "
                          "changes**.")
