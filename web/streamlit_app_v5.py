@@ -408,14 +408,24 @@ def _mine(
 
 
 @st.cache_data(show_spinner=False)
-def _render_cached(jucm_bytes: bytes, style: str) -> bytes:
+def _render_cached(jucm_bytes: bytes, style: str,
+                   heatmap: bool = False,
+                   node_metric: Optional[str] = None,
+                   edge_metric: Optional[str] = None,
+                   heatmap_global: bool = False) -> bytes:
+    heat_node = ((node_metric, node_metric.endswith("_time"))
+                 if heatmap and node_metric else None)
+    heat_edge = ((edge_metric, edge_metric.endswith("_time"))
+                 if heatmap and edge_metric else None)
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
         jucm_path = td / "model.jucm"
         jucm_path.write_bytes(jucm_bytes)
         ucm = pm4py_ucm.read_ucm(str(jucm_path))
         png_path = td / "model.png"
-        _render_png(ucm, style, str(png_path))
+        _render_png(ucm, style, str(png_path),
+                    heatmap_node=heat_node, heatmap_edge=heat_edge,
+                    heatmap_global=heatmap_global)
         return png_path.read_bytes()
 
 
@@ -428,22 +438,38 @@ def _render_cached(jucm_bytes: bytes, style: str) -> bytes:
 
 
 @st.cache_data(show_spinner=False)
-def _render_svg_cached(jucm_bytes: bytes, style: str) -> str:
-    """The model as one inline SVG string (cached per ``jucm`` + notation).
+def _render_svg_cached(jucm_bytes: bytes, style: str,
+                       heatmap: bool = False,
+                       node_metric: Optional[str] = None,
+                       edge_metric: Optional[str] = None,
+                       heatmap_global: bool = False) -> str:
+    """The model as one inline SVG string (cached per ``jucm`` + notation
+    + heat-map settings).
 
     SVG zooms and pans crisply where a raster does not, and its text is
     selectable. Decomposed models stack their maps and hyperlink each
     stub to its sub-map — see :func:`pm4py_ucm.visualization.ucm.svg`.
+
+    ``heatmap`` colours/thickens activities and edges by the first overlay
+    metric, per diagram (``node_metric`` / ``edge_metric`` name the driving
+    metrics — the overlay's ``perf_<metric>`` metadata must be present).
     """
     with tempfile.TemporaryDirectory() as td:
         jucm_path = Path(td) / "model.jucm"
         jucm_path.write_bytes(jucm_bytes)
         ucm = pm4py_ucm.read_ucm(str(jucm_path))
-        return _svgmod.model_to_svg(ucm, style)
+        return _svgmod.model_to_svg(
+            ucm, style, heatmap=heatmap,
+            node_metric=node_metric, edge_metric=edge_metric,
+            heatmap_global=heatmap_global)
 
 
-def _render_png(ucm, style: str, out_path: str) -> str:
-    params = {"style": style}
+def _render_png(ucm, style: str, out_path: str,
+                heatmap_node=None, heatmap_edge=None,
+                heatmap_global=False) -> str:
+    params = {"style": style,
+              "heatmap_node": heatmap_node, "heatmap_edge": heatmap_edge,
+              "heatmap_global": heatmap_global}
     if len(ucm.maps) <= 1:
         gviz = _visualizer.apply(ucm, parameters=params)
         return _visualizer.save(gviz, out_path)
@@ -2206,10 +2232,23 @@ def _apply_project_config(cfg, fh, csv_columns=None):
         else:
             ss["cfg_resource_choice"] = "Other..."
             pr["cfg_resource_custom"] = _ra
+    # Seed both the staged multiselect and the applied value (the metrics go
+    # through an Apply button now), so a resumed project's overlay takes effect
+    # immediately instead of showing as an unapplied change.
     if "overlay_nodes" in cfg:
         ss[f"overlay_nodes::{fh}"] = list(cfg["overlay_nodes"])
+        ss[f"overlay_nodes_applied::{fh}"] = list(cfg["overlay_nodes"])
     if "overlay_edges" in cfg:
         ss[f"overlay_edges::{fh}"] = list(cfg["overlay_edges"])
+        ss[f"overlay_edges_applied::{fh}"] = list(cfg["overlay_edges"])
+    # Heat-map on/off + scale (the checkbox / radio carry no value=/index that
+    # clashes with a pre-set key, so seed them directly, warning-free).
+    if "overlay_heatmap" in cfg:
+        ss[f"overlay_heatmap::{fh}"] = bool(cfg["overlay_heatmap"])
+    if "overlay_heatmap_global" in cfg:
+        ss[f"overlay_heat_scope::{fh}"] = (
+            "Global (whole model)" if cfg["overlay_heatmap_global"]
+            else "Local (per map)")
     _cols = csv_columns or cfg.get("csv_columns")
     if _cols:
         ss["applied_csv_columns"] = tuple(_cols)
@@ -2516,7 +2555,10 @@ with st.sidebar:
             "frequency", "median_time" if _interval else "sojourn_median_time"]
     if _edge_key not in st.session_state:
         st.session_state[_edge_key] = ["percentage", "frequency"]
-    overlay_nodes = tuple(_ovl_exp.multiselect(
+    # The metric multiselects only STAGE a choice; picking a metric
+    # re-annotates the model, so changes are batched behind an Apply button
+    # (below) instead of re-mining after every single pick.
+    _staged_nodes = _ovl_exp.multiselect(
         "On activities (max 2)",
         options=list(_NODE_METRICS), key=_node_key,
         help=(
@@ -2531,8 +2573,8 @@ with st.sidebar:
             "written to the .jucm as jUCMNav metadata regardless of the "
             "≤2 shown on the diagram. See docs/metrics.md."
         ),
-    )[:2])
-    overlay_edges = tuple(_ovl_exp.multiselect(
+    )[:2]
+    _staged_edges = _ovl_exp.multiselect(
         "On edges (max 2)",
         options=list(_EDGE_METRICS), key=_edge_key,
         help=(
@@ -2545,7 +2587,60 @@ with st.sidebar:
             "p90/p95) apply to single-pair segments; min/max and mean/"
             "total also aggregate across fork-after-join segments."
         ),
-    )[:2])
+    )[:2]
+    # Applied values (what mining + rendering use). Seed from the staged
+    # picks (which a resumed project may have set) on first render.
+    _applied_node_key = f"overlay_nodes_applied::{_ov_hash}"
+    _applied_edge_key = f"overlay_edges_applied::{_ov_hash}"
+    st.session_state.setdefault(_applied_node_key, list(_staged_nodes))
+    st.session_state.setdefault(_applied_edge_key, list(_staged_edges))
+    _ov_dirty = (
+        list(_staged_nodes) != list(st.session_state[_applied_node_key])
+        or list(_staged_edges) != list(st.session_state[_applied_edge_key]))
+    if _ovl_exp.button(
+            "Apply metric changes", width="stretch",
+            type="primary" if _ov_dirty else "secondary",
+            disabled=not _ov_dirty,
+            help="Overlay metrics re-annotate the model, so make all your "
+                 "picks first, then apply them together."):
+        st.session_state[_applied_node_key] = list(_staged_nodes)
+        st.session_state[_applied_edge_key] = list(_staged_edges)
+        # No st.rerun(): the button click already reruns, and continuing this
+        # run renders the model with the new metrics. An st.rerun() here would
+        # abort before the heat-map checkbox / scale below are rendered, and
+        # Streamlit would then drop their state (turning the heat-map off).
+        _ov_dirty = False
+    if _ov_dirty:
+        _ovl_exp.caption("Unapplied metric changes — click **Apply metric "
+                         "changes**.")
+    overlay_nodes = tuple(st.session_state[_applied_node_key])
+    overlay_edges = tuple(st.session_state[_applied_edge_key])
+
+    # Heat-map emphasis: colour + thickness on activities/edges by the FIRST
+    # applied metric of each layer. A render-time overlay (no change to the
+    # .jucm), so it applies instantly — no Apply needed.
+    overlay_heatmap = _ovl_exp.checkbox(
+        "Heat-map emphasis",
+        key=f"overlay_heatmap::{_ov_hash}",
+        help=(
+            "Colour and thicken activity contours / fills (BPMN) or "
+            "responsibility markers (UCM) and edges by the value of the "
+            "**first** applied metric of each layer. Red for a time metric, "
+            "blue otherwise; lighter/thinner = lower, darker/thicker = "
+            "higher. No effect on a layer with no metric."
+        ),
+    )
+    _heat_scope = _ovl_exp.radio(
+        "Heat-map scale",
+        options=["Local (per map)", "Global (whole model)"],
+        index=0, key=f"overlay_heat_scope::{_ov_hash}", horizontal=True,
+        disabled=not overlay_heatmap,
+        help="**Local** scales each diagram to its own min/max (each sub-map "
+             "highlights its own hotspots). **Global** scales every map "
+             "against the whole model's min/max, so the same value looks the "
+             "same everywhere. Identical when the model isn't decomposed.",
+    )
+    overlay_heatmap_global = _heat_scope.startswith("Global")
 
     st.divider()
     notation = st.radio(
@@ -3148,6 +3243,8 @@ with st.sidebar:
             "resource_attribute": resource_attribute,
             "overlay_nodes": list(overlay_nodes),
             "overlay_edges": list(overlay_edges),
+            "overlay_heatmap": bool(overlay_heatmap),
+            "overlay_heatmap_global": bool(overlay_heatmap_global),
             "filter_spec": filter_spec,
             "csv_columns": list(csv_columns) if csv_columns else None,
             "scenario_strategy": st.session_state.get(
@@ -3263,9 +3360,22 @@ if _view == "Model":
     # selectable text, and cheap (0.1–0.4 s even for a decomposed stack).
     # PNG is no longer rendered proactively — it is a download prepared on
     # demand below.
+    # Heat-map render settings, shared by the SVG (on-screen + download) and
+    # the PNG so all three agree. Only drives anything when the checkbox is on
+    # and the relevant overlay layer has a metric.
+    _heat_kwargs = dict(
+        heatmap=bool(overlay_heatmap),
+        node_metric=overlay_nodes[0] if overlay_nodes else None,
+        edge_metric=overlay_edges[0] if overlay_edges else None,
+        heatmap_global=bool(overlay_heatmap_global),
+    )
+    _heat_tag = (
+        f"h{int(bool(overlay_heatmap))}g{int(bool(overlay_heatmap_global))}"
+        f"{_heat_kwargs['node_metric'] or ''}{_heat_kwargs['edge_metric'] or ''}"
+    )
     try:
         with st.spinner(f"Rendering {notation} diagram..."):
-            _svg = _render_svg_cached(mined["jucm"], style)
+            _svg = _render_svg_cached(mined["jucm"], style, **_heat_kwargs)
         _svg_err = None
     except Exception as _exc:
         _svg = None
@@ -3273,16 +3383,34 @@ if _view == "Model":
 
     if _svg is not None:
         _svg_viewer(_svg, height=620)
+        _heat_caption = ""
+        if overlay_heatmap and (overlay_nodes or overlay_edges):
+            _heat_bits = []
+            if overlay_nodes:
+                _heat_bits.append(f"activities by **{overlay_nodes[0]}**")
+            if overlay_edges:
+                _heat_bits.append(f"edges by **{overlay_edges[0]}**")
+            _heat_caption = (
+                " Heat-map on: " + " and ".join(_heat_bits)
+                + (" (whole-model scale; " if overlay_heatmap_global
+                   else " (per-diagram scale; ")
+                + ("red = time" if any(
+                    _m and _m[0].endswith("_time")
+                    for _m in (overlay_nodes, overlay_edges) if _m)
+                   else "blue")
+                + ", darker/thicker = higher)."
+            )
         st.caption(
             f"Mined model ({notation}, "
             f"decomposition={decomposition_preset}) — vector SVG; scroll "
             "to zoom, drag to pan. Download SVG or a raster PNG below."
+            + _heat_caption
         )
     else:
         # SVG failed for some reason — fall back to a PNG so the model is
         # still visible, and say why.
         try:
-            _png_fallback = _render_cached(mined["jucm"], style)
+            _png_fallback = _render_cached(mined["jucm"], style, **_heat_kwargs)
             st.markdown(
                 f'<img src="data:image/png;base64,'
                 f'{base64.b64encode(_png_fallback).decode("ascii")}" '
@@ -3316,7 +3444,7 @@ if _view == "Model":
     # display. First press renders (with a spinner) and stashes it; the
     # button then becomes the actual download. Keyed by model + notation
     # so switching either re-arms it.
-    _png_key = f"model_png::{file_hash}::{style}"
+    _png_key = f"model_png::{file_hash}::{style}::{_heat_tag}"
     with d2:
         if _png_key in st.session_state:
             st.download_button(
@@ -3330,7 +3458,7 @@ if _view == "Model":
             with st.spinner(f"Rendering {notation} PNG..."):
                 try:
                     st.session_state[_png_key] = _render_cached(
-                        mined["jucm"], style)
+                        mined["jucm"], style, **_heat_kwargs)
                 except Exception as exc:
                     st.warning(f"PNG render failed: {exc}")
             st.rerun()

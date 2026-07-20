@@ -469,24 +469,24 @@ class StubRenderingTests(unittest.TestCase):
     def test_bpmn_stub_carries_decomposition_marker(self):
         """In BPMN style, stubs gain a bold ``+`` glyph below the name
         (via graphviz HTML labels) to match the BPMN sub-process
-        convention. The fill is a light pastel pink with a darker
-        pink contour so decomposed activities stand out."""
+        convention. The fill is a light pastel green with a darker
+        green contour so decomposed activities stand out."""
         ucm = self._build_with_stub()
         g = visualizer.apply(ucm, parameters={"style": "bpmn"})
         # HTML label with bold plus marker.
         self.assertIn("<B>+</B>", g.source)
-        # And the pastel-pink colour palette.
-        self.assertIn("#FFD4E5", g.source)  # fill
-        self.assertIn("#C04079", g.source)  # contour
+        # And the pastel-green colour palette.
+        self.assertIn("#D6EFD6", g.source)  # fill
+        self.assertIn("#3F8A4B", g.source)  # contour
 
     def test_ucm_stub_omits_decomposition_marker(self):
         """The UCM style relies on the diamond shape to signal
         decomposition; the BPMN-only ``+`` marker should not appear,
-        and the pink palette is BPMN-only too."""
+        and the green sub-process palette is BPMN-only too."""
         ucm = self._build_with_stub()
         g = visualizer.apply(ucm, parameters={"style": "ucm"})
         self.assertNotIn("<B>+</B>", g.source)
-        self.assertNotIn("#FFD4E5", g.source)
+        self.assertNotIn("#D6EFD6", g.source)
 
 
 class LabelLineBreakTests(unittest.TestCase):

@@ -39,6 +39,8 @@ REGISTRY: Tuple[Param, ...] = (
     # Performance overlay.
     Param("overlay_nodes", "overlay", []),
     Param("overlay_edges", "overlay", []),
+    Param("overlay_heatmap", "overlay", False),
+    Param("overlay_heatmap_global", "overlay", False),
     # Pre-mining transforms (rename lives inside the filter spec).
     Param("filter_spec", "transform", []),      # list of [key, value] pairs
     # CSV column mapping (case, activity, timestamp, role, resource).
