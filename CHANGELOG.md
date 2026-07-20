@@ -11,16 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Performance heat-map** — an optional Model-view emphasis (a checkbox in the
   Performance-overlay group) that colours and thickens activities and edges by
-  the value of the **first** selected metric of each layer, **scaled within
-  each diagram** (so every sub-map reads on its own scale under decomposition).
-  A time metric drives a **red** ramp, any other a **blue** one; lighter/thinner
-  = lower, darker/thicker = higher (contours up to 5×, edges up to 8×). A path
-  keeps one colour and thickness across its routing points (empty points) up to
-  the next real node, so a segment reads as a single line. In BPMN the activity
-  box contour is emphasised; in UCM the responsibility marker
-  itself is. It is a render-time overlay of the existing `perf_<metric>`
-  metadata — the on-screen SVG, the SVG and the PNG downloads all agree, and the
-  `.jucm` is unchanged. No metric selected on a layer → that layer is unchanged.
+  the value of the **first** selected metric of each layer. A time metric drives
+  a **red** ramp, any other a **blue** one; lighter/thinner = lower,
+  darker/thicker = higher. A **scale** control chooses **local** (each diagram
+  on its own min/max — every sub-map highlights its own hotspots) or **global**
+  (every map against the whole model's min/max, so a value reads the same
+  everywhere); they coincide when the model isn't decomposed. In **BPMN** the
+  activity box is tinted (a pale value-scaled wash) under a stronger, thickened
+  contour; in **UCM** the responsibility marker itself colours and **grows**
+  with the value (a small marker was hard to spot), and the already-thick UCM
+  paths use a lower thickness ceiling. A path keeps one colour and thickness
+  across its routing points (empty points) up to the next real node, so a
+  segment reads as a single line. It is a render-time overlay of the existing
+  `perf_<metric>` metadata — the on-screen SVG and the SVG / PNG downloads all
+  agree, and the `.jucm` is unchanged. No metric on a layer → that layer is
+  unchanged.
+- **Overlay metrics apply on a button.** Picking overlay metrics re-annotates
+  the model, so the activity / edge selections now stage behind an **Apply
+  metric changes** button rather than re-mining after each single pick.
+
+### Changed — Web app (V5)
+
+- **BPMN decomposed activities (sub-processes) are now pastel green** with a
+  green contour (was pink), reading as a distinct, calmer sub-process colour.
 
 ### Fixed — Web app (V5)
 

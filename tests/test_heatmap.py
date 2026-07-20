@@ -62,6 +62,33 @@ def test_heat_color_endpoints_and_ramp():
     assert mid not in ("#96c3fa", "#14378c") and mid.startswith("#")
 
 
+def _lum(hexstr):
+    h = hexstr.lstrip("#")
+    return sum(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def test_fill_ramp_is_paler_than_contour():
+    # The BPMN box fill is a wash — lighter than the contour at both ends.
+    for tb in (True, False):
+        for t in (0.0, 0.5, 1.0):
+            assert _lum(_classic._heat_fill_color(t, tb)) \
+                >= _lum(_classic._heat_color(t, tb))
+
+
+def test_global_span_overrides_local_range():
+    vals = {1: 10.0, 2: 20.0}
+    # Local: 20 is the max -> t=1. Global span [0, 40]: 20 -> t=0.5.
+    assert _classic._heat_normalize(vals)[2] == 1.0
+    assert _classic._heat_normalize(vals, span=(0.0, 40.0))[2] == pytest.approx(0.5)
+    # Values are clamped into [0, 1] against an external span.
+    assert _classic._heat_normalize({1: 50.0}, span=(0.0, 40.0))[1] == 1.0
+
+
+def test_edge_thickness_ceiling_is_lower_for_ucm():
+    # UCM paths are already thick, so their heat ceiling is below BPMN's.
+    assert _classic._HEAT_EDGE_MAX["ucm"] < _classic._HEAT_EDGE_MAX["bpmn"]
+
+
 # -- segment propagation across empty points --------------------------------
 
 def _chain(n_empty):

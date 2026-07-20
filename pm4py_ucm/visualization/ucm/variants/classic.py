@@ -116,11 +116,11 @@ _BPMN_STYLES: Dict[type, Dict[str, str]] = {
     UCM.Stub: dict(
         # BPMN sub-process: rounded rectangle with a decomposition
         # marker (bold ``+`` glyph) appended to the label below the
-        # name. Light pastel pink fill with a deeper pink contour
+        # name. Pastel green fill with a deeper green contour
         # distinguishes sub-process activities at a glance from
         # ordinary RespRef boxes (which are pale yellow).
-        shape="box", style="rounded,filled", fillcolor="#FFD4E5",
-        color="#C04079", penwidth="1.5", fixedsize="false",
+        shape="box", style="rounded,filled", fillcolor="#D6EFD6",
+        color="#3F8A4B", penwidth="1.5", fixedsize="false",
     ),
     UCM.Connect: dict(
         shape="point", width="0.10", height="0.10", label="",
@@ -407,13 +407,24 @@ def _resp_label(node: "UCM.RespRef") -> str:
 # (so it round-trips through the .jucm), parsed back from its formatted form —
 # the display rounding is immaterial to a gradient. No metric → no emphasis.
 
-#: Contour / line thickness ceilings, as multiples of the element's base
-#: penwidth (an activity's contour may reach 5×, an edge 8×).
+#: Activity-contour thickness ceiling, as a multiple of the base penwidth.
 _HEAT_NODE_MAX = 5.0
-_HEAT_EDGE_MAX = 8.0
-#: Ramp endpoints (light = lowest value in the diagram, dark = highest), RGB.
+#: Edge line-thickness ceiling per style (× the base edge penwidth). UCM paths
+#: are already thick (2.6 pt), so a lower ceiling keeps hot edges legible
+#: rather than slab-like; BPMN's thinner 1 pt base can take more.
+_HEAT_EDGE_MAX = {STYLE_UCM: 4.0, STYLE_BPMN: 8.0}
+#: Contour / marker ramp endpoints (light = lowest value, dark = highest), RGB.
 _HEAT_RED = ((250, 170, 170), (127, 20, 20))    # pinkish → dark red
 _HEAT_BLUE = ((150, 195, 250), (20, 55, 140))   # light blue → dark blue
+#: FILL ramp for BPMN activity boxes — a paler wash than the contour ramp, so
+#: the box interior reads as tinted (with value) while the border stays the
+#: stronger signal. Endpoints kept lighter than the contour endpoints above.
+_HEAT_RED_FILL = ((253, 236, 236), (244, 176, 176))   # near-white → pastel red
+_HEAT_BLUE_FILL = ((235, 242, 253), (176, 202, 244))  # near-white → pastel blue
+#: UCM responsibility marker: square half-extent (inches) at the lowest and
+#: highest value. The marker grows with the value so a hot responsibility is
+#: easy to spot; the small fixed 0.10 marker was hard to see.
+_HEAT_UCM_MARKER = (0.16, 0.42)
 #: Base edge penwidth per style — kept in sync with the ``edge_attr`` below.
 _EDGE_BASE_PENWIDTH = {STYLE_UCM: 2.6, STYLE_BPMN: 1.0}
 
@@ -513,24 +524,37 @@ def _segment_metric_value(c: "UCM.NodeConnection",
         arc = preds[0]
 
 
-def _heat_normalize(values: Dict[int, float]) -> Dict[int, float]:
-    """Map each raw value to ``t`` in ``[0, 1]`` by the diagram-local
-    min/max. A diagram whose values are all equal (or has a single value)
-    has no gradient, so everything maps to full emphasis (``1.0``)."""
+def _heat_normalize(values, span=None):
+    """Map each raw value to ``t`` in ``[0, 1]``.
+
+    By default the range is the values' own min/max (a **local**, per-diagram
+    scale). Pass ``span=(lo, hi)`` to normalise against an external range — the
+    **global** whole-model min/max — so the same value reads the same in every
+    map. A degenerate range (all equal / single value / ``hi <= lo``) has no
+    gradient, so everything maps to full emphasis (``1.0``)."""
     if not values:
         return {}
-    lo = min(values.values())
-    hi = max(values.values())
+    lo, hi = span if span is not None else (
+        min(values.values()), max(values.values()))
     if hi <= lo:
         return {k: 1.0 for k in values}
-    span = hi - lo
-    return {k: (v - lo) / span for k, v in values.items()}
+    d = hi - lo
+    return {k: max(0.0, min(1.0, (v - lo) / d)) for k, v in values.items()}
+
+
+def _lerp_rgb(lo, hi, t: float) -> str:
+    return "#" + "".join(
+        f"{round(lo[i] + (hi[i] - lo[i]) * t):02x}" for i in range(3))
 
 
 def _heat_color(t: float, time_based: bool) -> str:
-    lo, hi = _HEAT_RED if time_based else _HEAT_BLUE
-    return "#" + "".join(
-        f"{round(lo[i] + (hi[i] - lo[i]) * t):02x}" for i in range(3))
+    """Contour / marker colour: the stronger ramp (light → dark)."""
+    return _lerp_rgb(*(_HEAT_RED if time_based else _HEAT_BLUE), t)
+
+
+def _heat_fill_color(t: float, time_based: bool) -> str:
+    """BPMN activity-box fill: a paler wash than the contour, tinted by value."""
+    return _lerp_rgb(*(_HEAT_RED_FILL if time_based else _HEAT_BLUE_FILL), t)
 
 
 # ---------------------------------------------------------------------------
@@ -591,10 +615,31 @@ def apply(ucm: UCM, parameters: Optional[Dict[str, Any]] = None) -> Digraph:
     # (and the PNG path, where links have no effect) is unchanged.
     stub_links = parameters.get("stub_links") or {}
     # Optional performance heat-map (see the helpers above): each is
-    # ``(metric, time_based)`` or ``None``. Drives per-diagram colour +
-    # thickness on activities (``heatmap_node``) and edges (``heatmap_edge``).
+    # ``(metric, time_based)`` or ``None``. Drives colour + thickness on
+    # activities (``heatmap_node``) and edges (``heatmap_edge``).
     heatmap_node = parameters.get("heatmap_node")
     heatmap_edge = parameters.get("heatmap_edge")
+    # ``heatmap_global``: scale against the WHOLE model's min/max (so a value
+    # reads the same in every map) rather than each map's own range. Computed
+    # here over all maps and handed to every ``_emit_map`` as an explicit span;
+    # ``None`` keeps the default local (per-map) scale. With one map the two
+    # are identical.
+    heatmap_global = bool(parameters.get("heatmap_global", False))
+    node_span = edge_span = None
+    if heatmap_global and heatmap_node:
+        _nm = heatmap_node[0]
+        _nv = [_perf_metric_value(n, _nm) for m in ucm.maps for n in m.nodes
+               if isinstance(n, UCM.RespRef)]
+        _nv = [v for v in _nv if v is not None]
+        if _nv:
+            node_span = (min(_nv), max(_nv))
+    if heatmap_global and heatmap_edge:
+        _em = heatmap_edge[0]
+        _ev = [_segment_metric_value(c, _em)
+               for m in ucm.maps for c in m.connections]
+        _ev = [v for v in _ev if v is not None]
+        if _ev:
+            edge_span = (min(_ev), max(_ev))
     # ``map_name`` (or the public ``map=`` kwarg piped in via parameters)
     # selects a map by name and overrides ``map_index``. Unknown names
     # raise rather than silently falling back to the first map — better
@@ -696,14 +741,16 @@ def apply(ucm: UCM, parameters: Optional[Dict[str, Any]] = None) -> Digraph:
                           show_conditions=show_conditions,
                           stub_links=stub_links,
                           heatmap_node=heatmap_node,
-                          heatmap_edge=heatmap_edge)
+                          heatmap_edge=heatmap_edge,
+                          node_span=node_span, edge_span=edge_span)
     else:
         if not ucm.maps:
             return g
         idx = max(0, min(map_index, len(ucm.maps) - 1))
         _emit_map(g, ucm.maps[idx], style_table, style_name,
                   show_conditions=show_conditions, stub_links=stub_links,
-                  heatmap_node=heatmap_node, heatmap_edge=heatmap_edge)
+                  heatmap_node=heatmap_node, heatmap_edge=heatmap_edge,
+                  node_span=node_span, edge_span=edge_span)
 
     return g
 
@@ -717,6 +764,8 @@ def _emit_map(
     stub_links: Optional[Dict[int, Any]] = None,
     heatmap_node: "Optional[Tuple[str, bool]]" = None,
     heatmap_edge: "Optional[Tuple[str, bool]]" = None,
+    node_span: "Optional[Tuple[float, float]]" = None,
+    edge_span: "Optional[Tuple[float, float]]" = None,
 ) -> None:
     """Render a single :class:`UCM.UCMmap` into the given graphviz graph.
 
@@ -736,12 +785,13 @@ def _emit_map(
     node_heat_time = False
     if heatmap_node:
         _metric, node_heat_time = heatmap_node
-        node_heat = _heat_normalize({
+        _nvals = {
             id(n): _perf_metric_value(n, _metric)
             for n in ucm_map.nodes
             if isinstance(n, UCM.RespRef)
             and _perf_metric_value(n, _metric) is not None
-        })
+        }
+        node_heat = _heat_normalize(_nvals, span=node_span)
     edge_heat: Dict[int, float] = {}
     edge_heat_time = False
     if heatmap_edge:
@@ -754,21 +804,31 @@ def _emit_map(
             v = _segment_metric_value(c, _metric)
             if v is not None:
                 _evals[id(c)] = v
-        edge_heat = _heat_normalize(_evals)
+        edge_heat = _heat_normalize(_evals, span=edge_span)
 
     def emit_node(g_target: Digraph, node: "UCM.PathNode") -> None:
         attrs = _node_style(node, style_table, style_name)
         if isinstance(node, UCM.RespRef) and id(node) in node_heat:
-            # Emphasis by value: colour the contour (BPMN box) / marker (UCM)
-            # on the ramp and scale its penwidth from 1× up to _HEAT_NODE_MAX.
+            # Emphasis by value. BPMN: tint the box fill (a pale wash) and put
+            # the stronger ramp on the box contour, thickened 1×→_HEAT_NODE_MAX.
+            # UCM: the responsibility has no box, so the marker square itself
+            # carries the colour and GROWS with the value (a small marker was
+            # hard to spot), with only a light border.
             t = node_heat[id(node)]
             color = _heat_color(t, node_heat_time)
-            attrs["color"] = color
-            attrs["penwidth"] = f"{1.0 + t * (_HEAT_NODE_MAX - 1.0):.2f}"
             if style_name == STYLE_UCM:
-                # UCM responsibilities have no box contour, so the colour and
-                # thickness land on the marker itself (fill + border).
+                lo, hi = _HEAT_UCM_MARKER
+                sz = f"{lo + t * (hi - lo):.3f}"
                 attrs["fillcolor"] = color
+                attrs["color"] = color
+                attrs["width"] = sz
+                attrs["height"] = sz
+                attrs["fixedsize"] = "true"
+                attrs["penwidth"] = f"{1.0 + t * 1.5:.2f}"
+            else:
+                attrs["fillcolor"] = _heat_fill_color(t, node_heat_time)
+                attrs["color"] = color
+                attrs["penwidth"] = f"{1.0 + t * (_HEAT_NODE_MAX - 1.0):.2f}"
         if isinstance(node, UCM.Stub):
             label = wrap_name(node.name or "stub")
             if getattr(node, "is_synchronizing", False):
@@ -912,7 +972,8 @@ def _emit_map(
         if id(c) in edge_heat:
             t = edge_heat[id(c)]
             base = _EDGE_BASE_PENWIDTH.get(style_name, 1.0)
+            emax = _HEAT_EDGE_MAX.get(style_name, 8.0)
             edge_attrs["color"] = _heat_color(t, edge_heat_time)
             edge_attrs["penwidth"] = (
-                f"{base * (1.0 + t * (_HEAT_EDGE_MAX - 1.0)):.2f}")
+                f"{base * (1.0 + t * (emax - 1.0)):.2f}")
         g.edge(node_id(c.source), node_id(c.target), **edge_attrs)

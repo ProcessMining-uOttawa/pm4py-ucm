@@ -411,7 +411,8 @@ def _mine(
 def _render_cached(jucm_bytes: bytes, style: str,
                    heatmap: bool = False,
                    node_metric: Optional[str] = None,
-                   edge_metric: Optional[str] = None) -> bytes:
+                   edge_metric: Optional[str] = None,
+                   heatmap_global: bool = False) -> bytes:
     heat_node = ((node_metric, node_metric.endswith("_time"))
                  if heatmap and node_metric else None)
     heat_edge = ((edge_metric, edge_metric.endswith("_time"))
@@ -423,7 +424,8 @@ def _render_cached(jucm_bytes: bytes, style: str,
         ucm = pm4py_ucm.read_ucm(str(jucm_path))
         png_path = td / "model.png"
         _render_png(ucm, style, str(png_path),
-                    heatmap_node=heat_node, heatmap_edge=heat_edge)
+                    heatmap_node=heat_node, heatmap_edge=heat_edge,
+                    heatmap_global=heatmap_global)
         return png_path.read_bytes()
 
 
@@ -439,7 +441,8 @@ def _render_cached(jucm_bytes: bytes, style: str,
 def _render_svg_cached(jucm_bytes: bytes, style: str,
                        heatmap: bool = False,
                        node_metric: Optional[str] = None,
-                       edge_metric: Optional[str] = None) -> str:
+                       edge_metric: Optional[str] = None,
+                       heatmap_global: bool = False) -> str:
     """The model as one inline SVG string (cached per ``jucm`` + notation
     + heat-map settings).
 
@@ -457,13 +460,16 @@ def _render_svg_cached(jucm_bytes: bytes, style: str,
         ucm = pm4py_ucm.read_ucm(str(jucm_path))
         return _svgmod.model_to_svg(
             ucm, style, heatmap=heatmap,
-            node_metric=node_metric, edge_metric=edge_metric)
+            node_metric=node_metric, edge_metric=edge_metric,
+            heatmap_global=heatmap_global)
 
 
 def _render_png(ucm, style: str, out_path: str,
-                heatmap_node=None, heatmap_edge=None) -> str:
+                heatmap_node=None, heatmap_edge=None,
+                heatmap_global=False) -> str:
     params = {"style": style,
-              "heatmap_node": heatmap_node, "heatmap_edge": heatmap_edge}
+              "heatmap_node": heatmap_node, "heatmap_edge": heatmap_edge,
+              "heatmap_global": heatmap_global}
     if len(ucm.maps) <= 1:
         gviz = _visualizer.apply(ucm, parameters=params)
         return _visualizer.save(gviz, out_path)
@@ -2536,7 +2542,10 @@ with st.sidebar:
             "frequency", "median_time" if _interval else "sojourn_median_time"]
     if _edge_key not in st.session_state:
         st.session_state[_edge_key] = ["percentage", "frequency"]
-    overlay_nodes = tuple(_ovl_exp.multiselect(
+    # The metric multiselects only STAGE a choice; picking a metric
+    # re-annotates the model, so changes are batched behind an Apply button
+    # (below) instead of re-mining after every single pick.
+    _staged_nodes = _ovl_exp.multiselect(
         "On activities (max 2)",
         options=list(_NODE_METRICS), key=_node_key,
         help=(
@@ -2551,8 +2560,8 @@ with st.sidebar:
             "written to the .jucm as jUCMNav metadata regardless of the "
             "≤2 shown on the diagram. See docs/metrics.md."
         ),
-    )[:2])
-    overlay_edges = tuple(_ovl_exp.multiselect(
+    )[:2]
+    _staged_edges = _ovl_exp.multiselect(
         "On edges (max 2)",
         options=list(_EDGE_METRICS), key=_edge_key,
         help=(
@@ -2565,22 +2574,56 @@ with st.sidebar:
             "p90/p95) apply to single-pair segments; min/max and mean/"
             "total also aggregate across fork-after-join segments."
         ),
-    )[:2])
+    )[:2]
+    # Applied values (what mining + rendering use). Seed from the staged
+    # picks (which a resumed project may have set) on first render.
+    _applied_node_key = f"overlay_nodes_applied::{_ov_hash}"
+    _applied_edge_key = f"overlay_edges_applied::{_ov_hash}"
+    st.session_state.setdefault(_applied_node_key, list(_staged_nodes))
+    st.session_state.setdefault(_applied_edge_key, list(_staged_edges))
+    _ov_dirty = (
+        list(_staged_nodes) != list(st.session_state[_applied_node_key])
+        or list(_staged_edges) != list(st.session_state[_applied_edge_key]))
+    if _ovl_exp.button(
+            "Apply metric changes", width="stretch",
+            type="primary" if _ov_dirty else "secondary",
+            disabled=not _ov_dirty,
+            help="Overlay metrics re-annotate the model, so make all your "
+                 "picks first, then apply them together."):
+        st.session_state[_applied_node_key] = list(_staged_nodes)
+        st.session_state[_applied_edge_key] = list(_staged_edges)
+        st.rerun()
+    if _ov_dirty:
+        _ovl_exp.caption("Unapplied metric changes — click **Apply metric "
+                         "changes**.")
+    overlay_nodes = tuple(st.session_state[_applied_node_key])
+    overlay_edges = tuple(st.session_state[_applied_edge_key])
+
     # Heat-map emphasis: colour + thickness on activities/edges by the FIRST
-    # metric of each layer, scaled within each diagram. Model view only; a
-    # render-time overlay (no change to the .jucm).
+    # applied metric of each layer. A render-time overlay (no change to the
+    # .jucm), so it applies instantly — no Apply needed.
     overlay_heatmap = _ovl_exp.checkbox(
         "Heat-map emphasis",
         key=f"overlay_heatmap::{_ov_hash}",
         help=(
-            "Colour and thicken activity contours (BPMN) / responsibility "
-            "markers (UCM) and edges by the value of the **first** selected "
-            "metric of each layer, scaled within each diagram (so every "
-            "sub-map reads on its own scale). Red for a time metric, blue "
-            "otherwise; lighter/thinner = lower, darker/thicker = higher. "
-            "No effect on a layer with no metric selected."
+            "Colour and thicken activity contours / fills (BPMN) or "
+            "responsibility markers (UCM) and edges by the value of the "
+            "**first** applied metric of each layer. Red for a time metric, "
+            "blue otherwise; lighter/thinner = lower, darker/thicker = "
+            "higher. No effect on a layer with no metric."
         ),
     )
+    _heat_scope = _ovl_exp.radio(
+        "Heat-map scale",
+        options=["Local (per map)", "Global (whole model)"],
+        index=0, key=f"overlay_heat_scope::{_ov_hash}", horizontal=True,
+        disabled=not overlay_heatmap,
+        help="**Local** scales each diagram to its own min/max (each sub-map "
+             "highlights its own hotspots). **Global** scales every map "
+             "against the whole model's min/max, so the same value looks the "
+             "same everywhere. Identical when the model isn't decomposed.",
+    )
+    overlay_heatmap_global = _heat_scope.startswith("Global")
 
     st.divider()
     notation = st.radio(
@@ -3305,9 +3348,10 @@ if _view == "Model":
         heatmap=bool(overlay_heatmap),
         node_metric=overlay_nodes[0] if overlay_nodes else None,
         edge_metric=overlay_edges[0] if overlay_edges else None,
+        heatmap_global=bool(overlay_heatmap_global),
     )
     _heat_tag = (
-        f"h{int(bool(overlay_heatmap))}"
+        f"h{int(bool(overlay_heatmap))}g{int(bool(overlay_heatmap_global))}"
         f"{_heat_kwargs['node_metric'] or ''}{_heat_kwargs['edge_metric'] or ''}"
     )
     try:
@@ -3329,7 +3373,8 @@ if _view == "Model":
                 _heat_bits.append(f"edges by **{overlay_edges[0]}**")
             _heat_caption = (
                 " Heat-map on: " + " and ".join(_heat_bits)
-                + " (per diagram; "
+                + (" (whole-model scale; " if overlay_heatmap_global
+                   else " (per-diagram scale; ")
                 + ("red = time" if any(
                     _m and _m[0].endswith("_time")
                     for _m in (overlay_nodes, overlay_edges) if _m)
