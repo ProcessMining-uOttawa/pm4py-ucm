@@ -244,14 +244,20 @@ stub opens a picker of its preconditioned plug-ins). Downloads:
 annotates the model with up to two activity metrics and two edge metrics
 (frequency, coverage, service / waiting / sojourn times, an OR-fork branch's
 share …) — shown as a small gray sub-line and written to the `.jucm` as
-jUCMNav metadata. Tick **Heat-map emphasis** to additionally colour and thicken
-activities and edges by the value of the **first** metric of each layer, scaled
-**within each diagram** (so each sub-map of a decomposed model reads on its own
-scale): a **time** metric drives a **red** ramp, any other a **blue** one, with
-lighter/thinner = lower and darker/thicker = higher (contours up to 5×, edges up
-to 8×). In BPMN the activity box contour carries the emphasis; in UCM the
-responsibility marker does. It is a render-time overlay — the SVG and PNG match
-it, and the `.jucm` is unchanged.
+jUCMNav metadata. Because changing a metric re-annotates the model, the pickers
+stage behind an **Apply metric changes** button. Tick **Heat-map emphasis** to
+additionally colour and thicken activities and edges by the value of the
+**first** metric of each layer: a **time** metric drives a **red** ramp, any
+other a **blue** one, with lighter/thinner = lower and darker/thicker = higher.
+The **Heat-map scale** switches between **local** (each diagram on its own
+min/max — every sub-map shows its own hotspots) and **global** (every map on the
+whole model's min/max, so a value reads the same everywhere); they coincide when
+the model isn't decomposed. In BPMN the activity box is tinted under a stronger,
+thickened contour; in UCM the responsibility marker itself colours and grows
+with the value. A path keeps one colour and thickness across its routing points
+(empty points) up to the next real node. It is a render-time overlay — the SVG
+and PNG match it, and the `.jucm` is unchanged. The heat-map's on/off and scale
+travel with a saved project (see below).
 
 ### 5 · Scenarios
 

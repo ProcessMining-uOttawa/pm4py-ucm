@@ -37,7 +37,7 @@ pm4py_ucm.write_ucm(ucm, "running-example.jucm")  # opens in jUCMNav
 
 - [`demo/pm4py_ucm_tutorial.ipynb`](demo/pm4py_ucm_tutorial.ipynb) — end-to-end Jupyter walkthrough on a real claims-payment log (discovery, BPMN/UCM rendering, navigable **SVG** + `.jucm`/`.png`/`.svg` export, performer mining, hierarchical decomposition, `.jucm` round-trips).
 - [`demo/scenario_synthesis_tutorial.ipynb`](demo/scenario_synthesis_tutorial.ipynb) — the **scenario-synthesis** layer: concurrency-aware variants, per-loop counters + `LoopEntryGuard`, both OR-fork condition encodings (variant-driven and **data-driven / decision-mining**, with the per-fork accuracy report), decomposed UCMs, and a capstone running both encodings on the claims log.
-- [`demo/model_families_tutorial.ipynb`](demo/model_families_tutorial.ipynb) — the **model-family** pipeline on the claims log: attribute detection, partition preview, per-cell mining, stack/matrix rendering, combined export, the dynamic-stub **umbrella** (skeleton, resource variation, path scenarios), **performance overlays** on activities and edges, pairwise **comparison**, and the **family statistics report** (FamilyStats + the self-contained interactive HTML file).
+- [`demo/model_families_tutorial.ipynb`](demo/model_families_tutorial.ipynb) — the **model-family** pipeline on the claims log: attribute detection, partition preview, per-cell mining, stack/matrix rendering, combined export, the dynamic-stub **umbrella** (skeleton, resource variation, path scenarios), **performance overlays** on activities and edges (with the value-scaled **heat-map**), pairwise **comparison**, and the **family statistics report** (FamilyStats + the self-contained interactive HTML file).
 - [`demo/dashboards_tutorial.ipynb`](demo/dashboards_tutorial.ipynb) — the **dashboards** layer: the per-case fact table, the metric catalog and computing widgets, filters / targets / scorecard, every **visualisation** (KPI, gauge, histogram, box plot, bar, line, pie/donut, heatmap table), the **ƒ custom-formula language**, and exporting a self-contained interactive HTML dashboard.
 - [`demo/sessions_tutorial.ipynb`](demo/sessions_tutorial.ipynb) — **save, share & resume** a project: the config-vs-data-vs-derived principle, the parameter registry and `collect`, a **settings file** vs a self-contained **project bundle**, the versioned **dashboards** envelope, `load` round-trips, and forward-compatibility (unknown keys preserved).
 - [`web/streamlit_app_v5.py`](web/streamlit_app_v5.py) — the **V5 web app** (model, scenarios, model families, statistics reports, Dashboards, **plus a global log filter and activity renaming**), hosted at https://pm4py-ucm.streamlit.app/ — click, don't code: upload an XES/CSV, tune the miner, download the result. (The **V2** scenarios app stays at https://pm4py-ucm-scenarios.streamlit.app/.)
@@ -94,7 +94,8 @@ renaming** applied before mining across every view:
   ![Compare view](web/PM4Py-UCM-Compare.png)
 
 Plus a **Performance overlay** sidebar section (frequencies/times on
-activities and edges, applied to every tab's outputs). See
+activities and edges, applied to every tab's outputs) with an optional
+**heat-map** that colours and thickens activities and edges by value. See
 [`docs/model_families.md`](docs/model_families.md).
 
 Deployed on Streamlit Community Cloud at
@@ -670,6 +671,14 @@ metadata line for jUCMNav's properties view; the family assemblies
 annotate the shared skeleton from the whole log and each variant
 plug-in from its own sub-log. Overlay walkthrough in
 [`docs/model_families.md`](docs/model_families.md#2-performance-overlays).
+
+Beyond the text sub-line, the Model view has an optional **heat-map** that
+colours and thickens activities and edges by the *first* chosen metric of each
+layer, scaled within each diagram (a **time** metric reads red, any other blue;
+darker/thicker = higher). It is a render-time overlay of the same
+`perf_<metric>` values — the model and `.jucm` are unchanged — exposed by
+`model_to_svg(ucm, style, heatmap=True, node_metric=…, edge_metric=…,
+heatmap_global=…)`.
 
 **📏 [`docs/metrics.md`](docs/metrics.md) is the readable, complete list
 of every metric definition** — activity, edge, process and choice —
