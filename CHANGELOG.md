@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] — 2026-07-19
+
+**A Model-view performance heat-map**, plus fixes to the save/resume and
+dashboard views. The heat-map colours and thickens activities and edges by a
+chosen metric so bottlenecks read at a glance; its on/off and scale settings
+travel with a saved project like every other overlay setting.
+
 ### Added — Web app (V5)
 
 - **Performance heat-map** — an optional Model-view emphasis (a checkbox in the
