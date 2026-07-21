@@ -158,10 +158,10 @@ def test_generator_version_matches_package():
 def test_every_registry_id_is_handled_or_intentionally_ignored():
     """Drift guard: a new registry param must be wired into codegen (or added
     to the ignore set with a reason), so the exporter can't silently omit it."""
-    # Render-only or UI-state params that do not shape the emitted pipeline.
+    # UI-state params that do not shape the emitted pipeline. (The heat-map
+    # settings — overlay_heatmap / overlay_heatmap_scope — ARE emitted now, so
+    # the exported render calls reproduce the heat-map; they are not ignored.)
     ignored = {
-        "overlay_heatmap",         # render-time emphasis only (not in exports)
-        "overlay_heatmap_global",  # render-time emphasis only
         "compare_a", "compare_b",  # Compare-view selection, no pipeline effect
         "active_view",             # which tab was open
         "csv_columns",             # carried on the LogRef, emitted from there
@@ -236,3 +236,80 @@ def test_generated_script_reproduces_reference_jucm(tmp_path):
     pm4py_ucm.write_ucm(ucm, str(ref))
 
     assert _strip_timestamps(gen_jucm) == _strip_timestamps(ref.read_bytes())
+
+
+def test_emitted_transform_covers_all_app_filter_keys():
+    """The emitted ``apply_log_filters`` must handle every ``filter_spec`` key
+    the app's ``_apply_log_filters`` reads, so a new app filter can't be silently
+    dropped from generated scripts (as ``duration_pct`` — the cycle-time filter —
+    nearly was). This is the §6a drift guard: the transform is inlined, so it has
+    to track the app by test rather than by import."""
+    app = (_ROOT / "web" / "streamlit_app_v5.py").read_text(encoding="utf-8")
+    m = re.search(r"\ndef _apply_log_filters\(.*?(?=\ndef )", app, re.S)
+    assert m, "could not locate _apply_log_filters in the app"
+    app_keys = set(re.findall(r'spec\.get\(\s*["\']([a-z_]+)["\']', m.group(0)))
+    assert "duration_pct" in app_keys, "sanity: the app reads the cycle-time key"
+    gen = generate_script(_doc({}))
+    missing = sorted(k for k in app_keys if k not in gen)
+    assert not missing, (
+        f"emitted apply_log_filters is missing app filter key(s): {missing} — "
+        "mirror the app's _apply_log_filters in web/sessions/codegen.py")
+
+
+def test_heatmap_config_emitted_and_wired_into_render_calls():
+    src = generate_script(
+        _doc({"overlay_heatmap": True, "overlay_heatmap_scope": "family",
+              "overlay_nodes": ["frequency"], "family_attrs": ["c"]}),
+        include_family=True)
+    assert "OVERLAY_HEATMAP = True" in src
+    assert "OVERLAY_HEATMAP_SCOPE = 'family'" in src
+    # The heat-map reaches the rendered artifacts: the model PNG, the family
+    # grid PNG, and the exported HTML report's embedded images.
+    assert "parameters=model_heat_params())" in src        # model PNG
+    assert "parameters=model_heat_params(family))" in src  # family grid PNG
+    assert "heat=report_heat(family))" in src              # family report HTML
+
+
+def test_emitted_heat_helpers_reflect_overlay_state():
+    pytest.importorskip("pandas")
+    pytest.importorskip("pm4py")  # the emitted script imports it at module load
+
+    off = {"__name__": "t"}
+    exec(compile(generate_script(_doc({})), "g.py", "exec"), off)
+    assert off["model_heat_params"]() == {}     # heat-map off → no render params
+    assert off["report_heat"](None) is None
+
+    on = {"__name__": "t"}
+    exec(compile(generate_script(_doc({
+        "overlay_heatmap": True, "overlay_heatmap_scope": "global",
+        "overlay_nodes": ["median_time"], "overlay_edges": ["percentage"],
+    })), "g.py", "exec"), on)
+    hp = on["model_heat_params"]()             # global scope needs no family
+    assert hp["heatmap_node"] == ("median_time", True)   # a *_time metric
+    assert hp["heatmap_edge"] == ("percentage", False)
+    assert hp["heatmap_global"] is True
+    assert hp["node_span"] is None and hp["edge_span"] is None  # not "family"
+
+
+def test_emitted_apply_log_filters_applies_duration_pct():
+    """Exec the emitted helpers and confirm ``apply_log_filters`` really applies
+    the cycle-time band (keeps the fastest cases by end-to-end duration)."""
+    pd = pytest.importorskip("pandas")
+    pytest.importorskip("pm4py")  # the emitted script imports it at module load
+    ns = {"__name__": "codegen_test"}  # not "__main__" → the CLI block is skipped
+    exec(compile(generate_script(_doc({})), "gen.py", "exec"), ns)
+
+    base = pd.Timestamp("2026-01-01", tz="UTC")
+    rows = []
+    for i in range(1, 11):  # 10 cases, durations 1..10 days
+        cid = f"c{i:02d}"
+        rows.append((cid, "A", base))
+        rows.append((cid, "B", base + pd.Timedelta(days=i)))
+    df = pd.DataFrame(
+        rows, columns=["case:concept:name", "concept:name", "time:timestamp"])
+
+    fastest30 = ns["apply_log_filters"](df, {"duration_pct": (0, 30)})
+    assert sorted(fastest30["case:concept:name"].unique()) == \
+        ["c01", "c02", "c03"]
+    slowest10 = ns["apply_log_filters"](df, {"duration_pct": (90, 100)})
+    assert sorted(slowest10["case:concept:name"].unique()) == ["c10"]

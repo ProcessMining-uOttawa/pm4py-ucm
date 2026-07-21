@@ -7,8 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Web app (V5)
+
+- **A model pinned to a dashboard keeps its performance heat-map.** The
+  Dashboards pinned-model widget rendered its SVG without the overlay's
+  heat-map settings, so the colour/thickness emphasis vanished on the pinned
+  copy (the metric sub-lines, which ride in the `.jucm`, were unaffected). It
+  now renders with the same heat-map kwargs as the Model view (shared
+  `_model_heat_kwargs()` helper), so a pinned model matches what you pinned.
+- **The performance heat-map now applies to the Family and Compare views**, not
+  only the Model view. Selecting *Heat-map emphasis* colours and thickens the
+  activities/edges of every family cell and of the two compared members, using
+  the same first-of-each-layer overlay metric. It **survives changing the
+  compared processes** (each Compare cell re-renders with the heat-map), and now
+  also reaches the **family grid PNG download, the Compare-cell PNG, and the
+  interactive HTML report** — so every rendering of a family carries it.
+
+### Changed — Web app (V5)
+
+- **Heat-map scale is now three-way**, each with an inline caption and a `?`
+  explaining it:
+  - **Local (per map)** — every map on its own min/max (each sub-map of a
+    decomposed model highlights its own hotspots);
+  - **Per family member (across its maps)** — each Family/Compare member scaled
+    to its own range, pooled over all of its (decomposed) maps, so a colour is
+    comparable *within* a member (the whole model in the single-model Model
+    view);
+  - **Global (across family members)** — every member against **one shared
+    range**, so a colour means the same thing in every member and the cells are
+    directly comparable.
+
+  The persisted setting is `overlay_heatmap_scope` (`"local"` / `"global"` /
+  `"family"` — `"global"` = per-member, `"family"` = across-members); the old
+  boolean `overlay_heatmap_global` is migrated on load. New:
+  `classic.heat_span(models, …)` computes a shared cross-member span,
+  `model_to_svg` / `family_grid.render_svg` accept explicit `node_span` /
+  `edge_span` overrides, and `write_family_report` gained a `heat=` kwarg that
+  carries the heat-map onto the report's embedded per-cell images.
+
 ### Added — Web app (V5)
 
+- **Cycle-time filter.** A new two-handled **Cycle-time percentile (case
+  duration)** slider in the sidebar's **Log filters** keeps cases by their
+  end-to-end cycle time (last − first event): `0` = fastest, `100` = slowest.
+  Drag the left handle in to drop the fastest cases, the right handle in to drop
+  the slowest, or pick a middle band (e.g. `0–10` keeps the fastest 10%,
+  `90–100` the slowest 10%). Like every log filter it is global — every view and
+  export mines the filtered log — and it round-trips through a saved project.
 - **Export the analysis as a runnable Python pipeline.** A new **Export as
   Python** control in the sidebar's **Project** group emits a plain-Python
   script (`.py`) — or a Jupyter notebook (`.ipynb`) — that reproduces the
@@ -18,10 +63,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Optional check-boxes add the **scenario-synthesis** and **model-family**
   pipelines. Because a project stores only *inputs* and every artifact
   recomputes, the emitted script is a **faithful, deterministic replay** —
-  running it reproduces the same `.jucm`. Turns a GUI exploration into an
-  automatable, version-controllable pipeline and doubles as a personalised
-  tutorial. Deterministic (no LLM) — a template emitter over the session
-  parameter registry. See [`docs/code_export.md`](docs/code_export.md).
+  running it reproduces the same `.jucm`. The generated pipeline also **carries
+  the pre-mining cycle-time filter** and **reproduces the performance heat-map**
+  in its exported artifacts — the model PNG, the family grid PNG, and the
+  interactive HTML report's embedded images — matching what the user saw. Turns
+  a GUI exploration into an automatable, version-controllable pipeline and
+  doubles as a personalised tutorial. Deterministic (no LLM) — a template
+  emitter over the session parameter registry. See
+  [`docs/code_export.md`](docs/code_export.md).
 
 ### Internal
 

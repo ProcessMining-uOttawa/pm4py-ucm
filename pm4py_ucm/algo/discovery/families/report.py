@@ -72,6 +72,7 @@ TOOL_BRAND = "PM4Py-UCM V3"
 def _render_cell_images(
     family: ModelFamily,
     style: str,
+    heat: Optional[Dict[str, Any]] = None,
 ) -> Optional[List[Optional[str]]]:
     """One base64 SVG ``data:`` URI per cell (``None`` entries for cells
     that failed to render); ``None`` altogether when rendering is
@@ -84,16 +85,23 @@ def _render_cell_images(
     stacked exactly as the PNG path composited them. Stub links are kept
     (``navigable=True``): the gallery thumbnails are ``<img>`` (inert), but
     the lightbox inlines the SVG so clicking a stub scrolls to its plug-in
-    panel."""
+    panel.
+
+    ``heat`` (optional) is the performance heat-map kwargs forwarded to
+    :func:`~pm4py_ucm.visualization.ucm.svg.model_to_svg` — ``heatmap``,
+    ``node_metric`` / ``edge_metric``, ``heatmap_global`` and an explicit
+    ``node_span`` / ``edge_span`` (a family-wide scale, so every gallery image
+    is comparable)."""
     try:
         from ....visualization.ucm import svg as _svg
     except ImportError:  # pragma: no cover - visualization always ships
         return None
 
+    heat = heat or {}
     uris: List[Optional[str]] = []
     for cell in family.cells:
         try:
-            svg = _svg.model_to_svg(cell.ucm, style, navigable=True)
+            svg = _svg.model_to_svg(cell.ucm, style, navigable=True, **heat)
             uris.append(
                 "data:image/svg+xml;base64,"
                 + base64.b64encode(svg.encode("utf-8")).decode("ascii")
@@ -120,6 +128,7 @@ def family_report_html(
     images: bool = True,
     style: str = "ucm",
     image_max_width: int = DEFAULT_IMAGE_MAX_WIDTH,
+    heat: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Build the report and return it as an HTML string.
 
@@ -142,7 +151,7 @@ def family_report_html(
     data["style"] = style
 
     image_uris = (
-        _render_cell_images(family, style)
+        _render_cell_images(family, style, heat=heat)
         if images else None
     )
     if image_uris is not None:
@@ -172,12 +181,14 @@ def write_family_report(
     images: bool = True,
     style: str = "ucm",
     image_max_width: int = DEFAULT_IMAGE_MAX_WIDTH,
+    heat: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Write the interactive family report to ``path`` (see
-    :func:`family_report_html`). Returns ``path``."""
+    :func:`family_report_html`). ``heat`` forwards heat-map kwargs to the
+    embedded per-cell images. Returns ``path``."""
     html = family_report_html(
         family, stats=stats, title=title, images=images,
-        style=style, image_max_width=image_max_width,
+        style=style, image_max_width=image_max_width, heat=heat,
     )
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "w", encoding="utf-8", newline="\n") as fh:

@@ -198,6 +198,98 @@ def test_heatmap_render_colours_and_thickens():
     assert "7f1414" not in _strokes(on)
 
 
+# -- family-wide scale (heat_span across cells + external span override) ----
+
+def _node_model(freqs):
+    """A one-map UCM whose ``RespRef``s carry ``perf_frequency`` = each freq
+    (``None`` entries carry no metadata)."""
+    from pm4py_ucm import UCM
+    ucm = UCM(name="m")
+    mp = ucm.add_map(name="Main")
+    for i, f in enumerate(freqs):
+        n = mp.add_node(UCM.RespRef(name=f"R{i}"))
+        if f is not None:
+            n.add_metadata("perf_frequency", str(f))
+    return ucm
+
+
+def _edge_model(val):
+    """A one-map UCM with a single A→B arc carrying ``frequency`` = ``val``
+    (stored on the source's ``perf_branch0_frequency``, as the overlay does)."""
+    from pm4py_ucm import UCM
+    ucm = UCM(name="m")
+    mp = ucm.add_map(name="Main")
+    a = mp.add_node(UCM.RespRef(name="A"))
+    b = mp.add_node(UCM.RespRef(name="B"))
+    mp.add_connection(a, b)
+    a.add_metadata("perf_branch0_frequency", str(val))
+    return ucm
+
+
+def test_heat_span_node_metric_spans_all_models():
+    # Two cells with disjoint ranges -> one shared span covering both, so a
+    # colour is comparable across cells (the point of the family scale).
+    ns, es = _classic.heat_span(
+        [_node_model([10, 20]), _node_model([30, 40])],
+        node_metric="frequency")
+    assert ns == (10.0, 40.0)
+    assert es is None
+
+
+def test_heat_span_edge_metric_spans_all_models():
+    ns, es = _classic.heat_span(
+        [_edge_model(5), _edge_model(15)], edge_metric="frequency")
+    assert es == (5.0, 15.0)
+    assert ns is None
+
+
+def test_heat_span_absent_metric_is_none():
+    ns, es = _classic.heat_span([_node_model([10, 20])],
+                                node_metric="median_time")
+    assert ns is None and es is None
+
+
+def test_heat_span_empty_models_is_none():
+    assert _classic.heat_span([], node_metric="frequency") == (None, None)
+
+
+@pytest.mark.skipif(not _GRAPHVIZ, reason="graphviz 'dot' absent")
+def test_external_span_reaches_render_and_rescales():
+    # An explicit (family-wide) span passed to model_to_svg must reach the
+    # renderer and rescale it: under the model's own (local) range the busiest
+    # element hits the darkest endpoint; under a far wider external span
+    # nothing does.
+    import pm4py
+    from pm4py_ucm import discover_ucm_inductive
+    from pm4py_ucm.algo.performance import annotate_performance
+    from pm4py_ucm.visualization.ucm import svg as _svgmod
+
+    rows = []
+    for c in range(20):
+        rows.append((f"c{c}", "A", c))
+        if c < 10:
+            rows.append((f"c{c}", "B", c + 1))
+        if c < 3:
+            rows.append((f"c{c}", "C", c + 2))
+    df = pd.DataFrame(rows, columns=["case:concept:name", "concept:name",
+                                     "time:timestamp"])
+    df["time:timestamp"] = pd.to_datetime(df["time:timestamp"], unit="D")
+    df = pm4py.format_dataframe(df)
+    ucm = discover_ucm_inductive(df, decomposition="off")
+    annotate_performance(ucm, log=df, node_metrics=["frequency"],
+                         edge_metrics=["frequency"])
+
+    kw = dict(heatmap=True, node_metric="frequency", edge_metric="frequency")
+    local = _svgmod.model_to_svg(ucm, "bpmn", **kw)
+    wide = _svgmod.model_to_svg(ucm, "bpmn", node_span=(0.0, 1e6),
+                                edge_span=(0.0, 1e6), **kw)
+
+    assert wide != local, "external span did not reach the renderer"
+    assert "14378c" in _strokes(local), "local scale should max out somewhere"
+    assert "14378c" not in _strokes(wide), \
+        "under a far wider family span nothing should reach full emphasis"
+
+
 @pytest.mark.skipif(not _GRAPHVIZ, reason="graphviz 'dot' absent")
 def test_heatmap_off_leaves_render_unchanged():
     import pm4py

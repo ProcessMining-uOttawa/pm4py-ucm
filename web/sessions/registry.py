@@ -40,7 +40,11 @@ REGISTRY: Tuple[Param, ...] = (
     Param("overlay_nodes", "overlay", []),
     Param("overlay_edges", "overlay", []),
     Param("overlay_heatmap", "overlay", False),
-    Param("overlay_heatmap_global", "overlay", False),
+    # Heat-map scale: "local" (per map) | "global" (whole model) | "family"
+    # (one shared scale across all Family/Compare cells). Superseded the earlier
+    # boolean overlay_heatmap_global; a project written by an older app is
+    # migrated on load (see _apply_project_config).
+    Param("overlay_heatmap_scope", "overlay", "local"),
     # Pre-mining transforms (rename lives inside the filter spec).
     Param("filter_spec", "transform", []),      # list of [key, value] pairs
     # CSV column mapping (case, activity, timestamp, role, resource).

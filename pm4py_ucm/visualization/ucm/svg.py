@@ -186,7 +186,9 @@ def model_to_svg(ucm: "UCM", style: str = "ucm", *,
                  heatmap: bool = False,
                  node_metric: Optional[str] = None,
                  edge_metric: Optional[str] = None,
-                 heatmap_global: bool = False) -> str:
+                 heatmap_global: bool = False,
+                 node_span: Optional[Tuple[float, float]] = None,
+                 edge_span: Optional[Tuple[float, float]] = None) -> str:
     """One model as a single inline SVG string.
 
     A single-map model renders directly. A decomposed (multi-map) model
@@ -209,8 +211,14 @@ def model_to_svg(ucm: "UCM", style: str = "ucm", *,
                  if heatmap and node_metric else None)
     heat_edge = ((edge_metric, edge_metric.endswith("_time"))
                  if heatmap and edge_metric else None)
+    # ``node_span`` / ``edge_span`` are an optional explicit scale (a
+    # family-wide range); ``None`` lets ``heatmap_global`` (or the per-map
+    # default) decide. Threaded to every map of a decomposed model so each
+    # panel shares the imposed scale.
     _heat = {"heatmap_node": heat_node, "heatmap_edge": heat_edge,
-             "heatmap_global": bool(heatmap_global)}
+             "heatmap_global": bool(heatmap_global),
+             "node_span": node_span if heatmap else None,
+             "edge_span": edge_span if heatmap else None}
     if len(ucm.maps) <= 1:
         gviz = _visualizer.apply(ucm, parameters={"style": style, **_heat})
         return svg_body(gviz.pipe(format="svg").decode("utf-8"))

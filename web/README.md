@@ -213,6 +213,12 @@ middle band:
 - **Date range** — a slider over the log's own span (fewer clicks than two
   calendars), with a **cases in the window** choice (*intersecting* or *fully
   inside*).
+- **Cycle-time percentile (case duration)** — a two-handled band over each
+  case's **end-to-end cycle time** (last − first event): `0` = fastest,
+  `100` = slowest. Keep the fastest cases (drag the left handle in), the slowest
+  (drag the right handle in), or a middle band — e.g. `0–10` keeps the fastest
+  10% of cases, `90–100` the slowest 10%. (Shown only when the log has a real
+  time span.)
 
 Each is a standard pm4py log filter applied before inductive mining. The
 filter is **global** — every view (Model, Scenarios, Family, Compare,
@@ -249,10 +255,14 @@ stage behind an **Apply metric changes** button. Tick **Heat-map emphasis** to
 additionally colour and thicken activities and edges by the value of the
 **first** metric of each layer: a **time** metric drives a **red** ramp, any
 other a **blue** one, with lighter/thinner = lower and darker/thicker = higher.
-The **Heat-map scale** switches between **local** (each diagram on its own
-min/max — every sub-map shows its own hotspots) and **global** (every map on the
-whole model's min/max, so a value reads the same everywhere); they coincide when
-the model isn't decomposed. In BPMN the activity box is tinted under a stronger,
+The heat-map applies across the **Model, Family and Compare** views. The
+**Heat-map scale** is three-way: **Local (per map)** (each diagram on its own min/max —
+every sub-map shows its own hotspots), **Per family member (across its maps)** (every map on the whole
+model's min/max, so a value reads the same everywhere; coincides with local when
+the model isn't decomposed), and **Global (across family members)** (every cell of the Family /
+Compare views on **one shared range**, so a colour is comparable across members
+— it falls back to whole model in the single-model Model view). In BPMN the
+activity box is tinted under a stronger,
 thickened contour; in UCM the responsibility marker itself colours and grows
 with the value. A path keeps one colour and thickness across its routing points
 (empty points) up to the next real node. It is a render-time overlay — the SVG

@@ -556,6 +556,37 @@ def _heat_fill_color(t: float, time_based: bool) -> str:
     return _lerp_rgb(*(_HEAT_RED_FILL if time_based else _HEAT_BLUE_FILL), t)
 
 
+def heat_span(models, node_metric=None, edge_metric=None):
+    """The ``(node_span, edge_span)`` min/max of a metric across several models.
+
+    For a **family-wide** heat-map scale: every cell of a family (and every map
+    within a cell) is normalised against one shared range, so a colour means
+    the same thing in every cell and the members are visually comparable. Feed
+    the resulting spans back in as ``node_span`` / ``edge_span`` parameters to
+    :func:`apply` (or ``model_to_svg``).
+
+    ``models`` is any iterable of :class:`UCM`. Node values are read from
+    ``RespRef``s and edge values through the segment resolver — exactly the
+    sources :func:`_emit_map` normalises — so the family scale and the per-map
+    scale measure the same thing. Either span is ``None`` when its metric is
+    unset or nowhere present (the render then falls back to a local scale)."""
+    node_span = edge_span = None
+    if node_metric:
+        vals = [_perf_metric_value(n, node_metric)
+                for u in models for m in u.maps for n in m.nodes
+                if isinstance(n, UCM.RespRef)]
+        vals = [v for v in vals if v is not None]
+        if vals:
+            node_span = (min(vals), max(vals))
+    if edge_metric:
+        vals = [_segment_metric_value(c, edge_metric)
+                for u in models for m in u.maps for c in m.connections]
+        vals = [v for v in vals if v is not None]
+        if vals:
+            edge_span = (min(vals), max(vals))
+    return node_span, edge_span
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -624,15 +655,22 @@ def apply(ucm: UCM, parameters: Optional[Dict[str, Any]] = None) -> Digraph:
     # ``None`` keeps the default local (per-map) scale. With one map the two
     # are identical.
     heatmap_global = bool(parameters.get("heatmap_global", False))
-    node_span = edge_span = None
-    if heatmap_global and heatmap_node:
+    # An **explicit external span** (``node_span`` / ``edge_span`` in
+    # parameters) wins — this is how a *family-wide* scale is imposed: the
+    # caller computes one range over every cell (see :func:`heat_span`) and
+    # hands it to each cell's render. Otherwise ``heatmap_global`` computes the
+    # span over this model's own maps (whole-model scale); otherwise ``None``
+    # keeps the default local (per-map) scale.
+    node_span = parameters.get("node_span")
+    edge_span = parameters.get("edge_span")
+    if node_span is None and heatmap_global and heatmap_node:
         _nm = heatmap_node[0]
         _nv = [_perf_metric_value(n, _nm) for m in ucm.maps for n in m.nodes
                if isinstance(n, UCM.RespRef)]
         _nv = [v for v in _nv if v is not None]
         if _nv:
             node_span = (min(_nv), max(_nv))
-    if heatmap_global and heatmap_edge:
+    if edge_span is None and heatmap_global and heatmap_edge:
         _em = heatmap_edge[0]
         _ev = [_segment_metric_value(c, _em)
                for m in ucm.maps for c in m.connections]

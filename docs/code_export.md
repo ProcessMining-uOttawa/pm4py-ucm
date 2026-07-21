@@ -93,10 +93,25 @@ Two things the emitter needs live in the app today, not the library:
   `read_log`, `apply_rename`, `apply_log_filters`, `resource_params` and
   `_coerce_str_object` into the generated script, so it is **self-contained and
   portable** — it needs only `pandas` / `pm4py` / `pm4py_ucm` on the path,
-  nothing from this repo. The golden test guards against drift by asserting the
-  emitted pipeline reproduces the app's mining output byte-for-byte; if the app
-  transform changes, the inlined copy must follow (a shared helper remains the
-  cleaner long-term fix and is left as future work).
+  nothing from this repo. **Drift is guarded two ways:** the golden test asserts
+  the emitted pipeline reproduces the app's mining output byte-for-byte, and a
+  dedicated test parses the app's `_apply_log_filters` for the `filter_spec` keys
+  it reads and asserts every one appears in the emitted transform — so a new app
+  filter can't be silently dropped from generated scripts. (This caught exactly
+  that: the **cycle-time percentile** filter `duration_pct`, added to the app
+  after the exporter, was not in the inlined copy; it is now mirrored.) A shared
+  helper remains the cleaner long-term fix and is left as future work.
+
+  **The heat-map is reproduced in the exported artifacts.** The emitter emits
+  `OVERLAY_HEATMAP` / `OVERLAY_HEATMAP_SCOPE` and inlines `model_heat_params()` /
+  `report_heat()` helpers (mirroring the app's `_model_heat_kwargs` /
+  `_heat_classic_kwargs` / `_heat_svg_kwargs`, including the shared cross-member
+  span for the `"family"` scale), which thread the colour/thickness into
+  `save_vis_ucm` (model PNG), `save_vis_ucm_family` (grid PNG) and
+  `write_family_report` (the HTML report's embedded per-cell images) — so an
+  exported analysis looks like what the user saw. The public `write_family_report`
+  gained a `heat=` kwarg for this. The performance **sub-lines** are carried
+  regardless (they ride in the `.jucm` metadata via `annotate_performance`).
 
 **(b) Dashboards** — the fact table, metric catalog, ƒ-formula language and
 widgets live entirely in `streamlit_app_v5.py`. "Generate code that rebuilds the

@@ -1090,3 +1090,99 @@ def test_end_to_end_with_pm4py():
     assert 'dynamic="true"' in text
     combined = pm4py_ucm.assemble_ucm_family(family, mode="combined")
     assert len(combined.maps) >= 2
+
+
+# ---------------------------------------------------------------------------
+# Family grid heat-map (the grid SVG the Family view shows honours the overlay)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.skipif(not _GRAPHVIZ, reason="graphviz 'dot' absent")
+def test_family_grid_svg_honours_heatmap_and_family_scale():
+    from pm4py_ucm.visualization.ucm.family_grid import render_svg
+    from pm4py_ucm.visualization.ucm.variants import classic as _classic
+
+    family = _discover(_make_log(), ["cancer_type"])
+    # The toy miner doesn't annotate performance, so stamp each cell's
+    # activities with distinct frequencies — and give the two cells different
+    # ranges, so a family-wide scale differs from each cell's local scale.
+    v = 1
+    for cell in family.cells:
+        for m in cell.ucm.maps:
+            for n in m.nodes:
+                if isinstance(n, UCM.RespRef):
+                    n.add_metadata("perf_frequency", str(v))
+                    v += 9
+
+    off = render_svg(family, "bpmn")
+    on = render_svg(family, "bpmn", heatmap=True, node_metric="frequency")
+    assert on != off, "heat-map did not reach the family grid"
+
+    # Family-wide span (shared across all cells) rescales vs each cell's own
+    # local range — so the two are different renders.
+    ns, es = _classic.heat_span([c.ucm for c in family.cells],
+                                node_metric="frequency")
+    assert ns is not None
+    fam_scaled = render_svg(family, "bpmn", heatmap=True,
+                            node_metric="frequency",
+                            node_span=ns, edge_span=es)
+    assert fam_scaled != on, "family-wide scale did not differ from local"
+
+    # The three scale levels are genuinely distinct for one member. Render the
+    # first cell three ways: local (per map), per-member (its own whole-model
+    # range, heatmap_global), and global (the shared cross-member span). Since
+    # the cells were given different ranges above, per-member and global must
+    # differ for this cell — this is what makes "Per family member" ≠ "Global".
+    from pm4py_ucm.visualization.ucm.svg import model_to_svg
+    cell0 = family.cells[0].ucm
+    per_member = model_to_svg(cell0, "bpmn", heatmap=True,
+                              node_metric="frequency", heatmap_global=True)
+    across_members = model_to_svg(cell0, "bpmn", heatmap=True,
+                                  node_metric="frequency",
+                                  node_span=ns, edge_span=es)
+    assert per_member != across_members, (
+        "per-member scale did not differ from global (across-members)")
+
+
+@pytest.mark.skipif(not _GRAPHVIZ, reason="graphviz 'dot' absent")
+def test_family_png_grid_and_report_images_honour_heatmap():
+    # The PNG grid (save_vis_ucm_family/render) and the report's embedded cell
+    # images honour the heat-map, so they match the on-screen SVG views.
+    import tempfile
+    from pathlib import Path as _P
+
+    from pm4py_ucm.algo.discovery.families.report import _render_cell_images
+    from pm4py_ucm.visualization.ucm import family_grid as _grid
+    from pm4py_ucm.visualization.ucm.variants import classic as _classic
+
+    family = _discover(_make_log(), ["cancer_type"])
+    v = 1
+    for cell in family.cells:
+        for m in cell.ucm.maps:
+            for n in m.nodes:
+                if isinstance(n, UCM.RespRef):
+                    n.add_metadata("perf_frequency", str(v))
+                    v += 9
+
+    ns, es = _classic.heat_span([c.ucm for c in family.cells],
+                                node_metric="frequency")
+    heat_classic = {"heatmap_node": ("frequency", False), "heatmap_edge": None,
+                    "heatmap_global": False, "node_span": ns, "edge_span": es}
+    heat_svg = {"heatmap": True, "node_metric": "frequency",
+                "edge_metric": None, "heatmap_global": False,
+                "node_span": ns, "edge_span": es}
+
+    # Report images: on vs off differ, and every cell still renders.
+    plain_imgs = _render_cell_images(family, "bpmn")
+    hot_imgs = _render_cell_images(family, "bpmn", heat=heat_svg)
+    assert hot_imgs and all(u is not None for u in hot_imgs)
+    assert hot_imgs != plain_imgs, "report images ignored the heat-map"
+
+    # PNG grid: the heat params change the rendered bytes.
+    with tempfile.TemporaryDirectory() as td:
+        p_off = _P(td) / "off.png"
+        p_on = _P(td) / "on.png"
+        _grid.render(family, str(p_off), parameters={"style": "bpmn", "dpi": 96})
+        _grid.render(family, str(p_on),
+                     parameters={"style": "bpmn", "dpi": 96, **heat_classic})
+        assert p_off.read_bytes() != p_on.read_bytes(), \
+            "PNG grid ignored the heat-map"
