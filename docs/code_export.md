@@ -102,14 +102,16 @@ Two things the emitter needs live in the app today, not the library:
   after the exporter, was not in the inlined copy; it is now mirrored.) A shared
   helper remains the cleaner long-term fix and is left as future work.
 
-  **Render-only settings are intentionally *not* reproduced.** The heat-map
-  (`overlay_heatmap` / `overlay_heatmap_scope`) is a render-time emphasis, not
-  part of the data pipeline, so the emitted `save_vis_ucm*` / `write_family_report`
-  calls do not carry it — the exported images keep the performance **sub-lines**
-  (they ride in the `.jucm` metadata via `annotate_performance`) but not the
-  colour/thickness. Reproducing the heat-map in exported artifacts is a possible
-  future fidelity option (it would thread the scope + spans into the render
-  calls).
+  **The heat-map is reproduced in the exported artifacts.** The emitter emits
+  `OVERLAY_HEATMAP` / `OVERLAY_HEATMAP_SCOPE` and inlines `model_heat_params()` /
+  `report_heat()` helpers (mirroring the app's `_model_heat_kwargs` /
+  `_heat_classic_kwargs` / `_heat_svg_kwargs`, including the shared cross-member
+  span for the `"family"` scale), which thread the colour/thickness into
+  `save_vis_ucm` (model PNG), `save_vis_ucm_family` (grid PNG) and
+  `write_family_report` (the HTML report's embedded per-cell images) — so an
+  exported analysis looks like what the user saw. The public `write_family_report`
+  gained a `heat=` kwarg for this. The performance **sub-lines** are carried
+  regardless (they ride in the `.jucm` metadata via `annotate_performance`).
 
 **(b) Dashboards** — the fact table, metric catalog, ƒ-formula language and
 widgets live entirely in `streamlit_app_v5.py`. "Generate code that rebuilds the

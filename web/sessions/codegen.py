@@ -165,6 +165,47 @@ def resource_params():
     return params
 
 
+def _heat_metrics():
+    nm = OVERLAY_NODES[0] if OVERLAY_NODES else None
+    em = OVERLAY_EDGES[0] if OVERLAY_EDGES else None
+    return nm, em
+
+
+def _family_span(family):
+    """Shared (node_span, edge_span) across all cells for the 'family' scale."""
+    if not (OVERLAY_HEATMAP and OVERLAY_HEATMAP_SCOPE == "family"):
+        return None, None
+    from pm4py_ucm.visualization.ucm.variants import classic as _classic
+    nm, em = _heat_metrics()
+    return _classic.heat_span([c.ucm for c in family.cells], nm, em)
+
+
+def model_heat_params(family=None):
+    """classic.apply heat parameters (colour/thickness) for the rendered images,
+    matching the web app's overlay + scale. Empty when the heat-map is off."""
+    if not OVERLAY_HEATMAP:
+        return {}
+    nm, em = _heat_metrics()
+    ns, es = _family_span(family) if family is not None else (None, None)
+    return {
+        "heatmap_node": (nm, nm.endswith("_time")) if nm else None,
+        "heatmap_edge": (em, em.endswith("_time")) if em else None,
+        "heatmap_global": OVERLAY_HEATMAP_SCOPE in ("global", "family"),
+        "node_span": ns, "edge_span": es,
+    }
+
+
+def report_heat(family):
+    """model_to_svg heat kwargs for the report's embedded per-cell images."""
+    if not OVERLAY_HEATMAP:
+        return None
+    nm, em = _heat_metrics()
+    ns, es = _family_span(family)
+    return {"heatmap": True, "node_metric": nm, "edge_metric": em,
+            "heatmap_global": OVERLAY_HEATMAP_SCOPE in ("global", "family"),
+            "node_span": ns, "edge_span": es}
+
+
 def _save_image(fn, *args, **kwargs):
     """Best-effort image render — a missing graphviz binary must not kill the
     pipeline (the ``.jucm`` and reports still get written)."""
@@ -275,6 +316,8 @@ def _config(
         f"RESOURCE_ATTRIBUTE = {cfg['resource_attribute']!r}",
         f"OVERLAY_NODES = {list(cfg['overlay_nodes'])!r}",
         f"OVERLAY_EDGES = {list(cfg['overlay_edges'])!r}",
+        f"OVERLAY_HEATMAP = {bool(cfg['overlay_heatmap'])!r}",
+        f"OVERLAY_HEATMAP_SCOPE = {cfg['overlay_heatmap_scope']!r}",
         f"FILTER_SPEC = {_as_dict(cfg['filter_spec'])!r}",
     ]
     if include_scenarios:
@@ -318,7 +361,8 @@ def _model_fn() -> str:
         "            node_metrics=OVERLAY_NODES, edge_metrics=OVERLAY_EDGES)\n"
         '    pm4py_ucm.write_ucm(ucm, str(OUT_DIR / "model.jucm"))\n'
         "    _save_image(pm4py_ucm.save_vis_ucm, ucm,\n"
-        '                str(OUT_DIR / "model.png"), style=NOTATION)\n'
+        '                str(OUT_DIR / "model.png"), style=NOTATION,\n'
+        "                parameters=model_heat_params())\n"
         '    print(f"[model] wrote {OUT_DIR / \'model.jucm\'} "\n'
         '          f"({len(ucm.maps)} map(s), "\n'
         '          f"{sum(len(m.nodes) for m in ucm.maps)} nodes)")\n'
@@ -379,7 +423,8 @@ def _family_fn() -> str:
         "                edge_metrics=OVERLAY_EDGES)\n"
         '    pm4py_ucm.write_ucm_family(family, str(OUT_DIR / "family.zip"))\n'
         "    _save_image(pm4py_ucm.save_vis_ucm_family, family,\n"
-        '                str(OUT_DIR / "family_grid.png"), style=NOTATION)\n'
+        '                str(OUT_DIR / "family_grid.png"), style=NOTATION,\n'
+        "                parameters=model_heat_params(family))\n"
         "    umbrella = pm4py_ucm.assemble_ucm_family(\n"
         '        family, mode="umbrella", dedup=FAMILY_DEDUP,\n'
         "        node_metrics=OVERLAY_NODES, edge_metrics=OVERLAY_EDGES)\n"
@@ -388,7 +433,7 @@ def _family_fn() -> str:
         "    stats = pm4py_ucm.compute_family_stats(family)\n"
         "    pm4py_ucm.write_family_report(\n"
         '        family, str(OUT_DIR / "family_report.html"),\n'
-        "        stats=stats, style=NOTATION)\n"
+        "        stats=stats, style=NOTATION, heat=report_heat(family))\n"
         '    print(f"[family] wrote {OUT_DIR / \'family.zip\'} "\n'
         '          f"({len(family.cells)} cell(s))")\n'
         "    return family"

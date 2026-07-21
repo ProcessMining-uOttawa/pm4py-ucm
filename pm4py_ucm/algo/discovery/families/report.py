@@ -181,12 +181,14 @@ def write_family_report(
     images: bool = True,
     style: str = "ucm",
     image_max_width: int = DEFAULT_IMAGE_MAX_WIDTH,
+    heat: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Write the interactive family report to ``path`` (see
-    :func:`family_report_html`). Returns ``path``."""
+    :func:`family_report_html`). ``heat`` forwards heat-map kwargs to the
+    embedded per-cell images. Returns ``path``."""
     html = family_report_html(
         family, stats=stats, title=title, images=images,
-        style=style, image_max_width=image_max_width,
+        style=style, image_max_width=image_max_width, heat=heat,
     )
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "w", encoding="utf-8", newline="\n") as fh:

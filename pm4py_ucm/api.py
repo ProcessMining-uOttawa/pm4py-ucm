@@ -682,6 +682,7 @@ def write_family_report(
     title: Optional[str] = None,
     images: bool = True,
     style: str = "ucm",
+    heat: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Write a **self-contained interactive HTML report** comparing the
     family's processes — sortable heat-mapped statistics tables, a
@@ -696,10 +697,14 @@ def write_family_report(
     ``FamilyStats`` when the log has been dropped. ``images=False``
     (or a machine without the graphviz binary) omits the embedded
     per-cell model images; ``style`` picks their notation (``"ucm"``
-    or ``"bpmn"``). Returns ``path``."""
+    or ``"bpmn"``). ``heat`` (optional) forwards performance heat-map
+    kwargs — ``heatmap`` / ``node_metric`` / ``edge_metric`` /
+    ``heatmap_global`` and an explicit ``node_span`` / ``edge_span`` — to the
+    embedded per-cell images, so the report can carry the same heat-map as the
+    web app's views. Returns ``path``."""
     return _families.write_family_report(
         family, path, stats=stats, title=title,
-        images=images, style=style,
+        images=images, style=style, heat=heat,
     )
 
 

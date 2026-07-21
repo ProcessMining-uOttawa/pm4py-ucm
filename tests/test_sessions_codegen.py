@@ -158,10 +158,10 @@ def test_generator_version_matches_package():
 def test_every_registry_id_is_handled_or_intentionally_ignored():
     """Drift guard: a new registry param must be wired into codegen (or added
     to the ignore set with a reason), so the exporter can't silently omit it."""
-    # Render-only or UI-state params that do not shape the emitted pipeline.
+    # UI-state params that do not shape the emitted pipeline. (The heat-map
+    # settings — overlay_heatmap / overlay_heatmap_scope — ARE emitted now, so
+    # the exported render calls reproduce the heat-map; they are not ignored.)
     ignored = {
-        "overlay_heatmap",         # render-time emphasis only (not in exports)
-        "overlay_heatmap_scope",   # render-time emphasis only
         "compare_a", "compare_b",  # Compare-view selection, no pipeline effect
         "active_view",             # which tab was open
         "csv_columns",             # carried on the LogRef, emitted from there
@@ -254,6 +254,41 @@ def test_emitted_transform_covers_all_app_filter_keys():
     assert not missing, (
         f"emitted apply_log_filters is missing app filter key(s): {missing} — "
         "mirror the app's _apply_log_filters in web/sessions/codegen.py")
+
+
+def test_heatmap_config_emitted_and_wired_into_render_calls():
+    src = generate_script(
+        _doc({"overlay_heatmap": True, "overlay_heatmap_scope": "family",
+              "overlay_nodes": ["frequency"], "family_attrs": ["c"]}),
+        include_family=True)
+    assert "OVERLAY_HEATMAP = True" in src
+    assert "OVERLAY_HEATMAP_SCOPE = 'family'" in src
+    # The heat-map reaches the rendered artifacts: the model PNG, the family
+    # grid PNG, and the exported HTML report's embedded images.
+    assert "parameters=model_heat_params())" in src        # model PNG
+    assert "parameters=model_heat_params(family))" in src  # family grid PNG
+    assert "heat=report_heat(family))" in src              # family report HTML
+
+
+def test_emitted_heat_helpers_reflect_overlay_state():
+    pytest.importorskip("pandas")
+    pytest.importorskip("pm4py")  # the emitted script imports it at module load
+
+    off = {"__name__": "t"}
+    exec(compile(generate_script(_doc({})), "g.py", "exec"), off)
+    assert off["model_heat_params"]() == {}     # heat-map off → no render params
+    assert off["report_heat"](None) is None
+
+    on = {"__name__": "t"}
+    exec(compile(generate_script(_doc({
+        "overlay_heatmap": True, "overlay_heatmap_scope": "global",
+        "overlay_nodes": ["median_time"], "overlay_edges": ["percentage"],
+    })), "g.py", "exec"), on)
+    hp = on["model_heat_params"]()             # global scope needs no family
+    assert hp["heatmap_node"] == ("median_time", True)   # a *_time metric
+    assert hp["heatmap_edge"] == ("percentage", False)
+    assert hp["heatmap_global"] is True
+    assert hp["node_span"] is None and hp["edge_span"] is None  # not "family"
 
 
 def test_emitted_apply_log_filters_applies_duration_pct():

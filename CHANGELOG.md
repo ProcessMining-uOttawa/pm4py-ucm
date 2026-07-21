@@ -40,9 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The persisted setting is `overlay_heatmap_scope` (`"local"` / `"global"` /
   `"family"` — `"global"` = per-member, `"family"` = across-members); the old
   boolean `overlay_heatmap_global` is migrated on load. New:
-  `classic.heat_span(models, …)` computes a shared cross-member span, and
+  `classic.heat_span(models, …)` computes a shared cross-member span,
   `model_to_svg` / `family_grid.render_svg` accept explicit `node_span` /
-  `edge_span` overrides.
+  `edge_span` overrides, and `write_family_report` gained a `heat=` kwarg that
+  carries the heat-map onto the report's embedded per-cell images.
 
 ### Added — Web app (V5)
 
@@ -62,10 +63,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Optional check-boxes add the **scenario-synthesis** and **model-family**
   pipelines. Because a project stores only *inputs* and every artifact
   recomputes, the emitted script is a **faithful, deterministic replay** —
-  running it reproduces the same `.jucm`. Turns a GUI exploration into an
-  automatable, version-controllable pipeline and doubles as a personalised
-  tutorial. Deterministic (no LLM) — a template emitter over the session
-  parameter registry. See [`docs/code_export.md`](docs/code_export.md).
+  running it reproduces the same `.jucm`. The generated pipeline also **carries
+  the pre-mining cycle-time filter** and **reproduces the performance heat-map**
+  in its exported artifacts — the model PNG, the family grid PNG, and the
+  interactive HTML report's embedded images — matching what the user saw. Turns
+  a GUI exploration into an automatable, version-controllable pipeline and
+  doubles as a personalised tutorial. Deterministic (no LLM) — a template
+  emitter over the session parameter registry. See
+  [`docs/code_export.md`](docs/code_export.md).
 
 ### Internal
 
