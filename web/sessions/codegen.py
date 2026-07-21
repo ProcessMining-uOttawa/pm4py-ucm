@@ -117,6 +117,20 @@ def apply_log_filters(log, filter_spec):
         keep -= set(exclude or ())
         df = pm4py.filter_event_attribute_values(
             df, "concept:name", keep, level="event", retain=True)
+    dpct = spec.get("duration_pct")
+    if dpct:
+        lo_pct, hi_pct = dpct       # percentile band; 0 = fastest, 100 = slowest
+        ts = pd.to_datetime(df["time:timestamp"], utc=True, errors="coerce")
+        dur = ts.groupby(df["case:concept:name"]).agg(lambda s: s.max() - s.min())
+        dur = dur.sort_values()     # ascending: fastest case first
+        n = len(dur)
+        if n:
+            lo_i = int(lo_pct / 100.0 * n)          # floor
+            hi_i = int(hi_pct / 100.0 * n)
+            if hi_pct / 100.0 * n > hi_i:           # ceil, so 100 keeps the last
+                hi_i += 1
+            keep_cases = set(dur.index[lo_i:hi_i])
+            df = df[df["case:concept:name"].isin(keep_cases)]
     vranks = spec.get("variant_ranks")
     if vranks:
         lo, hi = vranks

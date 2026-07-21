@@ -93,10 +93,23 @@ Two things the emitter needs live in the app today, not the library:
   `read_log`, `apply_rename`, `apply_log_filters`, `resource_params` and
   `_coerce_str_object` into the generated script, so it is **self-contained and
   portable** — it needs only `pandas` / `pm4py` / `pm4py_ucm` on the path,
-  nothing from this repo. The golden test guards against drift by asserting the
-  emitted pipeline reproduces the app's mining output byte-for-byte; if the app
-  transform changes, the inlined copy must follow (a shared helper remains the
-  cleaner long-term fix and is left as future work).
+  nothing from this repo. **Drift is guarded two ways:** the golden test asserts
+  the emitted pipeline reproduces the app's mining output byte-for-byte, and a
+  dedicated test parses the app's `_apply_log_filters` for the `filter_spec` keys
+  it reads and asserts every one appears in the emitted transform — so a new app
+  filter can't be silently dropped from generated scripts. (This caught exactly
+  that: the **cycle-time percentile** filter `duration_pct`, added to the app
+  after the exporter, was not in the inlined copy; it is now mirrored.) A shared
+  helper remains the cleaner long-term fix and is left as future work.
+
+  **Render-only settings are intentionally *not* reproduced.** The heat-map
+  (`overlay_heatmap` / `overlay_heatmap_scope`) is a render-time emphasis, not
+  part of the data pipeline, so the emitted `save_vis_ucm*` / `write_family_report`
+  calls do not carry it — the exported images keep the performance **sub-lines**
+  (they ride in the `.jucm` metadata via `annotate_performance`) but not the
+  colour/thickness. Reproducing the heat-map in exported artifacts is a possible
+  future fidelity option (it would thread the scope + spans into the render
+  calls).
 
 **(b) Dashboards** — the fact table, metric catalog, ƒ-formula language and
 widgets live entirely in `streamlit_app_v5.py`. "Generate code that rebuilds the
