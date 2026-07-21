@@ -497,7 +497,12 @@ def _hex(rgb: Tuple[int, int, int]) -> str:
     return "#%02x%02x%02x" % rgb
 
 
-def render_svg(family, style: str = "ucm") -> str:
+def render_svg(family, style: str = "ucm", *,
+               heatmap: bool = False,
+               node_metric: "Optional[str]" = None,
+               edge_metric: "Optional[str]" = None,
+               heatmap_global: bool = False,
+               node_span=None, edge_span=None) -> str:
     """Render ``family`` as a single **2-D vector SVG** — the same matrix
     the PNG :func:`render` composites (rows = first attribute's values,
     columns = the second's; a stack for one attribute), but as vectors:
@@ -508,6 +513,15 @@ def render_svg(family, style: str = "ucm") -> str:
     member's stub links only ever resolve inside that member — a click can
     never jump across the grid. Skipped / never-observed combinations
     render as the same grayed placeholders as the PNG.
+
+    The performance heat-map arguments (``heatmap``, ``node_metric``,
+    ``edge_metric``, ``heatmap_global``, ``node_span`` / ``edge_span``) are
+    forwarded unchanged to every cell's :func:`model_to_svg`. Pass an explicit
+    ``node_span`` / ``edge_span`` (from
+    :func:`~pm4py_ucm.visualization.ucm.variants.classic.heat_span` over the
+    family's cells) for a **family-wide** scale that is comparable across cells;
+    ``heatmap_global`` alone gives each cell its own whole-model scale; neither
+    gives each map a local scale.
 
     Layout units are points; there is no rasterisation, so a panel is
     sized directly from its graphviz ``<svg>`` extents.
@@ -547,7 +561,10 @@ def render_svg(family, style: str = "ucm") -> str:
             cell = grid.get(labels)
             if cell is not None:
                 cell_svg = _svg.model_to_svg(
-                    cell.ucm, style, id_prefix=f"r{r}c{c}-")
+                    cell.ucm, style, id_prefix=f"r{r}c{c}-",
+                    heatmap=heatmap, node_metric=node_metric,
+                    edge_metric=edge_metric, heatmap_global=heatmap_global,
+                    node_span=node_span, edge_span=edge_span)
                 w, h = _svg.svg_dimensions(cell_svg)
                 panels[(r, c)] = (w, h, _svg.svg_inner(cell_svg))
                 captions[(r, c)] = cell.caption

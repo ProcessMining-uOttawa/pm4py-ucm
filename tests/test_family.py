@@ -1090,3 +1090,39 @@ def test_end_to_end_with_pm4py():
     assert 'dynamic="true"' in text
     combined = pm4py_ucm.assemble_ucm_family(family, mode="combined")
     assert len(combined.maps) >= 2
+
+
+# ---------------------------------------------------------------------------
+# Family grid heat-map (the grid SVG the Family view shows honours the overlay)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.skipif(not _GRAPHVIZ, reason="graphviz 'dot' absent")
+def test_family_grid_svg_honours_heatmap_and_family_scale():
+    from pm4py_ucm.visualization.ucm.family_grid import render_svg
+    from pm4py_ucm.visualization.ucm.variants import classic as _classic
+
+    family = _discover(_make_log(), ["cancer_type"])
+    # The toy miner doesn't annotate performance, so stamp each cell's
+    # activities with distinct frequencies — and give the two cells different
+    # ranges, so a family-wide scale differs from each cell's local scale.
+    v = 1
+    for cell in family.cells:
+        for m in cell.ucm.maps:
+            for n in m.nodes:
+                if isinstance(n, UCM.RespRef):
+                    n.add_metadata("perf_frequency", str(v))
+                    v += 9
+
+    off = render_svg(family, "bpmn")
+    on = render_svg(family, "bpmn", heatmap=True, node_metric="frequency")
+    assert on != off, "heat-map did not reach the family grid"
+
+    # Family-wide span (shared across all cells) rescales vs each cell's own
+    # local range — so the two are different renders.
+    ns, es = _classic.heat_span([c.ucm for c in family.cells],
+                                node_metric="frequency")
+    assert ns is not None
+    fam_scaled = render_svg(family, "bpmn", heatmap=True,
+                            node_metric="frequency",
+                            node_span=ns, edge_span=es)
+    assert fam_scaled != on, "family-wide scale did not differ from local"

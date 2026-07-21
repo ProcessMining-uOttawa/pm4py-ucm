@@ -27,7 +27,7 @@ FULL_VALUES = {
     "overlay_nodes": ["frequency", "sojourn_median_time"],
     "overlay_edges": ["percentage", "frequency"],
     "overlay_heatmap": True,
-    "overlay_heatmap_global": False,
+    "overlay_heatmap_scope": "family",
     "filter_spec": [["exclude_activities", ["Fix Bug"]],
                     ["rename_map", [["A", "B"]]]],
     "csv_columns": ["case", "act", "ts", "role", "res"],

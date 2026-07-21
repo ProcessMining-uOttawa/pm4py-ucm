@@ -672,13 +672,17 @@ annotate the shared skeleton from the whole log and each variant
 plug-in from its own sub-log. Overlay walkthrough in
 [`docs/model_families.md`](docs/model_families.md#2-performance-overlays).
 
-Beyond the text sub-line, the Model view has an optional **heat-map** that
-colours and thickens activities and edges by the *first* chosen metric of each
-layer, scaled within each diagram (a **time** metric reads red, any other blue;
-darker/thicker = higher). It is a render-time overlay of the same
-`perf_<metric>` values — the model and `.jucm` are unchanged — exposed by
-`model_to_svg(ucm, style, heatmap=True, node_metric=…, edge_metric=…,
-heatmap_global=…)`.
+Beyond the text sub-line, an optional **heat-map** colours and thickens
+activities and edges by the *first* chosen metric of each layer — across the
+**Model, Family and Compare** views alike (a **time** metric reads red, any
+other blue; darker/thicker = higher). Its **scale** control offers three modes:
+**local** (each diagram to its own min/max), **global** (a whole model against
+its own range), and **per family** (every cell of the Family/Compare views
+against **one shared range**, so a colour is comparable across members). It is a
+render-time overlay of the same `perf_<metric>` values — the model and `.jucm`
+are unchanged — exposed by `model_to_svg(ucm, style, heatmap=True,
+node_metric=…, edge_metric=…, heatmap_global=…, node_span=…, edge_span=…)`;
+`classic.heat_span(models, …)` computes the family-wide span.
 
 **📏 [`docs/metrics.md`](docs/metrics.md) is the readable, complete list
 of every metric definition** — activity, edge, process and choice —

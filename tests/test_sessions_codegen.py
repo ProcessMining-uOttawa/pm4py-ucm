@@ -161,7 +161,7 @@ def test_every_registry_id_is_handled_or_intentionally_ignored():
     # Render-only or UI-state params that do not shape the emitted pipeline.
     ignored = {
         "overlay_heatmap",         # render-time emphasis only (not in exports)
-        "overlay_heatmap_global",  # render-time emphasis only
+        "overlay_heatmap_scope",   # render-time emphasis only
         "compare_a", "compare_b",  # Compare-view selection, no pipeline effect
         "active_view",             # which tab was open
         "csv_columns",             # carried on the LogRef, emitted from there

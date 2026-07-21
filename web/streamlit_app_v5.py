@@ -1447,21 +1447,73 @@ def _render_family_cell(
         return None
 
 
+def _family_heat_spans(family, heatmap, node_metric, edge_metric, heat_scope):
+    """Resolve a family render's heat-map scale → ``(node_span, edge_span,
+    heatmap_global)``.
+
+    ``"family"`` computes one shared min/max over **every** cell (via
+    :func:`classic.heat_span`), so a colour means the same thing in every
+    member and they are visually comparable; ``"global"`` gives each cell its
+    own whole-model scale; ``"local"`` (or heat-map off) leaves both spans
+    ``None`` for the default per-map scale."""
+    if not heatmap:
+        return None, None, False
+    if heat_scope == "family":
+        from pm4py_ucm.visualization.ucm.variants import classic as _classic
+        ns, es = _classic.heat_span(
+            [c.ucm for c in getattr(family, "cells", [])],
+            node_metric, edge_metric)
+        return ns, es, False
+    if heat_scope == "global":
+        return None, None, True
+    return None, None, False
+
+
+def _heat_note(node_metric, edge_metric, scope):
+    """A short caption describing the active heat-map (empty when it drives
+    nothing). Shared by the Family and Compare views."""
+    if not (node_metric or edge_metric):
+        return ""
+    bits = []
+    if node_metric:
+        bits.append(f"activities by **{node_metric}**")
+    if edge_metric:
+        bits.append(f"edges by **{edge_metric}**")
+    scale = {"global": "whole-model scale", "family": "family-wide scale",
+             "local": "per-map scale"}.get(scope, "per-map scale")
+    is_time = any(m and m.endswith("_time") for m in (node_metric, edge_metric))
+    return (" Heat-map on: " + " and ".join(bits) + f" ({scale}; "
+            + ("red = time" if is_time else "blue")
+            + ", darker/thicker = higher).")
+
+
 @st.cache_data(show_spinner=False)
 def _render_family_cell_svg(
     mine_fingerprint: str,
     style: str,
     cell_index: int,
     _family,
+    heatmap: bool = False,
+    node_metric: Optional[str] = None,
+    edge_metric: Optional[str] = None,
+    heat_scope: str = "local",
 ) -> Optional[str]:
     """One cell's model as a navigable inline SVG for the Compare tab.
 
-    Cached on ``(mining run, notation, cell)`` — ``_family`` excluded
-    from the key (underscore), same convention as
+    Cached on ``(mining run, notation, cell, heat-map settings)`` — ``_family``
+    excluded from the key (underscore), same convention as
     :func:`_render_family_cell`. A decomposed cell keeps its stub links
-    inside itself. ``None`` when rendering is unavailable."""
+    inside itself. The heat-map arguments colour/thicken by the chosen metric;
+    ``heat_scope`` picks the scale (``"family"`` shares one range across all
+    cells so the two compared members are comparable). ``None`` when rendering
+    is unavailable."""
     try:
-        return _svgmod.model_to_svg(_family.cells[cell_index].ucm, style)
+        node_span, edge_span, hglobal = _family_heat_spans(
+            _family, heatmap, node_metric, edge_metric, heat_scope)
+        return _svgmod.model_to_svg(
+            _family.cells[cell_index].ucm, style,
+            heatmap=heatmap, node_metric=node_metric, edge_metric=edge_metric,
+            heatmap_global=hglobal, node_span=node_span, edge_span=edge_span)
     except Exception:  # pragma: no cover - depends on env
         return None
 
@@ -1471,6 +1523,10 @@ def _render_family_grid_svg(
     mine_fingerprint: str,
     style: str,
     _family,
+    heatmap: bool = False,
+    node_metric: Optional[str] = None,
+    edge_metric: Optional[str] = None,
+    heat_scope: str = "local",
 ) -> Tuple[Optional[str], Optional[str]]:
     """The whole family as one navigable 2-D vector SVG — the same matrix
     the PNG grid composites (rows × columns, headers, captions), but as
@@ -1486,7 +1542,12 @@ def _render_family_grid_svg(
         from pm4py_ucm.visualization.ucm.family_grid import render_svg
         if not getattr(_family, "cells", None):
             return None, "no cells to render"
-        return render_svg(_family, style), None
+        node_span, edge_span, hglobal = _family_heat_spans(
+            _family, heatmap, node_metric, edge_metric, heat_scope)
+        return render_svg(
+            _family, style, heatmap=heatmap, node_metric=node_metric,
+            edge_metric=edge_metric, heatmap_global=hglobal,
+            node_span=node_span, edge_span=edge_span), None
     except Exception as exc:  # pragma: no cover - depends on env
         return None, f"{type(exc).__name__}: {exc}"
 
@@ -2245,10 +2306,16 @@ def _apply_project_config(cfg, fh, csv_columns=None):
     # clashes with a pre-set key, so seed them directly, warning-free).
     if "overlay_heatmap" in cfg:
         ss[f"overlay_heatmap::{fh}"] = bool(cfg["overlay_heatmap"])
-    if "overlay_heatmap_global" in cfg:
-        ss[f"overlay_heat_scope::{fh}"] = (
-            "Global (whole model)" if cfg["overlay_heatmap_global"]
-            else "Local (per map)")
+    # Scale radio. Prefer the current scope key; migrate the old boolean
+    # overlay_heatmap_global from projects written before the 3-way scale.
+    _scope = cfg.get("overlay_heatmap_scope")
+    if _scope is None and "overlay_heatmap_global" in cfg:
+        _scope = "global" if cfg["overlay_heatmap_global"] else "local"
+    if _scope is not None:
+        ss[f"overlay_heat_scope::{fh}"] = {
+            "global": "Global (whole model)",
+            "family": "Per family (all cells)",
+        }.get(_scope, "Local (per map)")
     _cols = csv_columns or cfg.get("csv_columns")
     if _cols:
         ss["applied_csv_columns"] = tuple(_cols)
@@ -2632,15 +2699,28 @@ with st.sidebar:
     )
     _heat_scope = _ovl_exp.radio(
         "Heat-map scale",
-        options=["Local (per map)", "Global (whole model)"],
-        index=0, key=f"overlay_heat_scope::{_ov_hash}", horizontal=True,
+        options=["Local (per map)", "Global (whole model)",
+                 "Per family (all cells)"],
+        index=0, key=f"overlay_heat_scope::{_ov_hash}",
         disabled=not overlay_heatmap,
         help="**Local** scales each diagram to its own min/max (each sub-map "
              "highlights its own hotspots). **Global** scales every map "
-             "against the whole model's min/max, so the same value looks the "
-             "same everywhere. Identical when the model isn't decomposed.",
+             "against the whole model's min/max, so a value looks the same "
+             "everywhere (identical to Local when the model isn't decomposed). "
+             "**Per family** scales every cell of the **Family** and "
+             "**Compare** views against ONE range shared across all cells, so "
+             "colours are comparable between members — it falls back to whole "
+             "model in the single-model Model view.",
     )
-    overlay_heatmap_global = _heat_scope.startswith("Global")
+    overlay_heat_scope = (
+        "global" if _heat_scope.startswith("Global")
+        else "family" if _heat_scope.startswith("Per family")
+        else "local")
+    # Single-model views (Model, and each Compare cell on its own) only
+    # distinguish local vs whole-model; a family-wide scale needs the cells, so
+    # "family" degenerates to whole-model here and is realised as a true
+    # cross-cell span inside the Family / Compare renders below.
+    overlay_heatmap_global = overlay_heat_scope in ("global", "family")
 
     st.divider()
     notation = st.radio(
@@ -3244,7 +3324,7 @@ with st.sidebar:
             "overlay_nodes": list(overlay_nodes),
             "overlay_edges": list(overlay_edges),
             "overlay_heatmap": bool(overlay_heatmap),
-            "overlay_heatmap_global": bool(overlay_heatmap_global),
+            "overlay_heatmap_scope": overlay_heat_scope,
             "filter_spec": filter_spec,
             "csv_columns": list(csv_columns) if csv_columns else None,
             "scenario_strategy": st.session_state.get(
@@ -4104,15 +4184,26 @@ if _view == "Family":
                 with st.spinner(f"Rendering family grid ({notation})..."):
                     grid_svg, grid_svg_err = _render_family_grid_svg(
                         st.session_state["family_fp"], style, fam["family"],
+                        heatmap=bool(overlay_heatmap),
+                        node_metric=overlay_nodes[0] if overlay_nodes else None,
+                        edge_metric=overlay_edges[0] if overlay_edges else None,
+                        heat_scope=overlay_heat_scope,
                     )
                 if grid_svg is not None:
                     _svg_viewer(grid_svg, height=640, key="familysvg")
+                    _fam_heat = (
+                        _heat_note(
+                            overlay_nodes[0] if overlay_nodes else None,
+                            overlay_edges[0] if overlay_edges else None,
+                            overlay_heat_scope)
+                        if overlay_heatmap else "")
                     st.caption(
                         "One panel per combination (rows × columns) — "
                         "captions show each cell's case count and share of "
                         "the log. Vector SVG: scroll to zoom, drag to pan; "
                         "for a decomposed member, click a stub to jump to "
                         "its sub-map. Download SVG or a raster PNG below."
+                        + _fam_heat
                     )
                 else:
                     # SVG failed — fall back to the raster grid so the
@@ -4408,7 +4499,11 @@ if _view == "Compare":
         # member. PNG stays available as a download.
         st.caption("Zoom and drag to pan each model. For a decomposed "
                    "member, click a stub to jump to its sub-map; a "
-                   "dynamic stub opens a plug-in picker.")
+                   "dynamic stub opens a plug-in picker."
+                   + (_heat_note(
+                       overlay_nodes[0] if overlay_nodes else None,
+                       overlay_edges[0] if overlay_edges else None,
+                       overlay_heat_scope) if overlay_heatmap else ""))
         _cmp_stem = Path(log_name).stem
         _imc = st.columns(2)
         for _col, _tag, _idx, _cell in (
@@ -4420,6 +4515,10 @@ if _view == "Compare":
                 )
                 _csvg = _render_family_cell_svg(
                     _cmp_fp, style, _idx, _cmp_fam["family"],
+                    heatmap=bool(overlay_heatmap),
+                    node_metric=overlay_nodes[0] if overlay_nodes else None,
+                    edge_metric=overlay_edges[0] if overlay_edges else None,
+                    heat_scope=overlay_heat_scope,
                 )
                 if _csvg is not None:
                     _svg_viewer(_csvg, height=460, key=f"cmpsvg{_tag}")

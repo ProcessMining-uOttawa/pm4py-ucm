@@ -97,8 +97,9 @@ param whose widget key is `flt_arank::<hash>` can build the right key for the
   sorted tuple of `(key, value)`), already hashable/serialisable.
 - `resource_attribute` — the performers string.
 - `overlay_nodes` / `overlay_edges` — the two multiselect lists;
-  `overlay_heatmap` / `overlay_heatmap_global` — the Model-view heat-map's
-  on/off and its local↔global scale.
+  `overlay_heatmap` / `overlay_heatmap_scope` — the heat-map's on/off and its
+  scale (`"local"` / `"global"` / `"family"`). A project written before the
+  3-way scale carried a boolean `overlay_heatmap_global`, migrated on load.
 - `filter_spec` — the **semantic** filter tuple (`activity_ranks`,
   `exclude_activities`, `variant_ranks`, `time_*`, `rename_map`). Storing the
   semantic spec (not raw widget positions) is robust; `apply` reverse-seeds the
