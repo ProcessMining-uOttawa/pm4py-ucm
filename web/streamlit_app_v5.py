@@ -1455,11 +1455,22 @@ def _build_family_report(
     ``(html_bytes, None)`` or ``(None, error_text)``."""
     from pm4py_ucm.algo.discovery.families.report import family_report_html
     try:
-        html = family_report_html(
-            _family, stats=_stats, style=style,
-            heat=_heat_svg_kwargs(
-                _family, heatmap, node_metric, edge_metric, heat_scope),
-        )
+        try:
+            html = family_report_html(
+                _family, stats=_stats, style=style,
+                heat=_heat_svg_kwargs(
+                    _family, heatmap, node_metric, edge_metric, heat_scope),
+            )
+        except TypeError as _te:
+            # An older pm4py_ucm.report without the `heat` kwarg — most often a
+            # stale imported-module cache when the library was upgraded in place
+            # while the Streamlit process kept running (a full restart / Cloud
+            # reboot picks up the new report.py, adding the heat-map to the
+            # report images). Degrade to a heat-less report rather than failing
+            # the whole download.
+            if "heat" not in str(_te):
+                raise
+            html = family_report_html(_family, stats=_stats, style=style)
         return html.encode("utf-8"), None
     except Exception as exc:  # pragma: no cover - depends on env
         return None, f"{type(exc).__name__}: {exc}"
