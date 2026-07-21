@@ -1558,6 +1558,24 @@ def _view_heat_args():
     )
 
 
+def _model_heat_kwargs():
+    """Heat-map kwargs for a *single-model* SVG render (``model_to_svg`` via
+    :func:`_render_svg_cached`), from the sidebar overlay state. Shared by the
+    Model view and the Dashboards pinned-model widget so a pinned model renders
+    with the same heat-map as the Model view (the perf sub-lines already ride in
+    the ``.jucm`` metadata; this carries the render-time colour/thickness).
+    Reads the sidebar globals defensively."""
+    g = globals()
+    nodes = g.get("overlay_nodes") or ()
+    edges = g.get("overlay_edges") or ()
+    return dict(
+        heatmap=bool(g.get("overlay_heatmap")),
+        node_metric=nodes[0] if nodes else None,
+        edge_metric=edges[0] if edges else None,
+        heatmap_global=bool(g.get("overlay_heatmap_global")),
+    )
+
+
 def _heat_note(node_metric, edge_metric, scope):
     """A short caption describing the active heat-map (empty when it drives
     nothing). Shared by the Family and Compare views."""
@@ -3599,12 +3617,7 @@ if _view == "Model":
     # Heat-map render settings, shared by the SVG (on-screen + download) and
     # the PNG so all three agree. Only drives anything when the checkbox is on
     # and the relevant overlay layer has a metric.
-    _heat_kwargs = dict(
-        heatmap=bool(overlay_heatmap),
-        node_metric=overlay_nodes[0] if overlay_nodes else None,
-        edge_metric=overlay_edges[0] if overlay_edges else None,
-        heatmap_global=bool(overlay_heatmap_global),
-    )
+    _heat_kwargs = _model_heat_kwargs()
     _heat_tag = (
         f"h{int(bool(overlay_heatmap))}g{int(bool(overlay_heatmap_global))}"
         f"{_heat_kwargs['node_metric'] or ''}{_heat_kwargs['edge_metric'] or ''}"
@@ -4943,9 +4956,13 @@ if _view == "Dashboards":
     # notations cost one render each rather than one per rerun.
     _renders: Dict[str, str] = {}
     _model_svgs: Dict[str, str] = {}
+    # Same heat-map settings the Model view renders with, so a model pinned to
+    # the dashboard keeps its performance overlay (the perf sub-lines ride in
+    # the .jucm; this carries the render-time heat-map colour/thickness).
+    _dash_heat = _model_heat_kwargs()
     for _style, _label in (("ucm", "ucm"), ("bpmn", "bpmn")):
         try:
-            _svg = _render_svg_cached(mined["jucm"], _style)
+            _svg = _render_svg_cached(mined["jucm"], _style, **_dash_heat)
             _model_svgs[_label] = _svg
             _renders[_label] = (
                 "data:image/svg+xml;base64,"

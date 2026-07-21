@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed — Web app (V5)
 
+- **A model pinned to a dashboard keeps its performance heat-map.** The
+  Dashboards pinned-model widget rendered its SVG without the overlay's
+  heat-map settings, so the colour/thickness emphasis vanished on the pinned
+  copy (the metric sub-lines, which ride in the `.jucm`, were unaffected). It
+  now renders with the same heat-map kwargs as the Model view (shared
+  `_model_heat_kwargs()` helper), so a pinned model matches what you pinned.
 - **The performance heat-map now applies to the Family and Compare views**, not
   only the Model view. Selecting *Heat-map emphasis* colours and thickens the
   activities/edges of every family cell and of the two compared members, using
