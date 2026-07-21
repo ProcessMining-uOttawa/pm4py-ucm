@@ -1126,3 +1126,48 @@ def test_family_grid_svg_honours_heatmap_and_family_scale():
                             node_metric="frequency",
                             node_span=ns, edge_span=es)
     assert fam_scaled != on, "family-wide scale did not differ from local"
+
+
+@pytest.mark.skipif(not _GRAPHVIZ, reason="graphviz 'dot' absent")
+def test_family_png_grid_and_report_images_honour_heatmap():
+    # The PNG grid (save_vis_ucm_family/render) and the report's embedded cell
+    # images honour the heat-map, so they match the on-screen SVG views.
+    import tempfile
+    from pathlib import Path as _P
+
+    from pm4py_ucm.algo.discovery.families.report import _render_cell_images
+    from pm4py_ucm.visualization.ucm import family_grid as _grid
+    from pm4py_ucm.visualization.ucm.variants import classic as _classic
+
+    family = _discover(_make_log(), ["cancer_type"])
+    v = 1
+    for cell in family.cells:
+        for m in cell.ucm.maps:
+            for n in m.nodes:
+                if isinstance(n, UCM.RespRef):
+                    n.add_metadata("perf_frequency", str(v))
+                    v += 9
+
+    ns, es = _classic.heat_span([c.ucm for c in family.cells],
+                                node_metric="frequency")
+    heat_classic = {"heatmap_node": ("frequency", False), "heatmap_edge": None,
+                    "heatmap_global": False, "node_span": ns, "edge_span": es}
+    heat_svg = {"heatmap": True, "node_metric": "frequency",
+                "edge_metric": None, "heatmap_global": False,
+                "node_span": ns, "edge_span": es}
+
+    # Report images: on vs off differ, and every cell still renders.
+    plain_imgs = _render_cell_images(family, "bpmn")
+    hot_imgs = _render_cell_images(family, "bpmn", heat=heat_svg)
+    assert hot_imgs and all(u is not None for u in hot_imgs)
+    assert hot_imgs != plain_imgs, "report images ignored the heat-map"
+
+    # PNG grid: the heat params change the rendered bytes.
+    with tempfile.TemporaryDirectory() as td:
+        p_off = _P(td) / "off.png"
+        p_on = _P(td) / "on.png"
+        _grid.render(family, str(p_off), parameters={"style": "bpmn", "dpi": 96})
+        _grid.render(family, str(p_on),
+                     parameters={"style": "bpmn", "dpi": 96, **heat_classic})
+        assert p_off.read_bytes() != p_on.read_bytes(), \
+            "PNG grid ignored the heat-map"

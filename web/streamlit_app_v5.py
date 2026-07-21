@@ -791,6 +791,9 @@ def _apply_log_filters(log, filter_spec):
       frequency rank falls in ``[lo, hi]`` (rank 1 = most frequent), so a
       range slider can keep the most, the least, or a middle band;
     * ``exclude_activities`` (tuple) — drop these activity names;
+    * ``duration_pct`` ``(lo, hi)`` — keep cases whose end-to-end cycle time
+      (last − first event) falls in the ``[lo, hi]`` percentile band of the
+      remaining cases (0 = fastest, 100 = slowest);
     * ``variant_ranks`` ``(lo, hi)`` — keep trace variants ranked in
       ``[lo, hi]`` by frequency;
     * ``time_from`` / ``time_to`` (``"%Y-%m-%d %H:%M:%S"`` strings) +
@@ -820,6 +823,25 @@ def _apply_log_filters(log, filter_spec):
         keep -= set(exclude or ())
         df = pm4py.filter_event_attribute_values(
             df, "concept:name", keep, level="event", retain=True)
+
+    # End-to-end cycle-time band: keep cases whose per-case duration (last
+    # minus first event) falls in the [lo, hi] percentile of the remaining
+    # cases — 0 = fastest, 100 = slowest. Applied before the variant filter so
+    # the variant options are computed on the same population.
+    dpct = spec.get("duration_pct")
+    if dpct:
+        lo_pct, hi_pct = dpct
+        ts = pd.to_datetime(df["time:timestamp"], utc=True, errors="coerce")
+        dur = ts.groupby(df["case:concept:name"]).agg(lambda s: s.max() - s.min())
+        dur = dur.sort_values()  # ascending: fastest case first
+        n = len(dur)
+        if n:
+            lo_i = int(lo_pct / 100.0 * n)          # floor
+            hi_i = int(hi_pct / 100.0 * n)
+            if hi_pct / 100.0 * n > hi_i:           # ceil, so 100 keeps the last
+                hi_i += 1
+            keep_cases = set(dur.index[lo_i:hi_i])
+            df = df[df["case:concept:name"].isin(keep_cases)]
 
     vranks = spec.get("variant_ranks")
     if vranks:
@@ -855,6 +877,9 @@ def _filter_summary(filter_spec) -> str:
     if "exclude_activities" in spec:
         n = len(spec["exclude_activities"])
         parts.append(f"−{n} activit{'y' if n == 1 else 'ies'}")
+    if "duration_pct" in spec:
+        lo, hi = spec["duration_pct"]
+        parts.append(f"cycle {lo}–{hi}%")
     if "variant_ranks" in spec:
         lo, hi = spec["variant_ranks"]
         parts.append(f"variants {lo}–{hi}")
@@ -1368,21 +1393,29 @@ def _render_family_grid(
     mine_fingerprint: str,
     style: str,
     _family,
+    heatmap: bool = False,
+    node_metric: Optional[str] = None,
+    edge_metric: Optional[str] = None,
+    heat_scope: str = "local",
 ) -> Tuple[Optional[bytes], Optional[bytes], Optional[str]]:
     """Render the family grid PNG for one notation.
 
-    Cached on ``(mine_fingerprint, style)`` only — ``_family`` (the
-    already-mined models) is deliberately excluded from the key via
+    Cached on ``(mine_fingerprint, style, heat-map settings)`` — ``_family``
+    (the already-mined models) is deliberately excluded from the key via
     the underscore prefix. Switching UCM ↔ BPMN therefore re-renders
     but never re-mines. Returns ``(full_png, preview_png, None)`` or
     ``(None, None, error_text)``; the preview is capped at
     :data:`_GRID_PREVIEW_MAX_W` px wide (may be the same bytes as the
-    full render when already narrow)."""
+    full render when already narrow). The heat-map arguments colour/thicken
+    each cell by the chosen metric at the chosen scale (see
+    :func:`_heat_classic_kwargs`)."""
     try:
         with tempfile.TemporaryDirectory() as td:
             png_path = Path(td) / "grid.png"
             pm4py_ucm.save_vis_ucm_family(
                 _family, str(png_path), style=style,
+                parameters=_heat_classic_kwargs(
+                    _family, heatmap, node_metric, edge_metric, heat_scope),
             )
             full = png_path.read_bytes()
             with _PILImage.open(io.BytesIO(full)) as im:
@@ -1408,17 +1441,24 @@ def _build_family_report(
     style: str,
     _family,
     _stats,
+    heatmap: bool = False,
+    node_metric: Optional[str] = None,
+    edge_metric: Optional[str] = None,
+    heat_scope: str = "local",
 ) -> Tuple[Optional[bytes], Optional[str]]:
     """Build the self-contained interactive HTML report (embedded
     per-cell images in the given notation). Cached on
-    ``(mine_fingerprint, style)`` only — same convention as
+    ``(mine_fingerprint, style, heat-map settings)`` — same convention as
     :func:`_render_family_grid`: switching notation re-renders images
-    but never re-mines. Returns ``(html_bytes, None)`` or
-    ``(None, error_text)``."""
+    but never re-mines. The embedded model images carry the heat-map when it
+    is on, so the report matches the on-screen views. Returns
+    ``(html_bytes, None)`` or ``(None, error_text)``."""
     from pm4py_ucm.algo.discovery.families.report import family_report_html
     try:
         html = family_report_html(
             _family, stats=_stats, style=style,
+            heat=_heat_svg_kwargs(
+                _family, heatmap, node_metric, edge_metric, heat_scope),
         )
         return html.encode("utf-8"), None
     except Exception as exc:  # pragma: no cover - depends on env
@@ -1431,16 +1471,23 @@ def _render_family_cell(
     style: str,
     cell_index: int,
     _family,
+    heatmap: bool = False,
+    node_metric: Optional[str] = None,
+    edge_metric: Optional[str] = None,
+    heat_scope: str = "local",
 ) -> Optional[bytes]:
     """One cell's model as a PNG for the Compare tab (cached per
-    (mining run, notation, cell); ``None`` when rendering is
-    unavailable)."""
+    (mining run, notation, cell, heat-map settings); ``None`` when rendering
+    is unavailable). The heat-map arguments match the on-screen SVG so the
+    PNG download / fallback agrees with it."""
     from pm4py_ucm.visualization.ucm.family_grid import _render_cell_png
     try:
         with tempfile.TemporaryDirectory() as td:
+            params = {"style": style, "dpi": 192}
+            params.update(_heat_classic_kwargs(
+                _family, heatmap, node_metric, edge_metric, heat_scope))
             path = _render_cell_png(
-                _family.cells[cell_index].ucm, td, cell_index,
-                {"style": style, "dpi": 192},
+                _family.cells[cell_index].ucm, td, cell_index, params,
             )
             return Path(path).read_bytes()
     except Exception:  # pragma: no cover - depends on env
@@ -1467,6 +1514,48 @@ def _family_heat_spans(family, heatmap, node_metric, edge_metric, heat_scope):
     if heat_scope == "global":
         return None, None, True
     return None, None, False
+
+
+def _heat_classic_kwargs(family, heatmap, node_metric, edge_metric, heat_scope):
+    """``classic.apply``-style heat parameters (``heatmap_node`` / ``_edge`` /
+    ``_global`` + a family-wide ``node_span`` / ``edge_span``) for the PNG grid
+    and Compare-cell PNG paths, which render through ``classic.apply`` via a
+    ``parameters`` dict. Empty when the heat-map is off."""
+    if not heatmap:
+        return {}
+    ns, es, hglobal = _family_heat_spans(
+        family, heatmap, node_metric, edge_metric, heat_scope)
+    hn = (node_metric, node_metric.endswith("_time")) if node_metric else None
+    he = (edge_metric, edge_metric.endswith("_time")) if edge_metric else None
+    return {"heatmap_node": hn, "heatmap_edge": he, "heatmap_global": hglobal,
+            "node_span": ns, "edge_span": es}
+
+
+def _heat_svg_kwargs(family, heatmap, node_metric, edge_metric, heat_scope):
+    """``model_to_svg``-style heat kwargs for the report's per-cell images."""
+    if not heatmap:
+        return {}
+    ns, es, hglobal = _family_heat_spans(
+        family, heatmap, node_metric, edge_metric, heat_scope)
+    return {"heatmap": True, "node_metric": node_metric,
+            "edge_metric": edge_metric, "heatmap_global": hglobal,
+            "node_span": ns, "edge_span": es}
+
+
+def _view_heat_args():
+    """The heat-map render kwargs (``heatmap`` / ``node_metric`` /
+    ``edge_metric`` / ``heat_scope``) from the current sidebar overlay state,
+    for the Family and Compare render helpers. Reads the sidebar globals
+    defensively so it is safe before they are assigned."""
+    g = globals()
+    nodes = g.get("overlay_nodes") or ()
+    edges = g.get("overlay_edges") or ()
+    return dict(
+        heatmap=bool(g.get("overlay_heatmap")),
+        node_metric=nodes[0] if nodes else None,
+        edge_metric=edges[0] if edges else None,
+        heat_scope=g.get("overlay_heat_scope", "local"),
+    )
 
 
 def _heat_note(node_metric, edge_metric, scope):
@@ -2219,13 +2308,17 @@ def _apply_filter_spec_to_state(fspec, fh, pr):
         ss["rename_map_applied"] = {
             str(a): str(b) for a, b in (tuple(p) for p in spec["rename_map"])}
     if any(k in spec for k in ("activity_ranks", "exclude_activities",
-                               "variant_ranks", "time_from", "time_to")):
+                               "variant_ranks", "time_from", "time_to",
+                               "duration_pct")):
         pr["log_filter_on"] = True
     if "activity_ranks" in spec:
         _lo, _hi = spec["activity_ranks"]
         pr[f"flt_arank::{fh}"] = (int(_lo), int(_hi))
     if "exclude_activities" in spec:
         pr[f"flt_excl::{fh}"] = list(spec["exclude_activities"])
+    if "duration_pct" in spec:
+        _lo, _hi = spec["duration_pct"]
+        pr[f"flt_cyc::{fh}"] = (int(_lo), int(_hi))
     if "time_from" in spec or "time_to" in spec:
         _lo, _hi = spec.get("time_from"), spec.get("time_to")
         if _lo and _hi:
@@ -2249,6 +2342,9 @@ def _apply_filter_spec_to_state(fspec, fh, pr):
                                          int(spec["activity_ranks"][1]))
         if "exclude_activities" in spec:
             partial["exclude_activities"] = tuple(spec["exclude_activities"])
+        if "duration_pct" in spec:
+            partial["duration_pct"] = (int(spec["duration_pct"][0]),
+                                       int(spec["duration_pct"][1]))
         for tk in ("time_from", "time_to", "time_mode"):
             if tk in spec:
                 partial[tk] = spec[tk]
@@ -3130,6 +3226,22 @@ with st.sidebar:
                 _flt["time_mode"] = (
                     "traces_contained" if _tmode == "fully inside"
                     else "traces_intersecting")
+        # End-to-end cycle time — a two-handled percentile band over per-case
+        # duration (last − first event). Needs a real time span (else every
+        # case has the same/zero duration and the band is meaningless).
+        if _f_dmin and _f_dmax and _f_dmin != _f_dmax:
+            _cyc = _flt_exp.slider(
+                "Cycle-time percentile (case duration)", 0, 100,
+                value=_rv(f"flt_cyc::{_k}", (0, 100)), step=1,
+                key=f"flt_cyc::{_k}",
+                help="Keep cases by end-to-end cycle time (last minus first "
+                     "event). 0 = fastest, 100 = slowest. Drag the left handle "
+                     "in to drop the fastest cases, the right handle in to drop "
+                     "the slowest, or pick a middle band — e.g. 0–10 keeps the "
+                     "fastest 10% of cases, 90–100 the slowest 10%.")
+            if (isinstance(_cyc, (list, tuple)) and len(_cyc) == 2
+                    and tuple(_cyc) != (0, 100)):
+                _flt["duration_pct"] = (int(_cyc[0]), int(_cyc[1]))
         # Variants by frequency rank — LAST, because the variant count and the
         # per-rank case coverage are recomputed on the log AFTER the activity +
         # date filters above (excluding an activity or narrowing the window
@@ -4184,10 +4296,7 @@ if _view == "Family":
                 with st.spinner(f"Rendering family grid ({notation})..."):
                     grid_svg, grid_svg_err = _render_family_grid_svg(
                         st.session_state["family_fp"], style, fam["family"],
-                        heatmap=bool(overlay_heatmap),
-                        node_metric=overlay_nodes[0] if overlay_nodes else None,
-                        edge_metric=overlay_edges[0] if overlay_edges else None,
-                        heat_scope=overlay_heat_scope,
+                        **_view_heat_args(),
                     )
                 if grid_svg is not None:
                     _svg_viewer(grid_svg, height=640, key="familysvg")
@@ -4212,7 +4321,7 @@ if _view == "Family":
                         grid_png, grid_preview, grid_error = (
                             _render_family_grid(
                                 st.session_state["family_fp"], style,
-                                fam["family"],
+                                fam["family"], **_view_heat_args(),
                             )
                         )
                     if grid_preview is not None:
@@ -4292,9 +4401,10 @@ if _view == "Family":
                             overlay_nodes, overlay_edges)
                         _zip = _family_zip_bytes(_fam_fp, fam["family"])
                         _report_bytes, _report_error = _build_family_report(
-                            _fam_fp, style, fam["family"], fam["stats"])
+                            _fam_fp, style, fam["family"], fam["stats"],
+                            **_view_heat_args())
                         _grid_png, _, _grid_png_err = _render_family_grid(
-                            _fam_fp, style, fam["family"])
+                            _fam_fp, style, fam["family"], **_view_heat_args())
 
                     # Umbrella-derived metrics, shown here beside the umbrella
                     # file because that is what they describe (and what was
@@ -4515,10 +4625,7 @@ if _view == "Compare":
                 )
                 _csvg = _render_family_cell_svg(
                     _cmp_fp, style, _idx, _cmp_fam["family"],
-                    heatmap=bool(overlay_heatmap),
-                    node_metric=overlay_nodes[0] if overlay_nodes else None,
-                    edge_metric=overlay_edges[0] if overlay_edges else None,
-                    heat_scope=overlay_heat_scope,
+                    **_view_heat_args(),
                 )
                 if _csvg is not None:
                     _svg_viewer(_csvg, height=460, key=f"cmpsvg{_tag}")
@@ -4532,6 +4639,7 @@ if _view == "Compare":
                     )
                     _png = _render_family_cell(
                         _cmp_fp, style, _idx, _cmp_fam["family"],
+                        **_view_heat_args(),
                     )
                     if _png is not None:
                         _dlc[1].download_button(
@@ -4545,6 +4653,7 @@ if _view == "Compare":
                 # shared double-click-to-open-in-a-new-tab behaviour).
                 _png = _render_family_cell(
                     _cmp_fp, style, _idx, _cmp_fam["family"],
+                    **_view_heat_args(),
                 )
                 if _png is not None:
                     _cb64 = base64.b64encode(_png).decode("ascii")
@@ -4760,6 +4869,7 @@ if _view == "Compare":
         st.divider()
         _rep_bytes, _rep_err = _build_family_report(
             _cmp_fp, style, _cmp_fam["family"], _stats,
+            **_view_heat_args(),
         )
         if _rep_bytes is not None:
             st.download_button(
@@ -4846,6 +4956,7 @@ if _view == "Dashboards":
         _fr_bytes, _fr_err = _build_family_report(
             st.session_state.get("family_fp", ""), style,
             _fam["family"], _fam["stats"],
+            **_view_heat_args(),
         )
         if _fr_bytes is not None:
             _family_report_html = _fr_bytes.decode("utf-8")

@@ -213,6 +213,12 @@ middle band:
 - **Date range** — a slider over the log's own span (fewer clicks than two
   calendars), with a **cases in the window** choice (*intersecting* or *fully
   inside*).
+- **Cycle-time percentile (case duration)** — a two-handled band over each
+  case's **end-to-end cycle time** (last − first event): `0` = fastest,
+  `100` = slowest. Keep the fastest cases (drag the left handle in), the slowest
+  (drag the right handle in), or a middle band — e.g. `0–10` keeps the fastest
+  10% of cases, `90–100` the slowest 10%. (Shown only when the log has a real
+  time span.)
 
 Each is a standard pm4py log filter applied before inductive mining. The
 filter is **global** — every view (Model, Scenarios, Family, Compare,

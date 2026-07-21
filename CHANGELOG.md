@@ -12,7 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The performance heat-map now applies to the Family and Compare views**, not
   only the Model view. Selecting *Heat-map emphasis* colours and thickens the
   activities/edges of every family cell and of the two compared members, using
-  the same first-of-each-layer overlay metric.
+  the same first-of-each-layer overlay metric. It **survives changing the
+  compared processes** (each Compare cell re-renders with the heat-map), and now
+  also reaches the **family grid PNG download, the Compare-cell PNG, and the
+  interactive HTML report** — so every rendering of a family carries it.
 
 ### Changed — Web app (V5)
 
@@ -29,6 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added — Web app (V5)
 
+- **Cycle-time filter.** A new two-handled **Cycle-time percentile (case
+  duration)** slider in the sidebar's **Log filters** keeps cases by their
+  end-to-end cycle time (last − first event): `0` = fastest, `100` = slowest.
+  Drag the left handle in to drop the fastest cases, the right handle in to drop
+  the slowest, or pick a middle band (e.g. `0–10` keeps the fastest 10%,
+  `90–100` the slowest 10%). Like every log filter it is global — every view and
+  export mines the filtered log — and it round-trips through a saved project.
 - **Export the analysis as a runnable Python pipeline.** A new **Export as
   Python** control in the sidebar's **Project** group emits a plain-Python
   script (`.py`) — or a Jupyter notebook (`.ipynb`) — that reproduces the
