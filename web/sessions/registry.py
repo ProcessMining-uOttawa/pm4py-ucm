@@ -72,6 +72,15 @@ def param_ids() -> List[str]:
     return [p.id for p in REGISTRY]
 
 
+def defaults() -> Dict[str, Any]:
+    """The registry's default value for every id (stable order).
+
+    Used by consumers (e.g. the Python code exporter) that need a full
+    ``{id: value}`` mapping when a project only stores the non-default keys.
+    """
+    return {p.id: p.default for p in REGISTRY}
+
+
 def _jsonify(v: Any) -> Any:
     """Normalise a value to JSON-safe form (tuples/sets → lists, recursively)."""
     if isinstance(v, (list, tuple)):

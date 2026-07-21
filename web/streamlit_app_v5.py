@@ -3316,6 +3316,39 @@ with st.sidebar:
                 st.session_state["dash_bridge_nonce"] = int(
                     st.session_state.get("dash_bridge_nonce", 0)) + 1
                 st.rerun()
+        # ---- Export the analysis as a runnable Python pipeline ------------
+        # A deterministic emit of the session config to public-API calls, so a
+        # GUI analysis becomes an automatable, version-controllable script that
+        # faithfully replays it (see docs/code_export.md).
+        _proj_exp.markdown("---")
+        _proj_exp.caption("**Export as Python** — a runnable pipeline that "
+                          "reproduces this analysis.")
+        _exp_scn = _proj_exp.checkbox(
+            "Include scenario synthesis", value=False, key="codegen_scenarios",
+            help="Adds the executable-scenario pipeline (re-mines — slower).")
+        _exp_fam = _proj_exp.checkbox(
+            "Include model family",
+            value=bool(_proj_values["family_attrs"]), key="codegen_family",
+            help="Adds the per-attribute family + umbrella + statistics "
+                 "report pipeline.")
+        _proj_exp.download_button(
+            "⬇ Export Python script (.py)",
+            data=_sessions.generate_script(
+                _proj_doc, include_scenarios=_exp_scn,
+                include_family=_exp_fam).encode("utf-8"),
+            file_name=f"{_proj_stem}_pipeline.py",
+            mime="text/x-python", width="stretch",
+            help="Plain Python over the public pm4py-ucm API — automatable and "
+                 "a faithful, deterministic replay of this session.")
+        _proj_exp.download_button(
+            "⬇ Export Jupyter notebook (.ipynb)",
+            data=_sessions.generate_notebook(
+                _proj_doc, include_scenarios=_exp_scn,
+                include_family=_exp_fam).encode("utf-8"),
+            file_name=f"{_proj_stem}_pipeline.ipynb",
+            mime="application/x-ipynb+json", width="stretch",
+            help="The same pipeline as a notebook — doubles as a personalised "
+                 "tutorial on your own log.")
         _proj_exp.caption("Resume a saved project from the **log source** "
                           "area (top of the page).")
     except Exception as _proj_exc:  # never let this break the rail

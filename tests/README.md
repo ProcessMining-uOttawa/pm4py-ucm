@@ -1,6 +1,6 @@
 # Test suite
 
-**849 tests** across **25 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
+**864 tests** across **26 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
 
 > Regenerate this file with `python tests/gen_readme.py` after adding or removing tests. Purposes are the first sentence of each module's docstring; edit the docstring, not this table.
 
@@ -35,9 +35,10 @@
 | | _Visualization subtotal_ | | **61** |
 | **Dashboards** | [`test_dashboards.py`](test_dashboards.py) | Tests for user-defined dashboards: the client contract, the metric engine, and the parity of the Python engine with its JS counterpart. | 371 |
 | **Sessions (save / share / resume)** | [`test_sessions.py`](test_sessions.py) | Tests for the project save/share/resume core (``web/sessions``). | 14 |
+|  | [`test_sessions_codegen.py`](test_sessions_codegen.py) | Tests for the Python code exporter (``web/sessions/codegen.py``). | 15 |
 |  | [`test_sessions_registry.py`](test_sessions_registry.py) | Tests for the Session Parameter Registry (``web/sessions/registry.py``). | 5 |
-| | _Sessions (save / share / resume) subtotal_ | | **19** |
+| | _Sessions (save / share / resume) subtotal_ | | **34** |
 | **Progress / infrastructure** | [`test_progress.py`](test_progress.py) | Tests for the progress-reporting layer and the vectorized DataFrame resource miner. | 15 |
-| | **Total** | | **849** |
+| | **Total** | | **864** |
 
 See the repository [`README.md`](../README.md#testing) for how to run the suite, and [`docs/metrics.md`](../docs/metrics.md) for the metric definitions the validation tests enforce.

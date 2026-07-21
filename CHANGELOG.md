@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Web app (V5)
+
+- **Export the analysis as a runnable Python pipeline.** A new **Export as
+  Python** control in the sidebar's **Project** group emits a plain-Python
+  script (`.py`) — or a Jupyter notebook (`.ipynb`) — that reproduces the
+  current session over the public `pm4py_ucm` API: log loading, the pre-mining
+  rename + filters, inductive mining with the session's parameters,
+  decomposition, performers, the performance overlay, and the model export.
+  Optional check-boxes add the **scenario-synthesis** and **model-family**
+  pipelines. Because a project stores only *inputs* and every artifact
+  recomputes, the emitted script is a **faithful, deterministic replay** —
+  running it reproduces the same `.jucm`. Turns a GUI exploration into an
+  automatable, version-controllable pipeline and doubles as a personalised
+  tutorial. Deterministic (no LLM) — a template emitter over the session
+  parameter registry. See [`docs/code_export.md`](docs/code_export.md).
+
+### Internal
+
+- New Streamlit-free `web/sessions/codegen.py` (`generate_script` /
+  `generate_notebook`) with a golden test asserting the emitted script's `.jucm`
+  is byte-identical (modulo the exporter's wall-clock timestamp) to a direct
+  public-API pipeline, plus a drift guard that every registry parameter is
+  handled or intentionally ignored.
+
 ## [0.7.2] — 2026-07-19
 
 **A Model-view performance heat-map**, plus fixes to the save/resume and
