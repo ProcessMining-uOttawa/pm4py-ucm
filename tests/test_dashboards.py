@@ -511,8 +511,10 @@ def _priority_log(levels):
 
 class TestDiscreteIntegerBins:
     """A small set of whole-number values (e.g. priority levels) gets one
-    bin per value, not quantile ranges — mirrors the family partitioner's
-    _discrete_integer_values."""
+    bin per value, not quantile ranges — offered as discrete levels in the
+    filter/segment UIs. Fewer than _MAX_DISCRETE_LEVELS (10) distinct values
+    stays discrete *regardless of the requested bin count*; only genuinely
+    continuous columns (≥ 10 distinct) get quantile ranges."""
 
     def test_bins_are_single_values(self):
         t = build_fact_table(
@@ -529,12 +531,31 @@ class TestDiscreteIntegerBins:
         assert labels == ["1", "3", "5"]
         assert [labels[c] for c in codes] == ["1", "1", "3", "5", "5"]
 
-    def test_fewer_bins_than_values_keeps_ranges(self):
+    def test_low_cardinality_stays_discrete_regardless_of_bin_count(self):
+        # Five levels with only two bins requested: still one bin per level
+        # (discrete), not two quantile ranges — the level column is discrete.
         t = build_fact_table(
             _priority_log([(1, 2), (2, 2), (3, 2), (4, 2), (5, 2)]), bins=2)
         attr = t.attribute("case:priority")
-        assert len(attr.bins) <= 2
+        assert attr.type == "integer"
+        assert [b.label for b in attr.bins] == ["1", "2", "3", "4", "5"]
+        assert not any("–" in b.label for b in attr.bins)
+
+    def test_high_cardinality_gets_quantile_ranges(self):
+        # Twelve distinct levels (≥ 10): genuinely continuous → quantile ranges.
+        t = build_fact_table(
+            _priority_log([(v, 2) for v in range(1, 13)]), bins=4)
+        attr = t.attribute("case:priority")
+        assert len(attr.bins) <= 4
         assert any("–" in b.label for b in attr.bins)
+
+    def test_attr_still_numeric_for_a_discrete_level_column(self):
+        # A discrete-level column keeps its numeric buffer, so the ƒ-formula
+        # attr(...) reads the value (not an enum code) and can be compared.
+        t = build_fact_table(_priority_log([(1, 2), (3, 1), (5, 2)]), bins=5)
+        v = custom_values(t, 'attr("case:priority") >= 3')
+        # 2 cases at level 1 (< 3 → 0); 1 at level 3 + 2 at level 5 (≥ 3 → 1).
+        assert sorted(v) == [0, 0, 1, 1, 1]
 
     def test_js_parity_on_single_value_bins(self, tmp_path):
         t = build_fact_table(_priority_log([(1, 2), (3, 1), (5, 2)]), bins=5)
