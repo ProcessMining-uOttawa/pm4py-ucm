@@ -678,13 +678,15 @@ Beyond the text sub-line, an optional **heat-map** colours and thickens
 activities and edges by the *first* chosen metric of each layer — across the
 **Model, Family and Compare** views alike (a **time** metric reads red, any
 other blue; darker/thicker = higher). Its **scale** control offers three modes:
-**local** (each diagram to its own min/max), **global** (a whole model against
-its own range), and **per family** (every cell of the Family/Compare views
-against **one shared range**, so a colour is comparable across members). It is a
-render-time overlay of the same `perf_<metric>` values — the model and `.jucm`
-are unchanged — exposed by `model_to_svg(ucm, style, heatmap=True,
-node_metric=…, edge_metric=…, heatmap_global=…, node_span=…, edge_span=…)`;
-`classic.heat_span(models, …)` computes the family-wide span.
+**Local (per map)** (each diagram to its own min/max), **Per family member
+(across its maps)** (each Family/Compare member against its own range, pooled
+over its decomposed maps — the whole model in the Model view), and **Global
+(across family members)** (every member against **one shared range**, so a
+colour is comparable across members). It is a render-time overlay of the same
+`perf_<metric>` values — the model and `.jucm` are unchanged — exposed by
+`model_to_svg(ucm, style, heatmap=True, node_metric=…, edge_metric=…,
+heatmap_global=…, node_span=…, edge_span=…)`; `classic.heat_span(models, …)`
+computes the shared cross-member span.
 
 **📏 [`docs/metrics.md`](docs/metrics.md) is the readable, complete list
 of every metric definition** — activity, edge, process and choice —

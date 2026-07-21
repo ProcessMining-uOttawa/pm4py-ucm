@@ -19,16 +19,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed — Web app (V5)
 
-- **Heat-map scale is now three-way** — *Local (per map)*, *Global (whole
-  model)*, and a new **Per family (all cells)** that scales every Family/Compare
-  cell against **one shared range**, so a colour means the same thing in every
-  member and the cells are visually comparable. In the single-model Model view
-  the family option degenerates to whole-model. The persisted setting changed
-  from the boolean `overlay_heatmap_global` to `overlay_heatmap_scope`
-  (`"local"` / `"global"` / `"family"`); projects saved by an older app are
-  migrated on load. New: `classic.heat_span(models, …)` computes a family-wide
-  span, and `model_to_svg` / `family_grid.render_svg` accept explicit
-  `node_span` / `edge_span` overrides.
+- **Heat-map scale is now three-way**, each with an inline caption and a `?`
+  explaining it:
+  - **Local (per map)** — every map on its own min/max (each sub-map of a
+    decomposed model highlights its own hotspots);
+  - **Per family member (across its maps)** — each Family/Compare member scaled
+    to its own range, pooled over all of its (decomposed) maps, so a colour is
+    comparable *within* a member (the whole model in the single-model Model
+    view);
+  - **Global (across family members)** — every member against **one shared
+    range**, so a colour means the same thing in every member and the cells are
+    directly comparable.
+
+  The persisted setting is `overlay_heatmap_scope` (`"local"` / `"global"` /
+  `"family"` — `"global"` = per-member, `"family"` = across-members); the old
+  boolean `overlay_heatmap_global` is migrated on load. New:
+  `classic.heat_span(models, …)` computes a shared cross-member span, and
+  `model_to_svg` / `family_grid.render_svg` accept explicit `node_span` /
+  `edge_span` overrides.
 
 ### Added — Web app (V5)
 

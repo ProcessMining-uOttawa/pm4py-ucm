@@ -1127,6 +1127,21 @@ def test_family_grid_svg_honours_heatmap_and_family_scale():
                             node_span=ns, edge_span=es)
     assert fam_scaled != on, "family-wide scale did not differ from local"
 
+    # The three scale levels are genuinely distinct for one member. Render the
+    # first cell three ways: local (per map), per-member (its own whole-model
+    # range, heatmap_global), and global (the shared cross-member span). Since
+    # the cells were given different ranges above, per-member and global must
+    # differ for this cell — this is what makes "Per family member" ≠ "Global".
+    from pm4py_ucm.visualization.ucm.svg import model_to_svg
+    cell0 = family.cells[0].ucm
+    per_member = model_to_svg(cell0, "bpmn", heatmap=True,
+                              node_metric="frequency", heatmap_global=True)
+    across_members = model_to_svg(cell0, "bpmn", heatmap=True,
+                                  node_metric="frequency",
+                                  node_span=ns, edge_span=es)
+    assert per_member != across_members, (
+        "per-member scale did not differ from global (across-members)")
+
 
 @pytest.mark.skipif(not _GRAPHVIZ, reason="graphviz 'dot' absent")
 def test_family_png_grid_and_report_images_honour_heatmap():

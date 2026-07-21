@@ -256,10 +256,10 @@ additionally colour and thicken activities and edges by the value of the
 **first** metric of each layer: a **time** metric drives a **red** ramp, any
 other a **blue** one, with lighter/thinner = lower and darker/thicker = higher.
 The heat-map applies across the **Model, Family and Compare** views. The
-**Heat-map scale** is three-way: **local** (each diagram on its own min/max —
-every sub-map shows its own hotspots), **global** (every map on the whole
+**Heat-map scale** is three-way: **Local (per map)** (each diagram on its own min/max —
+every sub-map shows its own hotspots), **Per family member (across its maps)** (every map on the whole
 model's min/max, so a value reads the same everywhere; coincides with local when
-the model isn't decomposed), and **per family** (every cell of the Family /
+the model isn't decomposed), and **Global (across family members)** (every cell of the Family /
 Compare views on **one shared range**, so a colour is comparable across members
 — it falls back to whole model in the single-model Model view). In BPMN the
 activity box is tinted under a stronger,

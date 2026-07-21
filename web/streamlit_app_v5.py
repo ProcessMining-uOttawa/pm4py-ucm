@@ -2409,8 +2409,8 @@ def _apply_project_config(cfg, fh, csv_columns=None):
         _scope = "global" if cfg["overlay_heatmap_global"] else "local"
     if _scope is not None:
         ss[f"overlay_heat_scope::{fh}"] = {
-            "global": "Global (whole model)",
-            "family": "Per family (all cells)",
+            "global": "Per family member (across its maps)",
+            "family": "Global (across family members)",
         }.get(_scope, "Local (per map)")
     _cols = csv_columns or cfg.get("csv_columns")
     if _cols:
@@ -2795,22 +2795,33 @@ with st.sidebar:
     )
     _heat_scope = _ovl_exp.radio(
         "Heat-map scale",
-        options=["Local (per map)", "Global (whole model)",
-                 "Per family (all cells)"],
+        options=["Local (per map)",
+                 "Per family member (across its maps)",
+                 "Global (across family members)"],
         index=0, key=f"overlay_heat_scope::{_ov_hash}",
         disabled=not overlay_heatmap,
-        help="**Local** scales each diagram to its own min/max (each sub-map "
-             "highlights its own hotspots). **Global** scales every map "
-             "against the whole model's min/max, so a value looks the same "
-             "everywhere (identical to Local when the model isn't decomposed). "
-             "**Per family** scales every cell of the **Family** and "
-             "**Compare** views against ONE range shared across all cells, so "
-             "colours are comparable between members — it falls back to whole "
-             "model in the single-model Model view.",
+        captions=[
+            "Each single map on its own min/max.",
+            "Each member pooled across its own (decomposed) maps.",
+            "One shared range across all members.",
+        ],
+        help="How the colour/thickness scale is computed.\n\n"
+             "- **Local (per map)** — every map is scaled to its own min/max, "
+             "so each sub-map of a decomposed model highlights its own "
+             "hotspots.\n"
+             "- **Per family member (across its maps)** — each Family / Compare "
+             "member is scaled to its own range, pooled over all of its "
+             "(decomposed) maps: a colour is comparable *within* a member but "
+             "not *between* members. In the single-model **Model** view this is "
+             "the whole model.\n"
+             "- **Global (across family members)** — every member is scaled "
+             "against one shared range spanning all members, so a colour means "
+             "the same thing in every member and they are directly comparable. "
+             "In the **Model** view this is the whole model too.",
     )
     overlay_heat_scope = (
-        "global" if _heat_scope.startswith("Global")
-        else "family" if _heat_scope.startswith("Per family")
+        "global" if _heat_scope.startswith("Per family member")
+        else "family" if _heat_scope.startswith("Global")
         else "local")
     # Single-model views (Model, and each Compare cell on its own) only
     # distinguish local vs whole-model; a family-wide scale needs the cells, so
