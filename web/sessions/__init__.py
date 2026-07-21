@@ -15,12 +15,15 @@ Public surface:
 * dashboards — :func:`wrap_registry` / :func:`unwrap_registry`, the versioned
   envelope for the browser-island dashboards a project carries (§11); the
   Streamlit-side transport lives in ``web/dashboards_bridge``.
+* codegen — :func:`generate_script` / :func:`generate_notebook`, the
+  deterministic Python code exporter (see ``docs/code_export.md``).
 """
 from __future__ import annotations
 
+from .codegen import generate_notebook, generate_script
 from .dashboards import BRIDGE_VERSION, unwrap_registry, wrap_registry
 from .io import dumps, load, loads, save_bundle, save_settings
-from .registry import REGISTRY, Param, collect, param_ids
+from .registry import REGISTRY, Param, collect, defaults, param_ids
 from .schema import (
     FORMAT,
     SCHEMA_VERSION,
@@ -38,7 +41,10 @@ __all__ = [
     "REGISTRY",
     "Param",
     "collect",
+    "defaults",
     "param_ids",
+    "generate_script",
+    "generate_notebook",
     "dumps",
     "loads",
     "load",
