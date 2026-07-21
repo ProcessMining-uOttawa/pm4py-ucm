@@ -97,3 +97,57 @@ def test_app_gather_matches_registry():
             break
     assert keys is not None, "could not find the _proj_values gather dict"
     assert keys == set(param_ids())
+
+
+def _app_func_sources(*names):
+    """Source text of the named top-level functions in the V5 app (static)."""
+    import ast
+
+    app = (Path(__file__).resolve().parent.parent
+           / "web" / "streamlit_app_v5.py").read_text(encoding="utf-8")
+    tree = ast.parse(app)
+    out = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name in names:
+            out[node.name] = ast.get_source_segment(app, node) or ""
+    return out
+
+
+def test_apply_project_config_restores_every_registry_param():
+    """CI drift guard for the RESTORE side. The gather guard above proves every
+    registered param is *saved*; this proves every one is at least *referenced*
+    where a loaded project is applied (``_apply_project_config``, plus
+    ``_apply_filter_spec_to_state`` for the keys inside ``filter_spec``) — so a
+    Param added to the registry can't be saved yet silently never restored.
+    Static parse; Streamlit isn't needed."""
+    src = _app_func_sources("_apply_project_config",
+                            "_apply_filter_spec_to_state")
+    assert "_apply_project_config" in src, "could not find _apply_project_config"
+    joined = "\n".join(src.values())
+    missing = [p for p in param_ids()
+               if f'"{p}"' not in joined and f"'{p}'" not in joined]
+    assert not missing, (
+        f"the restore path never references registry param(s): {missing} — "
+        "seed them in _apply_project_config so a saved project restores them")
+
+
+def test_filter_spec_subkeys_restore_matches_the_transform():
+    """The keys inside ``filter_spec`` are not registry params, so the guard
+    above misses them. The transform ``_apply_log_filters`` is their source of
+    truth (it reads each with ``spec.get("key")``); assert the reverse-map
+    ``_apply_filter_spec_to_state`` references every one, so a new pre-mining
+    filter (e.g. the cycle-time ``duration_pct``) can't be saved-but-not-
+    restored."""
+    import re
+
+    src = _app_func_sources("_apply_log_filters",
+                            "_apply_filter_spec_to_state")
+    transform = src.get("_apply_log_filters", "")
+    restore = src.get("_apply_filter_spec_to_state", "")
+    assert transform and restore, "could not find the filter functions"
+    keys = set(re.findall(r'spec\.get\(\s*["\']([a-z_]+)["\']', transform))
+    assert "duration_pct" in keys, "sanity: the transform reads the cycle key"
+    missing = sorted(k for k in keys if f'"{k}"' not in restore)
+    assert not missing, (
+        f"_apply_filter_spec_to_state does not restore filter key(s): "
+        f"{missing} — reverse-map them so a saved filter resumes")

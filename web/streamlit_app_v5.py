@@ -2482,8 +2482,11 @@ def _apply_project_config(cfg, fh, csv_columns=None):
         pr["cmp_cell_a"] = cfg["compare_a"]
     if cfg.get("compare_b") is not None:
         pr["cmp_cell_b"] = cfg["compare_b"]
-    if cfg.get("family_dedup"):
-        notes.append("family de-dup re-applies after you mine the family.")
+    if "family_dedup" in cfg:
+        # The de-dup checkbox is keyed by the family fingerprint, which is not
+        # known until the family is mined — stash the value for the checkbox to
+        # pick up when it renders (see the Family downloads section).
+        ss["_pending_family_dedup"] = bool(cfg["family_dedup"])
     if _fa:
         notes.append("the Family tab re-mines automatically when you open it; "
                      "Compare then follows.")
@@ -4415,9 +4418,20 @@ if _view == "Family":
                     # downloads. Keyed on the mine fingerprint (per family).
                     # Toggling it rebuilds just the umbrella (which caches on
                     # it), never the family.
+                    # A restored project stashes its de-dup value as pending
+                    # (the checkbox key needs the family fingerprint, unknown at
+                    # load); consume it here so a resumed project's setting
+                    # takes effect. Seed the key (no value=, so no "set via
+                    # Session State API" warning) then let the widget own it.
+                    _dedup_key = f"family_dedup::{_fam_fp}"
+                    if ("_pending_family_dedup" in st.session_state
+                            and _dedup_key not in st.session_state):
+                        st.session_state[_dedup_key] = bool(
+                            st.session_state.pop("_pending_family_dedup"))
+                    st.session_state.setdefault(_dedup_key, False)
                     family_dedup = st.checkbox(
                         "Merge behaviourally identical plug-ins (umbrella)",
-                        value=False, key=f"family_dedup::{_fam_fp}",
+                        key=_dedup_key,
                         help="Combinations whose mined process trees are "
                              "identical share one plug-in map, its condition "
                              "the simplified OR of the members'. Off by "

@@ -17,6 +17,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requested bin count*. The attribute stays numeric, so the ƒ-formula `attr(…)`
   still reads its value. Columns with ≥ 10 distinct values are still quantile-
   binned.
+- **Saving/resuming a project no longer drops the family de-dup setting**, and
+  a CI guard now keeps the *restore* side of save/resume from drifting. The
+  "merge behaviourally identical plug-ins" checkbox is keyed by the family
+  fingerprint (unknown until the family is mined), so a loaded project only
+  *noted* it instead of restoring it; it now hands the value off to the
+  checkbox when it renders. More importantly, two static drift guards were
+  added: one asserts every registry parameter is referenced where a loaded
+  project is applied (`_apply_project_config`), and one asserts the reverse-map
+  restores every `filter_spec` key the transform reads (so a new pre-mining
+  filter like the cycle-time band can't be saved-but-not-restored). The
+  existing guard already covered the *save* side; the restore side was
+  unguarded.
 - **A model pinned to a dashboard keeps its performance heat-map.** The
   Dashboards pinned-model widget rendered its SVG without the overlay's
   heat-map settings, so the colour/thickness emphasis vanished on the pinned
