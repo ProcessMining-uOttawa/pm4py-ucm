@@ -139,6 +139,19 @@ a curated list the app exposes) and asserts:
 New setting without a registry entry → red CI → the contributor decides
 consciously. This is the single most important line of defence against drift.
 
+Three complementary static guards keep both *directions* honest (see
+`tests/test_sessions_registry.py`):
+
+* the **save** side — the app's `_proj_values` gather dict must have exactly the
+  registered ids;
+* the **restore** side — every registered id must be referenced where a loaded
+  project is applied (`_apply_project_config`), so a Param can't be saved yet
+  silently never restored;
+* the **filter sub-keys** — the reverse-map `_apply_filter_spec_to_state` must
+  restore every key the transform `_apply_log_filters` reads (these live *inside*
+  `filter_spec`, so the registry guard alone would miss a new one — e.g. the
+  cycle-time `duration_pct` band).
+
 ## 7. Prerequisite: stable widget keys
 
 Several core widgets currently have **no `key=`** (e.g. `noise_threshold`,
