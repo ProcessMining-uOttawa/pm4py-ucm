@@ -347,6 +347,22 @@ def _epoch_seconds(series):
     return secs, valid
 
 
+#: A whole-number case attribute with fewer than this many distinct values is
+#: offered as its **discrete levels** — one bin per value, which the filter and
+#: segment UIs present as individual selectable values (like an enumeration) —
+#: rather than quantile ranges. So a 1..5 rating reads and segments as its five
+#: levels, not "1–2 / 2–3 / 4–5", *regardless of the requested bin count*. At or
+#: above it the column is treated as genuinely continuous and gets quantile
+#: bins. The attribute stays ``type="integer"`` (its per-case buffer keeps the
+#: raw number, so the ƒ-formula ``attr(...)`` still reads a value to compare).
+_MAX_DISCRETE_LEVELS = 10
+
+
+def _fmt_num(x: float) -> str:
+    """Format a numeric level: a plain integer when whole, else 4 sig figs."""
+    return f"{x:.0f}" if float(x).is_integer() else f"{x:.4g}"
+
+
 def _numeric_bins(numeric, bins: int) -> List[NumericBin]:
     """Quantile bins over a numeric case column.
 
@@ -361,18 +377,17 @@ def _numeric_bins(numeric, bins: int) -> List[NumericBin]:
     if clean.empty:
         return []
 
-    def fmt(x: float) -> str:
-        return f"{x:.0f}" if float(x).is_integer() else f"{x:.4g}"
-
-    # Few distinct whole-number values (e.g. priority levels 1..5 with 5
-    # bins requested): one bin per value, so a reader sees "3" rather
-    # than a "2–3" range that merges or splits the levels. Degenerate
-    # [v, v] bins segment correctly — both engines threshold on the next
-    # bin's ``lo``, so the last bin absorbs the maximum. Mirrors the
-    # family partitioner's _discrete_integer_values.
+    # Few distinct whole-number values (e.g. a 1..5 rating): one bin per value,
+    # so a reader sees "3" rather than a "2–3" range that merges or splits the
+    # levels — and the filter / segment UIs offer the individual levels like an
+    # enumeration. This wins over the requested bin count: a low-cardinality
+    # level column is discrete, not something to quantile. Degenerate [v, v]
+    # bins segment correctly — both engines threshold on the next bin's ``lo``,
+    # so the last bin absorbs the maximum.
     uniq = np.unique(clean.to_numpy())
-    if 0 < uniq.size <= max(1, bins) and bool(np.all(uniq == np.round(uniq))):
-        return [NumericBin(label=fmt(float(v)), lo=float(v), hi=float(v))
+    if 0 < uniq.size < _MAX_DISCRETE_LEVELS and bool(
+            np.all(uniq == np.round(uniq))):
+        return [NumericBin(label=_fmt_num(float(v)), lo=float(v), hi=float(v))
                 for v in uniq]
 
     try:
@@ -385,7 +400,7 @@ def _numeric_bins(numeric, bins: int) -> List[NumericBin]:
         edges = [float(clean.min()), float(clean.max()) + 1.0]
 
     return [
-        NumericBin(label=f"{fmt(edges[i])}–{fmt(edges[i + 1])}",
+        NumericBin(label=f"{_fmt_num(edges[i])}–{_fmt_num(edges[i + 1])}",
                    lo=edges[i], hi=edges[i + 1])
         for i in range(len(edges) - 1)
     ]

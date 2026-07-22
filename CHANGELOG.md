@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed — Web app (V5)
 
+- **Low-cardinality numeric case attributes are offered as discrete levels in
+  dashboards, not quantile ranges.** A whole-number attribute with fewer than
+  10 distinct values (e.g. a 1–5 rating) now gets one bin per level — so
+  dashboard **filters and segments** offer the individual levels (`1`, `2`, `3`,
+  `4`, `5`) instead of merged ranges like `1–2 / 2–3 / 4–5` — *regardless of the
+  requested bin count*. The attribute stays numeric, so the ƒ-formula `attr(…)`
+  still reads its value. Columns with ≥ 10 distinct values are still quantile-
+  binned.
 - **A model pinned to a dashboard keeps its performance heat-map.** The
   Dashboards pinned-model widget rendered its SVG without the overlay's
   heat-map settings, so the colour/thickness emphasis vanished on the pinned
