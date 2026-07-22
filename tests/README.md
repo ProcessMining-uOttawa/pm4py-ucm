@@ -1,6 +1,6 @@
 # Test suite
 
-**864 tests** across **26 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
+**879 tests** across **26 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
 
 > Regenerate this file with `python tests/gen_readme.py` after adding or removing tests. Purposes are the first sentence of each module's docstring; edit the docstring, not this table.
 
@@ -19,9 +19,9 @@
 | | _Discovery & conversion subtotal_ | | **91** |
 | **Resources & performers** | [`test_resources.py`](test_resources.py) | Tests for resource mining and performer binding. | 22 |
 | **Scenario synthesis** | [`test_scenario_synthesis.py`](test_scenario_synthesis.py) | End-to-end smoke tests for variant clustering + scenario synthesis. | 41 |
-| **Model families** | [`test_family.py`](test_family.py) | Tests for attribute-based model families. | 47 |
+| **Model families** | [`test_family.py`](test_family.py) | Tests for attribute-based model families. | 49 |
 |  | [`test_family_stats.py`](test_family_stats.py) | Tests for the family statistics layer and the HTML report. | 32 |
-| | _Model families subtotal_ | | **79** |
+| | _Model families subtotal_ | | **81** |
 | **Performance & metrics** | [`test_metric_validation.py`](test_metric_validation.py) | Metric-correctness validation suite. | 45 |
 |  | [`test_performance.py`](test_performance.py) | Tests for the performance overlay (frequencies / times on activities and edges): stats computation, segment-based annotation, visualizer output, and .jucm round-trip of the metadata. | 16 |
 | | _Performance & metrics subtotal_ | | **61** |
@@ -29,16 +29,16 @@
 |  | [`test_layout.py`](test_layout.py) | Tests for the compact left-to-right auto-layouter. | 15 |
 |  | [`test_routing_points.py`](test_routing_points.py) | Tests for the routing-empty-points pass (issue 4). | 7 |
 | | _Layout subtotal_ | | **30** |
-| **Visualization** | [`test_heatmap.py`](test_heatmap.py) | Tests for the performance heat-map (render-time emphasis) in `pm4py_ucm.visualization.ucm.variants.classic`. | 14 |
+| **Visualization** | [`test_heatmap.py`](test_heatmap.py) | Tests for the performance heat-map (render-time emphasis) in `pm4py_ucm.visualization.ucm.variants.classic`. | 19 |
 |  | [`test_ucm_svg.py`](test_ucm_svg.py) | Tests for inline-SVG rendering of UCM models (`pm4py_ucm.visualization.ucm.svg`). | 12 |
 |  | [`test_visualization.py`](test_visualization.py) | Tests for the graphviz-based UCM visualiser. | 35 |
-| | _Visualization subtotal_ | | **61** |
-| **Dashboards** | [`test_dashboards.py`](test_dashboards.py) | Tests for user-defined dashboards: the client contract, the metric engine, and the parity of the Python engine with its JS counterpart. | 371 |
+| | _Visualization subtotal_ | | **66** |
+| **Dashboards** | [`test_dashboards.py`](test_dashboards.py) | Tests for user-defined dashboards: the client contract, the metric engine, and the parity of the Python engine with its JS counterpart. | 373 |
 | **Sessions (save / share / resume)** | [`test_sessions.py`](test_sessions.py) | Tests for the project save/share/resume core (``web/sessions``). | 14 |
-|  | [`test_sessions_codegen.py`](test_sessions_codegen.py) | Tests for the Python code exporter (``web/sessions/codegen.py``). | 15 |
-|  | [`test_sessions_registry.py`](test_sessions_registry.py) | Tests for the Session Parameter Registry (``web/sessions/registry.py``). | 5 |
-| | _Sessions (save / share / resume) subtotal_ | | **34** |
+|  | [`test_sessions_codegen.py`](test_sessions_codegen.py) | Tests for the Python code exporter (``web/sessions/codegen.py``). | 19 |
+|  | [`test_sessions_registry.py`](test_sessions_registry.py) | Tests for the Session Parameter Registry (``web/sessions/registry.py``). | 7 |
+| | _Sessions (save / share / resume) subtotal_ | | **40** |
 | **Progress / infrastructure** | [`test_progress.py`](test_progress.py) | Tests for the progress-reporting layer and the vectorized DataFrame resource miner. | 15 |
-| | **Total** | | **864** |
+| | **Total** | | **879** |
 
 See the repository [`README.md`](../README.md#testing) for how to run the suite, and [`docs/metrics.md`](../docs/metrics.md) for the metric definitions the validation tests enforce.
