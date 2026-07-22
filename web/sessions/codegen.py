@@ -207,6 +207,27 @@ def report_heat(family):
             "node_span": ns, "edge_span": es}
 
 
+def model_svg_heat():
+    """model_to_svg heat kwargs for a single model (the model.svg export and the
+    dashboard's pinned-model widget). Empty when the heat-map is off."""
+    if not OVERLAY_HEATMAP:
+        return {}
+    nm, em = _heat_metrics()
+    return {"heatmap": True, "node_metric": nm, "edge_metric": em,
+            "heatmap_global": OVERLAY_HEATMAP_SCOPE in ("global", "family")}
+
+
+def model_to_svg(ucm, style):
+    """One model as an inline SVG string (heat-map applied), for embedding."""
+    from pm4py_ucm.visualization.ucm import svg as _svgmod
+    return _svgmod.model_to_svg(ucm, style, **model_svg_heat())
+
+
+def write_model_svg(ucm, path, style=None):
+    """Write one model as a standalone SVG file (best-effort via _save_image)."""
+    Path(path).write_text(model_to_svg(ucm, style or NOTATION), encoding="utf-8")
+
+
 def _slug(text):
     """A short filesystem-safe slug for an output filename."""
     s = "".join(c if c.isalnum() else "_" for c in str(text)).strip("_")
@@ -380,6 +401,7 @@ def _model_fn() -> str:
         "    _save_image(pm4py_ucm.save_vis_ucm, ucm,\n"
         '                str(OUT_DIR / "model.png"), style=NOTATION,\n'
         "                parameters=model_heat_params())\n"
+        "    _save_image(write_model_svg, ucm, str(OUT_DIR / \"model.svg\"))\n"
         '    print(f"[model] wrote {OUT_DIR / \'model.jucm\'} "\n'
         '          f"({len(ucm.maps)} map(s), "\n'
         '          f"{sum(len(m.nodes) for m in ucm.maps)} nodes)")\n'
@@ -459,23 +481,44 @@ def _family_fn() -> str:
 
 def _dashboards_fn() -> str:
     return (
-        "def run_dashboards(log):\n"
+        "def run_dashboards(log, ucm=None):\n"
         '    """Render each saved dashboard to a self-contained interactive '
         'HTML file\n'
-        '    over the same (filtered) log the model was mined from."""\n'
+        "    over the same (filtered) log the model was mined from. Pass the "
+        "mined\n"
+        "    ``ucm`` so a pinned-model widget shows the model (both notations "
+        "are\n"
+        '    embedded as SVG) instead of a grey placeholder."""\n'
+        "    import base64\n"
         "    from pm4py_ucm.algo.dashboards import (\n"
         "        build_fact_table, write_dashboard)\n"
         "    df = log\n"
         "    if not isinstance(df, pd.DataFrame):\n"
         "        df = pm4py.convert_to_dataframe(df)\n"
         "    table = build_fact_table(df, log_name=Path(DEFAULT_LOG).stem)\n"
+        "    # The model SVG a pinned-model widget draws — one per notation, "
+        "with\n"
+        "    # the same heat-map as the Model view. Without it the widget is "
+        "grey.\n"
+        "    renders, model_svg = {}, {}\n"
+        "    if ucm is not None:\n"
+        '        for _style in ("ucm", "bpmn"):\n'
+        "            try:\n"
+        "                _svg = model_to_svg(ucm, _style)\n"
+        "            except Exception:\n"
+        "                continue\n"
+        "            model_svg[_style] = _svg\n"
+        '            renders[_style] = ("data:image/svg+xml;base64,"\n'
+        "                + base64.b64encode("
+        '_svg.encode("utf-8")).decode("ascii"))\n'
         "    for i, dash in enumerate(DASHBOARDS, start=1):\n"
         '        name = dash.get("name") or f"Dashboard {i}"\n'
         '        out = OUT_DIR / f"dashboard_{i:02d}_{_slug(name)}.html"\n'
         "        write_dashboard(\n"
         '            str(out), table, specs=dash.get("specs") or [],\n'
         '            filters=dash.get("filters") or [], name=name, title=name,\n'
-        "            read_only=True)\n"
+        "            read_only=True, renders=renders or None,\n"
+        "            model_svg=model_svg or None)\n"
         '        print(f"[dashboards] wrote {out} "\n'
         "              f\"({len(dash.get('specs') or [])} widget(s))\")\n"
         "    return table"
@@ -491,7 +534,7 @@ def _run_fn(include_scenarios: bool, include_family: bool,
         "    OUT_DIR.mkdir(parents=True, exist_ok=True)",
         "    log = read_log(log_path)",
         "    log = apply_log_filters(log, FILTER_SPEC)",
-        "    run_model(log)",
+        "    ucm = run_model(log)",
     ]
     if include_scenarios:
         body.append("    run_scenarios(log)")
@@ -503,7 +546,7 @@ def _run_fn(include_scenarios: bool, include_family: bool,
             '        print("[family] skipped: FAMILY_ATTRS is empty")'
         )
     if include_dashboards:
-        body.append("    run_dashboards(log)")
+        body.append("    run_dashboards(log, ucm)")
     body.append('    print(f"Done. Outputs in {OUT_DIR.resolve()}")')
     return "\n".join(body)
 
@@ -699,7 +742,7 @@ def generate_notebook(
             _nb_md("## 6 · Dashboards\n\nEach saved dashboard rendered to a "
                    "self-contained interactive HTML file over the same filtered "
                    "log — open one in a browser for the live view."),
-            _nb_code(_dashboards_fn() + "\n\ntable = run_dashboards(log)"),
+            _nb_code(_dashboards_fn() + "\n\ntable = run_dashboards(log, ucm)"),
             _nb_md("The dashboard files written:"),
             _nb_code("sorted(p.name for p in OUT_DIR.glob('dashboard_*.html'))"),
         ]

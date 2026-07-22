@@ -121,10 +121,13 @@ that exposes `build_fact_table` + `write_dashboard`; only the interactive
 *builder* lives in the app. And a project already **carries its dashboard
 specs** (`ProjectDoc.dashboards`, the versioned island-registry envelope). So the
 emitter simply: unwraps the specs at emit time into a `DASHBOARDS` data constant,
-and emits `run_dashboards(log)` that builds the fact table over the same filtered
-log and calls `write_dashboard(...)` per saved dashboard → one self-contained
-interactive HTML file each. Auto-included when the project carries dashboards
-(a check-box in the export UI overrides).
+and emits `run_dashboards(log, ucm)` that builds the fact table over the same
+filtered log and calls `write_dashboard(...)` per saved dashboard → one
+self-contained interactive HTML file each. The mined UCM is threaded in and
+rendered to SVG for both notations (with the heat-map) and passed as
+`renders` / `model_svg`, so a **pinned-model widget** shows the model instead of
+a grey box; the pipeline also writes a standalone `model.svg`. Auto-included when
+the project carries dashboards (a check-box in the export UI overrides).
 
 **The notebook is an interactive tutorial, not a single `run()`.** The `.py`
 keeps the function-plus-`run()` structure (good for automation); the `.ipynb`

@@ -3558,39 +3558,36 @@ with st.sidebar:
         _proj_exp.markdown("---")
         _proj_exp.caption("**Export as Python** — a runnable pipeline that "
                           "reproduces this analysis.")
+        # All three on by default — the emitted pipeline reproduces the whole
+        # analysis; a section the session didn't use simply no-ops at runtime.
         _exp_scn = _proj_exp.checkbox(
-            "Include scenario synthesis", value=False, key="codegen_scenarios",
+            "Include scenario synthesis", value=True, key="codegen_scenarios",
             help="Adds the executable-scenario pipeline (re-mines — slower).")
         _exp_fam = _proj_exp.checkbox(
-            "Include model family",
-            value=bool(_proj_values["family_attrs"]), key="codegen_family",
+            "Include model family", value=True, key="codegen_family",
             help="Adds the per-attribute family + umbrella + statistics "
-                 "report pipeline.")
-        _has_dash = bool(_sessions.unwrap_registry(_dash_snapshot))
+                 "report pipeline (skipped at runtime if no family attributes).")
         _exp_dash = _proj_exp.checkbox(
-            "Include dashboards", value=_has_dash, key="codegen_dashboards",
+            "Include dashboards", value=True, key="codegen_dashboards",
             help="Renders each saved dashboard to a self-contained interactive "
-                 "HTML file (needs dashboards on this project).")
+                 "HTML file (a no-op if the project has no dashboards).")
+        # One click → both flavours in a zip: the runnable .py and the
+        # interactive tutorial .ipynb.
+        _cg_kw = dict(include_scenarios=_exp_scn, include_family=_exp_fam,
+                      include_dashboards=_exp_dash)
+        _cg_buf = io.BytesIO()
+        with zipfile.ZipFile(_cg_buf, "w", zipfile.ZIP_DEFLATED) as _cg_zip:
+            _cg_zip.writestr(f"{_proj_stem}_pipeline.py",
+                             _sessions.generate_script(_proj_doc, **_cg_kw))
+            _cg_zip.writestr(f"{_proj_stem}_pipeline.ipynb",
+                             _sessions.generate_notebook(_proj_doc, **_cg_kw))
         _proj_exp.download_button(
-            "⬇ Export Python script (.py)",
-            data=_sessions.generate_script(
-                _proj_doc, include_scenarios=_exp_scn,
-                include_family=_exp_fam,
-                include_dashboards=_exp_dash).encode("utf-8"),
-            file_name=f"{_proj_stem}_pipeline.py",
-            mime="text/x-python", width="stretch",
-            help="Plain Python over the public pm4py-ucm API — automatable and "
-                 "a faithful, deterministic replay of this session.")
-        _proj_exp.download_button(
-            "⬇ Export Jupyter notebook (.ipynb)",
-            data=_sessions.generate_notebook(
-                _proj_doc, include_scenarios=_exp_scn,
-                include_family=_exp_fam,
-                include_dashboards=_exp_dash).encode("utf-8"),
-            file_name=f"{_proj_stem}_pipeline.ipynb",
-            mime="application/x-ipynb+json", width="stretch",
-            help="The same pipeline as a notebook — an interactive, personalised "
-                 "tutorial: each step runs and shows its result inline.")
+            "⬇ Export Python (.py + .ipynb)", data=_cg_buf.getvalue(),
+            file_name=f"{_proj_stem}_pipeline.zip", mime="application/zip",
+            width="stretch",
+            help="A zip with both a runnable .py script (automatable, a faithful "
+                 "replay of this session) and an interactive tutorial notebook "
+                 "that runs each step and shows the result inline.")
         _proj_exp.caption("Resume a saved project from the **log source** "
                           "area (top of the page).")
     except Exception as _proj_exc:  # never let this break the rail

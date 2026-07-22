@@ -10,11 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added — Web app (V5)
 
 - **The Python export can now include the dashboards.** Alongside the model,
-  scenarios and family, the *Export as Python* control adds a **Include
-  dashboards** option that emits a `run_dashboards(log)` step: it rebuilds the
-  fact table over the same filtered log and renders each saved dashboard to a
-  self-contained interactive HTML file (via the library's `build_fact_table` +
-  `write_dashboard`). Auto-selected when the project carries dashboards.
+  scenarios and family, the *Export as Python* control emits a `run_dashboards`
+  step: it rebuilds the fact table over the same filtered log and renders each
+  saved dashboard to a self-contained interactive HTML file (via the library's
+  `build_fact_table` + `write_dashboard`). A **pinned-model** widget is
+  populated — the mined model is embedded as SVG for both notations (with the
+  heat-map), so it renders instead of showing a grey box — and the pipeline also
+  writes a standalone **`model.svg`**.
 
 ### Changed — Web app (V5)
 
@@ -25,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   filtering, the mined model image, the variants table, the family grid and the
   dashboard files — so it reads like a personalised walkthrough. The `.py` script
   keeps its function-plus-`run()` structure for automation.
+- **One export button.** *Export as Python* is now a single **⬇ Export Python
+  (.py + .ipynb)** download that bundles both flavours in a zip, with the
+  scenario / family / dashboards options all pre-selected. (The `web/sessions`
+  API keeps the two separate `generate_script` / `generate_notebook` entry
+  points.)
 
 ## [0.7.3] — 2026-07-21
 

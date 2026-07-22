@@ -131,6 +131,9 @@ def test_all_sections_compile_together():
     for fn in ("def run_model", "def run_scenarios", "def run_family",
                "def run(", "def read_log", "def apply_log_filters"):
         assert fn in src
+    # The model is also exported as a standalone SVG (used by pinned-model
+    # dashboard widgets and offered as a download in the app).
+    assert 'model.svg' in src and "write_model_svg" in src
 
 
 def test_notebook_is_a_tutorial_not_a_single_run_call():
@@ -169,7 +172,9 @@ def test_dashboards_emitted_when_the_project_carries_them():
     # Auto-detected from the presence of dashboards.
     src = generate_script(doc)
     assert "def run_dashboards" in src
-    assert "run_dashboards(log)" in src
+    # The mined UCM is passed so a pinned-model widget embeds the model SVG.
+    assert "run_dashboards(log, ucm)" in src
+    assert "model_svg=model_svg" in src and "renders=renders" in src
     assert "DASHBOARDS = " in src
     assert "'name': 'Ops'" in src and "build_fact_table" in src
     compile(src, "dash.py", "exec")
