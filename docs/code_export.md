@@ -1,13 +1,15 @@
 # Python code export from a session
 
-> **Status: P0 + P1 implemented** (`web/sessions/codegen.py`, exposed in the app's
-> **Project** rail as *Export as Python*). The core-API emitter, the scenario and
-> family pipelines, the `.py` **and** `.ipynb` flavours, the CLI entry point, and
-> the golden reproduction test all ship. **Not yet built:** dashboards codegen
-> (P2, needs the reusable dashboards-module extraction) and the optional local-LLM
-> comment pass (P3). The two friction points in §6 were handled by **inlining**
-> the transform into the emitted script (see the note there), not by promoting a
-> shared library helper.
+> **Status: P0 + P1 + P2 implemented** (`web/sessions/codegen.py`, exposed in the
+> app's **Project** rail as *Export as Python*). The core-API emitter, the
+> scenario, family **and dashboards** pipelines, the `.py` **and** `.ipynb`
+> flavours (the notebook laid out as an interactive tutorial), the CLI entry
+> point, and the golden reproduction test all ship. **Not yet built:** the
+> optional local-LLM comment pass (P3). The two friction points in §6 were
+> handled by **inlining** the transform into the emitted script (§6a); dashboards
+> turned out **not** to need a new module — the library already exposes
+> `build_fact_table` + `write_dashboard`, and a project already carries its
+> dashboard specs (§6b).
 
 ## 1. Thesis
 
@@ -113,11 +115,23 @@ Two things the emitter needs live in the app today, not the library:
   gained a `heat=` kwarg for this. The performance **sub-lines** are carried
   regardless (they ride in the `.jucm` metadata via `annotate_performance`).
 
-**(b) Dashboards** — the fact table, metric catalog, ƒ-formula language and
-widgets live entirely in `streamlit_app_v5.py`. "Generate code that rebuilds the
-dashboards" needs a **reusable `pm4py_ucm`-level dashboards module first**;
-otherwise the emitter re-implements app internals. **Treat dashboards codegen as
-its own later slice** (§7, P2), gated on that extraction.
+**(b) Dashboards — shipped, and it needed no new module.** The dashboards
+engine is **already a reusable library package** (`pm4py_ucm.algo.dashboards`)
+that exposes `build_fact_table` + `write_dashboard`; only the interactive
+*builder* lives in the app. And a project already **carries its dashboard
+specs** (`ProjectDoc.dashboards`, the versioned island-registry envelope). So the
+emitter simply: unwraps the specs at emit time into a `DASHBOARDS` data constant,
+and emits `run_dashboards(log)` that builds the fact table over the same filtered
+log and calls `write_dashboard(...)` per saved dashboard → one self-contained
+interactive HTML file each. Auto-included when the project carries dashboards
+(a check-box in the export UI overrides).
+
+**The notebook is an interactive tutorial, not a single `run()`.** The `.py`
+keeps the function-plus-`run()` structure (good for automation); the `.ipynb`
+instead defines each stage and **immediately invokes it**, showing the
+intermediate result inline — the loaded log (`.head()`), the case counts before
+and after filtering, the mined model image, the variants table, the family grid,
+the dashboard file list — so the notebook reads like a personalised walkthrough.
 
 ## 7. Phasing
 
@@ -125,7 +139,7 @@ its own later slice** (§7, P2), gated on that extraction.
 |---|---|---|
 | **P0** | Core-API emitter: load → transform → mine → decomposition → performers → overlay → export `.jucm`/PNG. Transform **inlined** (6a). **Golden test** (§8). *Export as Python* in the Project rail. | ✅ shipped |
 | **P1** | Family + scenarios + statistics-report emission; `.ipynb` flavour; parameterised `run(log_path)` / CLI entry point. | ✅ shipped |
-| **P2** | Dashboards codegen — *after* the reusable dashboards-module extraction (6b). | ⬜ not started |
+| **P2** | Dashboards codegen (§6b) + the notebook as an interactive, result-showing tutorial. | ✅ shipped |
 | **P3 (optional)** | LLM-generated docstring/comments, produced **locally** (agnostic + local seam from `docs/goal_insights.md`); never the backbone. | ⬜ not started |
 
 ## 8. Testing — the golden property

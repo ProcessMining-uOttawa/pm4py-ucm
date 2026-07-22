@@ -133,18 +133,50 @@ def test_all_sections_compile_together():
         assert fn in src
 
 
-def test_notebook_is_valid_json_and_compiles():
+def test_notebook_is_a_tutorial_not_a_single_run_call():
     nb = generate_notebook(_doc({"family_attrs": ["country"]}),
                            include_scenarios=True)
     data = json.loads(nb)
     assert data["nbformat"] == 4
     code_cells = [c for c in data["cells"] if c["cell_type"] == "code"]
     assert code_cells
-    # Every code cell must be valid Python on its own or when concatenated.
     joined = "\n".join("".join(c["source"]) for c in code_cells)
-    compile(joined, "notebook.py", "exec")
-    # The notebook drives the pipeline directly (no __main__ CLI block).
-    assert joined.strip().endswith("run()")
+    compile(joined, "notebook.py", "exec")  # the whole notebook is valid Python
+    # It is a tutorial: each stage is invoked where it's defined, not bundled
+    # into a single `run()` at the end (the .py keeps that; the notebook spreads
+    # it out for interactivity).
+    assert not joined.strip().endswith("run()")
+    assert "def run(" not in joined and "__main__" not in joined
+    for call in ("ucm = run_model(log)", "run_scenarios(log)",
+                 "run_family(log)"):
+        assert call in joined, call
+    # Intermediate results are shown inline, not just written to disk.
+    for shown in ("log.head()", "Image(str(OUT_DIR",
+                  'pd.read_csv(OUT_DIR / "variants.csv")'):
+        assert shown in joined, shown
+    # Interleaving: the load call appears before the family definition.
+    assert joined.index("log = read_log(") < joined.index("def run_family")
+
+
+def test_dashboards_emitted_when_the_project_carries_them():
+    from sessions.dashboards import wrap_registry
+    reg = {"active": "d1", "dashboards": [
+        {"id": "d1", "name": "Ops", "filters": [],
+         "specs": [{"id": "w1", "metric": "duration", "agg": "avg",
+                    "viz": "kpi"}]}]}
+    doc = ProjectDoc(log=LogRef("sample", "L.zip", "zip", ""),
+                     config={}, dashboards=wrap_registry(reg))
+    # Auto-detected from the presence of dashboards.
+    src = generate_script(doc)
+    assert "def run_dashboards" in src
+    assert "run_dashboards(log)" in src
+    assert "DASHBOARDS = " in src
+    assert "'name': 'Ops'" in src and "build_fact_table" in src
+    compile(src, "dash.py", "exec")
+    # And absent when the project has none, or when explicitly excluded.
+    assert "def run_dashboards" not in generate_script(_doc({}))
+    assert "def run_dashboards" not in generate_script(
+        doc, include_dashboards=False)
 
 
 def test_generator_version_matches_package():

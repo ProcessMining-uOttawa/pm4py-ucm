@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
+from .dashboards import unwrap_registry
 from .registry import defaults
 from .schema import ProjectDoc
 
@@ -206,6 +207,12 @@ def report_heat(family):
             "node_span": ns, "edge_span": es}
 
 
+def _slug(text):
+    """A short filesystem-safe slug for an output filename."""
+    s = "".join(c if c.isalnum() else "_" for c in str(text)).strip("_")
+    return (s or "dashboard")[:40]
+
+
 def _save_image(fn, *args, **kwargs):
     """Best-effort image render — a missing graphviz binary must not kill the
     pipeline (the ``.jucm`` and reports still get written)."""
@@ -298,6 +305,8 @@ def _config(
     out_dir: str,
     include_scenarios: bool,
     include_family: bool,
+    include_dashboards: bool = False,
+    dashboards: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     log = doc.log
     lines: List[str] = [
@@ -341,6 +350,14 @@ def _config(
             f"FAMILY_BINS = {int(cfg['family_bins'])!r}",
             f"FAMILY_INCLUDE_VALUES = {inc_literal}",
             f"FAMILY_DEDUP = {bool(cfg['family_dedup'])!r}",
+        ]
+    if include_dashboards:
+        # The saved dashboards (widget specs + dashboard-level filters), as
+        # data. Each is rendered to a self-contained interactive HTML file.
+        lines += [
+            "",
+            "# Saved dashboards: [{id, name, specs, filters}, ...].",
+            f"DASHBOARDS = {dashboards!r}",
         ]
     return "\n".join(lines)
 
@@ -440,7 +457,33 @@ def _family_fn() -> str:
     )
 
 
-def _run_fn(include_scenarios: bool, include_family: bool) -> str:
+def _dashboards_fn() -> str:
+    return (
+        "def run_dashboards(log):\n"
+        '    """Render each saved dashboard to a self-contained interactive '
+        'HTML file\n'
+        '    over the same (filtered) log the model was mined from."""\n'
+        "    from pm4py_ucm.algo.dashboards import (\n"
+        "        build_fact_table, write_dashboard)\n"
+        "    df = log\n"
+        "    if not isinstance(df, pd.DataFrame):\n"
+        "        df = pm4py.convert_to_dataframe(df)\n"
+        "    table = build_fact_table(df, log_name=Path(DEFAULT_LOG).stem)\n"
+        "    for i, dash in enumerate(DASHBOARDS, start=1):\n"
+        '        name = dash.get("name") or f"Dashboard {i}"\n'
+        '        out = OUT_DIR / f"dashboard_{i:02d}_{_slug(name)}.html"\n'
+        "        write_dashboard(\n"
+        '            str(out), table, specs=dash.get("specs") or [],\n'
+        '            filters=dash.get("filters") or [], name=name, title=name,\n'
+        "            read_only=True)\n"
+        '        print(f"[dashboards] wrote {out} "\n'
+        "              f\"({len(dash.get('specs') or [])} widget(s))\")\n"
+        "    return table"
+    )
+
+
+def _run_fn(include_scenarios: bool, include_family: bool,
+            include_dashboards: bool = False) -> str:
     body = [
         "def run(log_path=DEFAULT_LOG):",
         '    """Load the log, apply the pre-mining transform, and reproduce '
@@ -459,6 +502,8 @@ def _run_fn(include_scenarios: bool, include_family: bool) -> str:
             "    else:\n"
             '        print("[family] skipped: FAMILY_ATTRS is empty")'
         )
+    if include_dashboards:
+        body.append("    run_dashboards(log)")
     body.append('    print(f"Done. Outputs in {OUT_DIR.resolve()}")')
     return "\n".join(body)
 
@@ -489,15 +534,17 @@ def _blocks(
     out_dir: str,
     include_scenarios: bool,
     include_family: bool,
+    include_dashboards: bool = False,
 ) -> List[Tuple[str, str]]:
     """Ordered ``(label, code)`` blocks for the pipeline. ``label`` drives the
     notebook's per-cell markdown; the script just concatenates the code."""
     cfg = _resolved_config(doc)
+    dashboards = _project_dashboards(doc) if include_dashboards else []
     blocks: List[Tuple[str, str]] = [
         ("header", _header(doc)),
         ("imports", _imports()),
         ("config", _config(doc, cfg, out_dir, include_scenarios,
-                           include_family)),
+                           include_family, include_dashboards, dashboards)),
         ("helpers", _HELPERS.rstrip("\n")),
         ("model", _model_fn()),
     ]
@@ -505,7 +552,10 @@ def _blocks(
         blocks.append(("scenarios", _scenarios_fn()))
     if include_family:
         blocks.append(("family", _family_fn()))
-    blocks.append(("run", _run_fn(include_scenarios, include_family)))
+    if include_dashboards:
+        blocks.append(("dashboards", _dashboards_fn()))
+    blocks.append(("run", _run_fn(include_scenarios, include_family,
+                                  include_dashboards)))
     blocks.append(("main", _main()))
     return blocks
 
@@ -516,37 +566,49 @@ def _wants_family(doc: ProjectDoc, include_family: Optional[bool]) -> bool:
     return bool(_resolved_config(doc).get("family_attrs"))
 
 
+def _project_dashboards(doc: ProjectDoc) -> List[Dict[str, Any]]:
+    """The list of ``{id, name, specs, filters}`` dashboards a project carries
+    (unwrapped from the versioned envelope), or ``[]``."""
+    reg = unwrap_registry(getattr(doc, "dashboards", None))
+    return list((reg or {}).get("dashboards") or [])
+
+
+def _wants_dashboards(doc: ProjectDoc, include_dashboards: Optional[bool]) -> bool:
+    if include_dashboards is not None:
+        return include_dashboards
+    return bool(_project_dashboards(doc))
+
+
 def generate_script(
     doc: ProjectDoc,
     *,
     out_dir: str = "pm4py_ucm_output",
     include_scenarios: bool = False,
     include_family: Optional[bool] = None,
+    include_dashboards: Optional[bool] = None,
 ) -> str:
     """Emit a runnable ``.py`` pipeline for ``doc``.
 
-    ``include_family`` defaults to auto — on when the session picked family
-    attributes. ``include_scenarios`` is opt-in (a scenario re-mine is costly
-    and a session carries scenario settings even when the user never used the
-    view). The result always ends with a trailing newline.
+    ``include_family`` / ``include_dashboards`` default to auto — on when the
+    session picked family attributes / carries saved dashboards. ``include_
+    scenarios`` is opt-in (a scenario re-mine is costly and a session carries
+    scenario settings even when the user never used the view). The result always
+    ends with a trailing newline.
     """
     inc_family = _wants_family(doc, include_family)
-    blocks = _blocks(doc, out_dir, include_scenarios, inc_family)
+    inc_dash = _wants_dashboards(doc, include_dashboards)
+    blocks = _blocks(doc, out_dir, include_scenarios, inc_family, inc_dash)
     return "\n\n\n".join(code for _, code in blocks) + "\n"
 
 
-_NB_INTRO = {
-    "header": "# Reproducible pm4py-ucm pipeline\n\nGenerated from a saved "
-              "project session — a faithful replay of the GUI configuration.",
-    "imports": "## Imports",
-    "config": "## Configuration\n\nEdit these to adapt the pipeline.",
-    "helpers": "## Log loading & pre-mining transform",
-    "model": "## Mine & export the UCM",
-    "scenarios": "## Scenario synthesis",
-    "family": "## Model family",
-    "run": "## Orchestration",
-    "main": "## Command-line entry point",
-}
+def _nb_md(text: str) -> Dict[str, Any]:
+    return {"cell_type": "markdown", "metadata": {},
+            "source": text.splitlines(keepends=True) or [""]}
+
+
+def _nb_code(text: str) -> Dict[str, Any]:
+    return {"cell_type": "code", "metadata": {}, "execution_count": None,
+            "outputs": [], "source": text.splitlines(keepends=True) or [""]}
 
 
 def generate_notebook(
@@ -555,33 +617,94 @@ def generate_notebook(
     out_dir: str = "pm4py_ucm_output",
     include_scenarios: bool = False,
     include_family: Optional[bool] = None,
+    include_dashboards: Optional[bool] = None,
 ) -> str:
-    """Emit the same pipeline as a Jupyter ``.ipynb`` (JSON string).
-
-    One markdown + one code cell per section, so it reads as a personalised
-    tutorial. Built as nbformat-4 JSON by hand (no ``nbformat`` dependency).
+    """Emit the pipeline as a Jupyter ``.ipynb`` (JSON string), laid out as a
+    **tutorial**: each stage's function is defined and then immediately invoked,
+    with the intermediate result shown inline (the loaded log, the case counts,
+    the mined model image, the variants, the family grid), not just written to
+    the output folder. Built as nbformat-4 JSON by hand (no ``nbformat`` dep).
     """
+    cfg = _resolved_config(doc)
     inc_family = _wants_family(doc, include_family)
-    blocks = _blocks(doc, out_dir, include_scenarios, inc_family)
-    cells: List[Dict[str, Any]] = []
-    for label, code in blocks:
-        intro = _NB_INTRO.get(label)
-        if intro:
-            cells.append({
-                "cell_type": "markdown", "metadata": {},
-                "source": intro.splitlines(keepends=True),
-            })
-        # The `header` block is a module docstring in the .py; in the notebook
-        # the markdown intro carries it, so skip emitting it as code.
-        if label == "header":
-            continue
-        # The CLI `__main__` block is meaningless in a notebook; replace it
-        # with a direct call.
-        source = "run()" if label == "main" else code
-        cells.append({
-            "cell_type": "code", "metadata": {}, "execution_count": None,
-            "outputs": [], "source": source.splitlines(keepends=True),
-        })
+    inc_dash = _wants_dashboards(doc, include_dashboards)
+    dashboards = _project_dashboards(doc) if inc_dash else []
+    log = doc.log
+
+    cells: List[Dict[str, Any]] = [
+        _nb_md(
+            f"# Reproducible pm4py-ucm pipeline\n\n"
+            f"Generated from a saved project session — a faithful, "
+            f"deterministic replay of the GUI configuration on "
+            f"**{_doc_safe(log.name)}**. Run the cells top to bottom: each step "
+            f"defines its function, runs it, and shows the result inline while "
+            f"also writing the artifact to the output folder."),
+        _nb_md("## Imports"),
+        _nb_code(_imports()
+                 + "\nfrom IPython.display import Image  # inline previews"),
+        _nb_md("## Configuration\n\nEverything the session captured — edit any "
+               "of these to adapt the pipeline."),
+        _nb_code(_config(doc, cfg, out_dir, include_scenarios, inc_family,
+                         inc_dash, dashboards)),
+        _nb_md("## Helpers\n\nLog loading, the pre-mining transform (rename + "
+               "filters), the resource parameters and the heat-map render "
+               "settings — defined once, used by the steps below."),
+        _nb_code(_HELPERS.rstrip("\n")),
+        _nb_md("## 1 · Load the event log"),
+        _nb_code(
+            "OUT_DIR.mkdir(parents=True, exist_ok=True)\n"
+            "log = read_log(DEFAULT_LOG)\n"
+            "print(f\"Loaded {log['case:concept:name'].nunique():,} cases, \"\n"
+            "      f\"{len(log):,} events.\")\n"
+            "log.head()"),
+        _nb_md("## 2 · Apply the pre-mining transform\n\nActivity renaming and "
+               "the log filters, exactly as configured (a no-op when the "
+               "session had none)."),
+        _nb_code(
+            "log = apply_log_filters(log, FILTER_SPEC)\n"
+            "print(f\"After the transform: "
+            "{log['case:concept:name'].nunique():,} cases, \"\n"
+            "      f\"{len(log):,} events.\")"),
+        _nb_md("## 3 · Mine and export the UCM\n\nInductive miner → process "
+               "tree → UCM, with performers and the performance overlay. Writes "
+               "`model.jucm` and `model.png`."),
+        _nb_code(_model_fn() + "\n\nucm = run_model(log)"),
+        _nb_md("The mined model, previewed inline:"),
+        _nb_code('Image(str(OUT_DIR / "model.png")) '
+                 'if (OUT_DIR / "model.png").exists() else ucm'),
+    ]
+    if include_scenarios:
+        cells += [
+            _nb_md("## 4 · Scenario synthesis\n\nOne executable `ScenarioDef` "
+                   "per behavioural variant. Writes `scenarios.jucm` and the "
+                   "variant CSVs."),
+            _nb_code(_scenarios_fn() + "\n\nrun_scenarios(log)"),
+            _nb_md("The behavioural variants that drive the scenarios:"),
+            _nb_code('pd.read_csv(OUT_DIR / "variants.csv").head(10)'),
+        ]
+    if inc_family:
+        cells += [
+            _nb_md("## 5 · Model family\n\nOne model per attribute combination, "
+                   "the dynamic-stub umbrella, and the statistics report. "
+                   "Writes `family.zip`, `family_umbrella.jucm`, "
+                   "`family_grid.png` and `family_report.html`."),
+            _nb_code(_family_fn()
+                     + "\n\nfamily = run_family(log) if FAMILY_ATTRS else None"),
+            _nb_md("The family grid — one mined model per combination:"),
+            _nb_code('Image(str(OUT_DIR / "family_grid.png")) '
+                     'if (OUT_DIR / "family_grid.png").exists() else None'),
+        ]
+    if inc_dash:
+        cells += [
+            _nb_md("## 6 · Dashboards\n\nEach saved dashboard rendered to a "
+                   "self-contained interactive HTML file over the same filtered "
+                   "log — open one in a browser for the live view."),
+            _nb_code(_dashboards_fn() + "\n\ntable = run_dashboards(log)"),
+            _nb_md("The dashboard files written:"),
+            _nb_code("sorted(p.name for p in OUT_DIR.glob('dashboard_*.html'))"),
+        ]
+    cells.append(_nb_md(f"---\nDone — every artifact is under `{out_dir}/`."))
+
     nb = {
         "cells": cells,
         "metadata": {

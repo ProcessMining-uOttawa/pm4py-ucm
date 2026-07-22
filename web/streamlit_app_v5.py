@@ -3566,11 +3566,17 @@ with st.sidebar:
             value=bool(_proj_values["family_attrs"]), key="codegen_family",
             help="Adds the per-attribute family + umbrella + statistics "
                  "report pipeline.")
+        _has_dash = bool(_sessions.unwrap_registry(_dash_snapshot))
+        _exp_dash = _proj_exp.checkbox(
+            "Include dashboards", value=_has_dash, key="codegen_dashboards",
+            help="Renders each saved dashboard to a self-contained interactive "
+                 "HTML file (needs dashboards on this project).")
         _proj_exp.download_button(
             "⬇ Export Python script (.py)",
             data=_sessions.generate_script(
                 _proj_doc, include_scenarios=_exp_scn,
-                include_family=_exp_fam).encode("utf-8"),
+                include_family=_exp_fam,
+                include_dashboards=_exp_dash).encode("utf-8"),
             file_name=f"{_proj_stem}_pipeline.py",
             mime="text/x-python", width="stretch",
             help="Plain Python over the public pm4py-ucm API — automatable and "
@@ -3579,11 +3585,12 @@ with st.sidebar:
             "⬇ Export Jupyter notebook (.ipynb)",
             data=_sessions.generate_notebook(
                 _proj_doc, include_scenarios=_exp_scn,
-                include_family=_exp_fam).encode("utf-8"),
+                include_family=_exp_fam,
+                include_dashboards=_exp_dash).encode("utf-8"),
             file_name=f"{_proj_stem}_pipeline.ipynb",
             mime="application/x-ipynb+json", width="stretch",
-            help="The same pipeline as a notebook — doubles as a personalised "
-                 "tutorial on your own log.")
+            help="The same pipeline as a notebook — an interactive, personalised "
+                 "tutorial: each step runs and shows its result inline.")
         _proj_exp.caption("Resume a saved project from the **log source** "
                           "area (top of the page).")
     except Exception as _proj_exc:  # never let this break the rail

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Web app (V5)
+
+- **The Python export can now include the dashboards.** Alongside the model,
+  scenarios and family, the *Export as Python* control adds a **Include
+  dashboards** option that emits a `run_dashboards(log)` step: it rebuilds the
+  fact table over the same filtered log and renders each saved dashboard to a
+  self-contained interactive HTML file (via the library's `build_fact_table` +
+  `write_dashboard`). Auto-selected when the project carries dashboards.
+
+### Changed — Web app (V5)
+
+- **The exported Jupyter notebook is now an interactive tutorial.** Instead of
+  defining every function and calling a single `run()` in the last cell, the
+  `.ipynb` defines each stage and **immediately runs it**, showing the
+  intermediate result inline — the loaded log, the case counts before/after
+  filtering, the mined model image, the variants table, the family grid and the
+  dashboard files — so it reads like a personalised walkthrough. The `.py` script
+  keeps its function-plus-`run()` structure for automation.
+
 ## [0.7.3] — 2026-07-21
 
 Export a session as a runnable Python pipeline, a cycle-time log filter, the
