@@ -172,11 +172,17 @@ def test_dashboards_emitted_when_the_project_carries_them():
     # Auto-detected from the presence of dashboards.
     src = generate_script(doc)
     assert "def run_dashboards" in src
-    # The mined UCM is passed so a pinned-model widget embeds the model SVG.
     assert "run_dashboards(log, ucm)" in src
-    assert "model_svg=model_svg" in src and "renders=renders" in src
     assert "DASHBOARDS = " in src
     assert "'name': 'Ops'" in src and "build_fact_table" in src
+    # All dashboards go into ONE file with a switcher (the registry is passed,
+    # not one dashboard's specs), rendered read-only.
+    assert 'OUT_DIR / "dashboards.html"' in src
+    assert "dashboards=DASHBOARDS" in src
+    assert "dashboard_{i" not in src  # not one file per dashboard
+    # The mined UCM's SVG is embedded only when a dashboard pins the model.
+    assert 'w.get("viz") == "model"' in src and "needs_model" in src
+    assert "model_svg=model_svg" in src and "renders=renders" in src
     compile(src, "dash.py", "exec")
     # And absent when the project has none, or when explicitly excluded.
     assert "def run_dashboards" not in generate_script(_doc({}))

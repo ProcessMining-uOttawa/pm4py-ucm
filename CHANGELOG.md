@@ -11,12 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The Python export can now include the dashboards.** Alongside the model,
   scenarios and family, the *Export as Python* control emits a `run_dashboards`
-  step: it rebuilds the fact table over the same filtered log and renders each
-  saved dashboard to a self-contained interactive HTML file (via the library's
-  `build_fact_table` + `write_dashboard`). A **pinned-model** widget is
-  populated — the mined model is embedded as SVG for both notations (with the
-  heat-map), so it renders instead of showing a grey box — and the pipeline also
-  writes a standalone **`model.svg`**.
+  step that rebuilds the fact table over the same filtered log and renders **all
+  saved dashboards into one** self-contained interactive HTML file — a read-only
+  header switcher moves between them (via `build_fact_table` +
+  `write_dashboard`, which gained `dashboards=` / `active=` for this). A
+  **pinned-model** widget is populated: when — and only when — a dashboard pins
+  the model, the mined model is embedded as SVG for both notations (with the
+  heat-map), so it renders instead of showing a grey box.
+- **The pipeline exports vector `.svg` alongside every `.png`.** `run_model`
+  writes `model.svg` and `run_family` writes `family_grid.svg`, both carrying the
+  heat-map like their PNGs (`save_vis_ucm_family` now forwards the heat-map to
+  its `.svg` export too).
 
 ### Changed — Web app (V5)
 

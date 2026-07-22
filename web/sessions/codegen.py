@@ -464,6 +464,9 @@ def _family_fn() -> str:
         "    _save_image(pm4py_ucm.save_vis_ucm_family, family,\n"
         '                str(OUT_DIR / "family_grid.png"), style=NOTATION,\n'
         "                parameters=model_heat_params(family))\n"
+        "    _save_image(pm4py_ucm.save_vis_ucm_family, family,\n"
+        '                str(OUT_DIR / "family_grid.svg"), style=NOTATION,\n'
+        "                parameters=model_heat_params(family))\n"
         "    umbrella = pm4py_ucm.assemble_ucm_family(\n"
         '        family, mode="umbrella", dedup=FAMILY_DEDUP,\n'
         "        node_metrics=OVERLAY_NODES, edge_metrics=OVERLAY_EDGES)\n"
@@ -482,13 +485,17 @@ def _family_fn() -> str:
 def _dashboards_fn() -> str:
     return (
         "def run_dashboards(log, ucm=None):\n"
-        '    """Render each saved dashboard to a self-contained interactive '
-        'HTML file\n'
-        "    over the same (filtered) log the model was mined from. Pass the "
-        "mined\n"
-        "    ``ucm`` so a pinned-model widget shows the model (both notations "
-        "are\n"
-        '    embedded as SVG) instead of a grey placeholder."""\n'
+        '    """Render ALL saved dashboards to ONE self-contained interactive '
+        'HTML\n'
+        "    file — a read-only header switcher moves between them — over the "
+        "same\n"
+        "    (filtered) log the model was mined from. Pass the mined ``ucm`` so "
+        "a\n"
+        "    pinned-model widget shows the model (embedded as SVG, both "
+        "notations)\n"
+        '    instead of a grey placeholder."""\n'
+        "    if not DASHBOARDS:\n"
+        "        return None\n"
         "    import base64\n"
         "    from pm4py_ucm.algo.dashboards import (\n"
         "        build_fact_table, write_dashboard)\n"
@@ -496,12 +503,14 @@ def _dashboards_fn() -> str:
         "    if not isinstance(df, pd.DataFrame):\n"
         "        df = pm4py.convert_to_dataframe(df)\n"
         "    table = build_fact_table(df, log_name=Path(DEFAULT_LOG).stem)\n"
-        "    # The model SVG a pinned-model widget draws — one per notation, "
-        "with\n"
-        "    # the same heat-map as the Model view. Without it the widget is "
-        "grey.\n"
+        "    # Embed the model SVG only when a dashboard actually pins the "
+        "model\n"
+        "    # (one per notation, with the same heat-map as the Model view).\n"
         "    renders, model_svg = {}, {}\n"
-        "    if ucm is not None:\n"
+        '    needs_model = any(w.get("viz") == "model"\n'
+        '                      for d in DASHBOARDS for w in (d.get("specs")'
+        " or []))\n"
+        "    if ucm is not None and needs_model:\n"
         '        for _style in ("ucm", "bpmn"):\n'
         "            try:\n"
         "                _svg = model_to_svg(ucm, _style)\n"
@@ -511,16 +520,16 @@ def _dashboards_fn() -> str:
         '            renders[_style] = ("data:image/svg+xml;base64,"\n'
         "                + base64.b64encode("
         '_svg.encode("utf-8")).decode("ascii"))\n'
-        "    for i, dash in enumerate(DASHBOARDS, start=1):\n"
-        '        name = dash.get("name") or f"Dashboard {i}"\n'
-        '        out = OUT_DIR / f"dashboard_{i:02d}_{_slug(name)}.html"\n'
-        "        write_dashboard(\n"
-        '            str(out), table, specs=dash.get("specs") or [],\n'
-        '            filters=dash.get("filters") or [], name=name, title=name,\n'
-        "            read_only=True, renders=renders or None,\n"
-        "            model_svg=model_svg or None)\n"
-        '        print(f"[dashboards] wrote {out} "\n'
-        "              f\"({len(dash.get('specs') or [])} widget(s))\")\n"
+        '    out = OUT_DIR / "dashboards.html"\n'
+        "    write_dashboard(\n"
+        "        str(out), table, dashboards=DASHBOARDS,\n"
+        '        active=DASHBOARDS[0].get("id"),\n'
+        '        name=DASHBOARDS[0].get("name") or "Dashboards",\n'
+        "        read_only=True, renders=renders or None,\n"
+        "        model_svg=model_svg or None)\n"
+        '    print(f"[dashboards] wrote {out} ({len(DASHBOARDS)} dashboard(s), "\n'
+        "          f\"{sum(len(d.get('specs') or []) for d in DASHBOARDS)} "
+        'widget(s))")\n'
         "    return table"
     )
 
@@ -739,12 +748,15 @@ def generate_notebook(
         ]
     if inc_dash:
         cells += [
-            _nb_md("## 6 · Dashboards\n\nEach saved dashboard rendered to a "
+            _nb_md("## 6 · Dashboards\n\nAll saved dashboards in **one** "
                    "self-contained interactive HTML file over the same filtered "
-                   "log — open one in a browser for the live view."),
+                   "log — a header switcher moves between them."),
             _nb_code(_dashboards_fn() + "\n\ntable = run_dashboards(log, ucm)"),
-            _nb_md("The dashboard files written:"),
-            _nb_code("sorted(p.name for p in OUT_DIR.glob('dashboard_*.html'))"),
+            _nb_md("The dashboards, live and interactive (also openable "
+                   "standalone in any browser):"),
+            _nb_code("from IPython.display import IFrame\n"
+                     'IFrame(str(OUT_DIR / "dashboards.html"), '
+                     'width="100%", height=600)'),
         ]
     cells.append(_nb_md(f"---\nDone — every artifact is under `{out_dir}/`."))
 

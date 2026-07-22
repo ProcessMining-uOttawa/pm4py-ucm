@@ -1076,6 +1076,21 @@ class TestView:
         assert cfg["payload"]["version"] == CONTRACT_VERSION
         assert len(cfg["catalog"]) == len(catalog_json(interval_log=False))
 
+    def test_a_multi_dashboard_registry_travels_into_the_page(self, table):
+        # An "export all" bundle: the whole registry in one read-only page, so
+        # the client's header switcher moves between the named dashboards.
+        dashboards = [
+            {"id": "a", "name": "Alpha", "filters": [],
+             "specs": [{"id": "w", "metric": "duration", "viz": "kpi"}]},
+            {"id": "b", "name": "Beta", "specs": [], "filters": []},
+        ]
+        html = dashboard_html(table, dashboards=dashboards, active="b",
+                              read_only=True)
+        cfg = json.loads(html.split('id="pm-data">', 1)[1]
+                         .split("</script>", 1)[0].replace("\\u003c", "<"))
+        assert cfg["active"] == "b"
+        assert [d["name"] for d in cfg["dashboards"]] == ["Alpha", "Beta"]
+
     def test_storage_key_defaults_to_the_log(self, table):
         html = dashboard_html(table)
         assert '"storageKey":"t"' in html

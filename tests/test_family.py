@@ -1186,3 +1186,14 @@ def test_family_png_grid_and_report_images_honour_heatmap():
                      parameters={"style": "bpmn", "dpi": 96, **heat_classic})
         assert p_off.read_bytes() != p_on.read_bytes(), \
             "PNG grid ignored the heat-map"
+
+        # SVG grid export (save_vis_ucm_family → .svg) forwards the heat-map the
+        # same classic-params way as the PNG, so the .svg matches the .png.
+        import pm4py_ucm
+        s_off = _P(td) / "off.svg"
+        s_on = _P(td) / "on.svg"
+        pm4py_ucm.save_vis_ucm_family(family, str(s_off), style="bpmn")
+        pm4py_ucm.save_vis_ucm_family(family, str(s_on), style="bpmn",
+                                      parameters=heat_classic)
+        assert s_off.read_text() != s_on.read_text(), \
+            "SVG grid export ignored the heat-map"

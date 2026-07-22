@@ -122,12 +122,19 @@ that exposes `build_fact_table` + `write_dashboard`; only the interactive
 specs** (`ProjectDoc.dashboards`, the versioned island-registry envelope). So the
 emitter simply: unwraps the specs at emit time into a `DASHBOARDS` data constant,
 and emits `run_dashboards(log, ucm)` that builds the fact table over the same
-filtered log and calls `write_dashboard(...)` per saved dashboard → one
-self-contained interactive HTML file each. The mined UCM is threaded in and
-rendered to SVG for both notations (with the heat-map) and passed as
-`renders` / `model_svg`, so a **pinned-model widget** shows the model instead of
-a grey box; the pipeline also writes a standalone `model.svg`. Auto-included when
-the project carries dashboards (a check-box in the export UI overrides).
+filtered log and calls `write_dashboard(...)` **once** with the whole registry
+(`dashboards=` / `active=`) → **one** self-contained interactive HTML file whose
+read-only header switcher moves between the dashboards (the client already
+supports this "export all" bundle). The mined UCM is rendered to SVG for both
+notations (with the heat-map) and passed as `renders` / `model_svg` **only when a
+dashboard actually pins the model**, so a pinned-model widget shows the model
+instead of a grey box and nothing is embedded for dashboards that don't display
+it. Auto-included when the project carries dashboards (a check-box overrides).
+
+Every raster artifact is also written as **vector `.svg`**: `run_model` writes
+`model.svg` next to `model.png`, and `run_family` writes `family_grid.svg` next
+to `family_grid.png` (with the heat-map — `save_vis_ucm_family` now forwards it to
+its `.svg` branch).
 
 **The notebook is an interactive tutorial, not a single `run()`.** The `.py`
 keeps the function-plus-`run()` structure (good for automation); the `.ipynb`

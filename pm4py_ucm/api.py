@@ -615,8 +615,21 @@ def save_vis_ucm_family(
     fmt = (params.get("format")
            or Path(file_path).suffix.lstrip(".")).lower()
     if fmt == "svg":
+        # Forward any heat-map settings passed the ``classic.apply`` way
+        # (``heatmap_node`` / ``heatmap_edge`` tuples + span) to the vector
+        # renderer, so an .svg export carries the same heat-map as the .png.
+        hn = params.get("heatmap_node")
+        he = params.get("heatmap_edge")
         Path(file_path).write_text(
-            _grid.render_svg(family, style), encoding="utf-8")
+            _grid.render_svg(
+                family, style,
+                heatmap=bool(hn or he),
+                node_metric=hn[0] if hn else None,
+                edge_metric=he[0] if he else None,
+                heatmap_global=bool(params.get("heatmap_global")),
+                node_span=params.get("node_span"),
+                edge_span=params.get("edge_span")),
+            encoding="utf-8")
         return file_path
     return _grid.render(family, file_path, parameters=params)
 
