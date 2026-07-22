@@ -453,11 +453,22 @@ on load, so project files stay tiny and never go stale against a change in how
 a model is mined. Dashboards travel through a small versioned bridge that reads
 the browser-island widgets back on save and restores them on resume; the Family
 tab re-mines automatically the first time you open it after a load, and Compare
-follows. The design and its future-proofing (a single parameter registry, a CI
-drift guard, versioned schema) are documented in
-[`docs/sessions.md`](../docs/sessions.md), and
+follows. The design and its future-proofing (a single parameter registry, CI
+drift guards on both the save **and** restore sides, versioned schema) are
+documented in [`docs/sessions.md`](../docs/sessions.md), and
 [`demo/sessions_tutorial.ipynb`](../demo/sessions_tutorial.ipynb) is a runnable
 walkthrough of the underlying `web/sessions` API.
+
+The **Project** group also has **⬇ Export Python script (.py)** and
+**⬇ Export Jupyter notebook (.ipynb)** — the current session emitted as a
+runnable pipeline over the public `pm4py_ucm` API: log loading, the pre-mining
+rename + filters (including the cycle-time band), mining, decomposition,
+performers, the performance overlay and the model export, with optional
+check-boxes to add the **scenario-synthesis** and **model-family** pipelines.
+The exported images carry the **performance heat-map** too. Because a project
+stores only *inputs*, the script is a faithful, deterministic replay (no LLM — a
+template emitter). It's the way to take a GUI exploration to an automatable,
+version-controllable script; see [`docs/code_export.md`](../docs/code_export.md).
 
 ## Deploy to Streamlit Community Cloud
 

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3] — 2026-07-21
+
+Export a session as a runnable Python pipeline, a cycle-time log filter, the
+performance heat-map extended across the Family/Compare views and every exported
+artifact, and a batch of dashboard and save/resume fixes.
+
 ### Fixed — Web app (V5)
 
 - **Low-cardinality numeric case attributes are offered as discrete levels in

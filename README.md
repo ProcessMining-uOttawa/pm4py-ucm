@@ -136,6 +136,17 @@ resume either from the **log-source** area. Only *inputs* are stored — the
 model, scenarios, family and reports recompute on load. See
 [`docs/sessions.md`](docs/sessions.md).
 
+**Export the analysis as runnable Python.** The same **Project** group can emit
+the current session as a plain-Python **script** (`.py`, with a CLI entry point)
+or a **Jupyter notebook** (`.ipynb`) that reproduces it over the public
+`pm4py_ucm` API — log loading, the pre-mining rename + filters, mining,
+decomposition, performers, the performance overlay (including the heat-map on the
+exported images), and optionally the scenario and model-family pipelines. Because
+a project stores only *inputs*, the emitted script is a faithful, deterministic
+replay — a way to graduate a GUI exploration into an automatable, version-
+controllable pipeline (and a personalised tutorial). It is a template emitter, no
+LLM involved. See [`docs/code_export.md`](docs/code_export.md).
+
 Run locally with:
 
 ```bash
