@@ -2328,6 +2328,30 @@ def _sticky_save(key):
         ss[f"_keep::{key}"] = ss[key]
 
 
+def _sticky_get(key, default):
+    """Read a sticky main-area widget's value from *any* view.
+
+    When the widget's owning view isn't rendered this run, Streamlit has
+    dropped its ``session_state`` key — but the ``_keep::`` mirror survives
+    (see :func:`_sticky`). Prefer that mirror so a save/gather done from
+    another view (e.g. the sidebar while the Model view is open) still sees
+    the Family view's real values rather than the widget defaults."""
+    ss = st.session_state
+    keep = f"_keep::{key}"
+    if keep in ss:
+        return ss[keep]
+    return ss.get(key, default)
+
+
+def _sticky_seed(key, value):
+    """Seed a sticky main-area widget from a project restore so the value
+    survives until (and through) the first render of its view — even one that
+    isn't the active view on load. Writes the durable ``_keep::`` mirror that
+    :func:`_sticky` reads on first render; the raw widget key would be garbage
+    collected before the view is ever opened."""
+    st.session_state[f"_keep::{key}"] = value
+
+
 def _apply_filter_spec_to_state(fspec, fh, pr):
     """Reverse-map a saved ``filter_spec`` onto the filter widgets. ``pr`` is
     the restore slot for the value=/default= widgets."""
@@ -2456,8 +2480,15 @@ def _apply_project_config(cfg, fh, csv_columns=None):
         pr["cfg_scn_dt_depth"] = int(cfg["scenario_decision_tree_max_depth"])
     _fa = cfg.get("family_attrs") or []
     if _fa:
-        ss["family_attr1"] = _fa[0]
-        ss["family_attr2"] = _fa[1] if len(_fa) > 1 else _NONE_OPT
+        # The Family view's attribute selectboxes are main-area widgets, so
+        # seeding their raw keys here would be garbage collected before the
+        # view is ever opened (the active view on load is often Dashboards).
+        # Seed the durable sticky mirror instead so First/Second attribute
+        # restore correctly — and stash cfg_family_attrs so an immediate
+        # re-save (before the Family view is opened) round-trips them too.
+        _sticky_seed("family_attr1", _fa[0])
+        _sticky_seed("family_attr2", _fa[1] if len(_fa) > 1 else _NONE_OPT)
+        ss["cfg_family_attrs"] = list(_fa)
         # Unlike the Model/Dashboards views (which recompute on render), the
         # Family view mines only on a button click, so a resumed project would
         # otherwise show its restored attributes but no mined family — and
@@ -2465,15 +2496,19 @@ def _apply_project_config(cfg, fh, csv_columns=None):
         # one-shot auto-mine so opening the Family tab reproduces the family
         # (and therefore Compare) the way the other views already reproduce.
         ss["_family_auto_mine"] = True
+    # Min/max/bins are sticky main-area widgets too: seed the durable mirror
+    # (not the restore slot, which is only consumed when the Family view first
+    # renders) so an immediate re-save from another view keeps the real values
+    # rather than falling back to the widget defaults.
     if "family_min_cases" in cfg:
-        pr["cfg_family_min_cases"] = int(cfg["family_min_cases"])
+        _sticky_seed("cfg_family_min_cases", int(cfg["family_min_cases"]))
     if "family_max_values" in cfg:
-        pr["cfg_family_max_values"] = int(cfg["family_max_values"])
+        _sticky_seed("cfg_family_max_values", int(cfg["family_max_values"]))
     if "family_bins" in cfg:
-        pr["cfg_family_bins"] = int(cfg["family_bins"])
+        _sticky_seed("cfg_family_bins", int(cfg["family_bins"]))
     for pair in (cfg.get("family_include_values") or []):
         _attr, _labels = tuple(pair)
-        pr[f"family_values_{_attr}"] = list(_labels)
+        _sticky_seed(f"family_values_{_attr}", list(_labels))
     # Compare's cell selectboxes pass index=, so they restore through the
     # slot (read via _rv to compute the index), not a direct key-set which
     # would clash with index= and warn. Applied best-effort once the family is
@@ -3491,11 +3526,12 @@ with st.sidebar:
             "scenario_decision_tree_max_depth": int(st.session_state.get(
                 "cfg_scn_dt_depth", 3)),
             "family_attrs": list(st.session_state.get("cfg_family_attrs", [])),
-            "family_min_cases": int(st.session_state.get(
-                "cfg_family_min_cases", 10)),
-            "family_max_values": int(st.session_state.get(
-                "cfg_family_max_values", 8)),
-            "family_bins": int(st.session_state.get("cfg_family_bins", 4)),
+            # Read the sticky mirror, not the raw widget keys: those are
+            # garbage collected while the Family view isn't the active one, so
+            # saving from another view would otherwise capture the defaults.
+            "family_min_cases": int(_sticky_get("cfg_family_min_cases", 10)),
+            "family_max_values": int(_sticky_get("cfg_family_max_values", 8)),
+            "family_bins": int(_sticky_get("cfg_family_bins", 4)),
             "family_include_values": st.session_state.get(
                 "cfg_family_include_values"),
             "family_dedup": bool(st.session_state.get(
@@ -3558,32 +3594,36 @@ with st.sidebar:
         _proj_exp.markdown("---")
         _proj_exp.caption("**Export as Python** — a runnable pipeline that "
                           "reproduces this analysis.")
+        # All three on by default — the emitted pipeline reproduces the whole
+        # analysis; a section the session didn't use simply no-ops at runtime.
         _exp_scn = _proj_exp.checkbox(
-            "Include scenario synthesis", value=False, key="codegen_scenarios",
+            "Include scenario synthesis", value=True, key="codegen_scenarios",
             help="Adds the executable-scenario pipeline (re-mines — slower).")
         _exp_fam = _proj_exp.checkbox(
-            "Include model family",
-            value=bool(_proj_values["family_attrs"]), key="codegen_family",
+            "Include model family", value=True, key="codegen_family",
             help="Adds the per-attribute family + umbrella + statistics "
-                 "report pipeline.")
+                 "report pipeline (skipped at runtime if no family attributes).")
+        _exp_dash = _proj_exp.checkbox(
+            "Include dashboards", value=True, key="codegen_dashboards",
+            help="Renders each saved dashboard to a self-contained interactive "
+                 "HTML file (a no-op if the project has no dashboards).")
+        # One click → both flavours in a zip: the runnable .py and the
+        # interactive tutorial .ipynb.
+        _cg_kw = dict(include_scenarios=_exp_scn, include_family=_exp_fam,
+                      include_dashboards=_exp_dash)
+        _cg_buf = io.BytesIO()
+        with zipfile.ZipFile(_cg_buf, "w", zipfile.ZIP_DEFLATED) as _cg_zip:
+            _cg_zip.writestr(f"{_proj_stem}_pipeline.py",
+                             _sessions.generate_script(_proj_doc, **_cg_kw))
+            _cg_zip.writestr(f"{_proj_stem}_pipeline.ipynb",
+                             _sessions.generate_notebook(_proj_doc, **_cg_kw))
         _proj_exp.download_button(
-            "⬇ Export Python script (.py)",
-            data=_sessions.generate_script(
-                _proj_doc, include_scenarios=_exp_scn,
-                include_family=_exp_fam).encode("utf-8"),
-            file_name=f"{_proj_stem}_pipeline.py",
-            mime="text/x-python", width="stretch",
-            help="Plain Python over the public pm4py-ucm API — automatable and "
-                 "a faithful, deterministic replay of this session.")
-        _proj_exp.download_button(
-            "⬇ Export Jupyter notebook (.ipynb)",
-            data=_sessions.generate_notebook(
-                _proj_doc, include_scenarios=_exp_scn,
-                include_family=_exp_fam).encode("utf-8"),
-            file_name=f"{_proj_stem}_pipeline.ipynb",
-            mime="application/x-ipynb+json", width="stretch",
-            help="The same pipeline as a notebook — doubles as a personalised "
-                 "tutorial on your own log.")
+            "⬇ Export Python (.py + .ipynb)", data=_cg_buf.getvalue(),
+            file_name=f"{_proj_stem}_pipeline.zip", mime="application/zip",
+            width="stretch",
+            help="A zip with both a runnable .py script (automatable, a faithful "
+                 "replay of this session) and an interactive tutorial notebook "
+                 "that runs each step and shows the result inline.")
         _proj_exp.caption("Resume a saved project from the **log source** "
                           "area (top of the page).")
     except Exception as _proj_exc:  # never let this break the rail

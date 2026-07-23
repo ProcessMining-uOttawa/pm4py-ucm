@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.4] — 2026-07-22
+
+Export the whole session — model, scenarios, model-family **and** dashboards — as
+a runnable `.py` + tutorial `.ipynb` in one download, with vector `.svg` beside
+every `.png` and the performance heat-map carried into the exported artifacts;
+plus fixes so the exported scenario variant count matches the app and the Family
+view's settings survive save/resume.
+
+### Added — Web app (V5)
+
+- **The Python export can now include the dashboards.** Alongside the model,
+  scenarios and family, the *Export as Python* control emits a `run_dashboards`
+  step that rebuilds the fact table over the same filtered log and renders **all
+  saved dashboards into one** self-contained interactive HTML file — a read-only
+  header switcher moves between them (via `build_fact_table` +
+  `write_dashboard`, which gained `dashboards=` / `active=` for this). A
+  **pinned-model** widget is populated: when — and only when — a dashboard pins
+  the model, the mined model is embedded as SVG for both notations (with the
+  heat-map), so it renders instead of showing a grey box.
+- **The pipeline exports vector `.svg` alongside every `.png`.** `run_model`
+  writes `model.svg` and `run_family` writes `family_grid.svg`, both carrying the
+  heat-map like their PNGs (`save_vis_ucm_family` now forwards the heat-map to
+  its `.svg` export too).
+
+### Fixed — Web app (V5)
+
+- **The exported pipeline's scenarios now match the app's variant count.** The
+  generated `run_scenarios` let `discover_scenarios` re-mine its own process
+  tree at `noise_threshold=0` (a perfect fit), so every trace the app had
+  treated as noise resurfaced as an extra variant (e.g. 11 instead of the app's
+  9 on ClaimsPaymentLog). It now pins the **same noise-thresholded tree** the
+  Model view and the app's Scenarios view cluster on.
+- **Resuming a project no longer drops the Family view's First/Second attribute
+  or Min/Max/Bins.** Those are main-area widgets, whose `session_state` Streamlit
+  discards while another view is active — so restoring into the raw widget key
+  was garbage-collected before the Family tab was ever opened (attributes reset
+  to the first one), and saving from another view captured the widget defaults
+  instead of the user's sizes. Both sides now go through the durable sticky
+  mirror (`_sticky_seed` on restore, `_sticky_get` on save), so the family
+  configuration round-trips — and the exported Python code sees the real values.
+
+### Changed — Web app (V5)
+
+- **The exported Jupyter notebook is now an interactive tutorial.** Instead of
+  defining every function and calling a single `run()` in the last cell, the
+  `.ipynb` defines each stage and **immediately runs it**, showing the
+  intermediate result inline — the loaded log, the case counts before/after
+  filtering, the mined model image, the variants table, the family grid and the
+  dashboard files — so it reads like a personalised walkthrough. The `.py` script
+  keeps its function-plus-`run()` structure for automation. The model and family
+  previews now show the exported **SVG** (crisp and scalable) when it exists,
+  falling back to the PNG.
+- **One export button.** *Export as Python* is now a single **⬇ Export Python
+  (.py + .ipynb)** download that bundles both flavours in a zip, with the
+  scenario / family / dashboards options all pre-selected. (The `web/sessions`
+  API keeps the two separate `generate_script` / `generate_notebook` entry
+  points.)
+
 ## [0.7.3] — 2026-07-21
 
 Export a session as a runnable Python pipeline, a cycle-time log filter, the

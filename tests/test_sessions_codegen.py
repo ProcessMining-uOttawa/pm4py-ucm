@@ -120,6 +120,15 @@ def test_scenarios_opt_in():
     assert "def run_scenarios" in on
     assert "SCENARIO_STRATEGY = 'data-driven'" in on
     assert "run_scenarios(log)" in on
+    # Scenario clustering must pin the SAME noise-thresholded tree the app
+    # uses, else discover_scenarios re-mines at noise=0 and the variant count
+    # diverges from the GUI (extra variants for what the app treated as noise).
+    scen_body = on[on.index("def run_scenarios"):on.index("def ", on.index(
+        "def run_scenarios") + 1)]
+    assert "discover_process_tree_inductive(" in scen_body
+    assert "noise_threshold=NOISE_THRESHOLD" in scen_body
+    assert '"process_tree": tree' in scen_body
+    assert "parameters=params" in scen_body
 
 
 def test_all_sections_compile_together():
@@ -131,20 +140,64 @@ def test_all_sections_compile_together():
     for fn in ("def run_model", "def run_scenarios", "def run_family",
                "def run(", "def read_log", "def apply_log_filters"):
         assert fn in src
+    # The model is also exported as a standalone SVG (used by pinned-model
+    # dashboard widgets and offered as a download in the app).
+    assert 'model.svg' in src and "write_model_svg" in src
 
 
-def test_notebook_is_valid_json_and_compiles():
+def test_notebook_is_a_tutorial_not_a_single_run_call():
     nb = generate_notebook(_doc({"family_attrs": ["country"]}),
                            include_scenarios=True)
     data = json.loads(nb)
     assert data["nbformat"] == 4
     code_cells = [c for c in data["cells"] if c["cell_type"] == "code"]
     assert code_cells
-    # Every code cell must be valid Python on its own or when concatenated.
     joined = "\n".join("".join(c["source"]) for c in code_cells)
-    compile(joined, "notebook.py", "exec")
-    # The notebook drives the pipeline directly (no __main__ CLI block).
-    assert joined.strip().endswith("run()")
+    compile(joined, "notebook.py", "exec")  # the whole notebook is valid Python
+    # It is a tutorial: each stage is invoked where it's defined, not bundled
+    # into a single `run()` at the end (the .py keeps that; the notebook spreads
+    # it out for interactivity).
+    assert not joined.strip().endswith("run()")
+    assert "def run(" not in joined and "__main__" not in joined
+    for call in ("ucm = run_model(log)", "run_scenarios(log)",
+                 "run_family(log)"):
+        assert call in joined, call
+    # Intermediate results are shown inline, not just written to disk. The
+    # model/family previews prefer the SVG (crisp, scalable) via preview().
+    for shown in ("log.head()", 'preview("model")', "SVG(filename=",
+                  'pd.read_csv(OUT_DIR / "variants.csv")'):
+        assert shown in joined, shown
+    # Interleaving: the load call appears before the family definition.
+    assert joined.index("log = read_log(") < joined.index("def run_family")
+
+
+def test_dashboards_emitted_when_the_project_carries_them():
+    from sessions.dashboards import wrap_registry
+    reg = {"active": "d1", "dashboards": [
+        {"id": "d1", "name": "Ops", "filters": [],
+         "specs": [{"id": "w1", "metric": "duration", "agg": "avg",
+                    "viz": "kpi"}]}]}
+    doc = ProjectDoc(log=LogRef("sample", "L.zip", "zip", ""),
+                     config={}, dashboards=wrap_registry(reg))
+    # Auto-detected from the presence of dashboards.
+    src = generate_script(doc)
+    assert "def run_dashboards" in src
+    assert "run_dashboards(log, ucm)" in src
+    assert "DASHBOARDS = " in src
+    assert "'name': 'Ops'" in src and "build_fact_table" in src
+    # All dashboards go into ONE file with a switcher (the registry is passed,
+    # not one dashboard's specs), rendered read-only.
+    assert 'OUT_DIR / "dashboards.html"' in src
+    assert "dashboards=DASHBOARDS" in src
+    assert "dashboard_{i" not in src  # not one file per dashboard
+    # The mined UCM's SVG is embedded only when a dashboard pins the model.
+    assert 'w.get("viz") == "model"' in src and "needs_model" in src
+    assert "model_svg=model_svg" in src and "renders=renders" in src
+    compile(src, "dash.py", "exec")
+    # And absent when the project has none, or when explicitly excluded.
+    assert "def run_dashboards" not in generate_script(_doc({}))
+    assert "def run_dashboards" not in generate_script(
+        doc, include_dashboards=False)
 
 
 def test_generator_version_matches_package():

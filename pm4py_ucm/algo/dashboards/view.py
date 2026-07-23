@@ -197,6 +197,8 @@ def dashboard_html(
     pending_pin: Optional[Dict[str, Any]] = None,
     model_svg: Optional[Dict[str, str]] = None,
     family_report: Optional[str] = None,
+    dashboards: Optional[Sequence[Dict[str, Any]]] = None,
+    active: Optional[str] = None,
 ) -> str:
     """Build the self-contained dashboard document.
 
@@ -263,6 +265,11 @@ def dashboard_html(
         "specs": list(specs or []),
         "filters": list(filters or []),
         "name": name,
+        # An "export all" bundle: the whole registry (all named dashboards) in
+        # one read-only page, its header switcher moving between them. Empty →
+        # the client falls back to the single dashboard in ``specs``.
+        "dashboards": list(dashboards or []),
+        "active": active,
         "readOnly": bool(read_only),
         "renders": renders or {},
         "storageKey": storage_key or table.log_name,
