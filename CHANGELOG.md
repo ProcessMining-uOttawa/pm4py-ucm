@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.4] — 2026-07-22
+
+Export the whole session — model, scenarios, model-family **and** dashboards — as
+a runnable `.py` + tutorial `.ipynb` in one download, with vector `.svg` beside
+every `.png` and the performance heat-map carried into the exported artifacts;
+plus fixes so the exported scenario variant count matches the app and the Family
+view's settings survive save/resume.
+
 ### Added — Web app (V5)
 
 - **The Python export can now include the dashboards.** Alongside the model,
