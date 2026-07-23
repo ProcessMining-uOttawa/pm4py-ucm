@@ -151,3 +151,62 @@ def test_filter_spec_subkeys_restore_matches_the_transform():
     assert not missing, (
         f"_apply_filter_spec_to_state does not restore filter key(s): "
         f"{missing} — reverse-map them so a saved filter resumes")
+
+
+def _load_sticky_helpers():
+    """Exec the app's four sticky helpers against a fake ``st`` whose
+    ``session_state`` is a plain dict — they depend on nothing else, so this
+    exercises the real logic without a Streamlit runtime."""
+    import types
+
+    src = _app_func_sources("_sticky", "_sticky_save",
+                            "_sticky_get", "_sticky_seed")
+    st = types.SimpleNamespace(session_state={})
+    ns = {"st": st}
+    exec("\n\n".join(src[n] for n in                      # noqa: S102
+         ("_sticky", "_sticky_save", "_sticky_get", "_sticky_seed")), ns)
+    return ns, st
+
+
+def test_family_min_cases_survives_saving_from_another_view():
+    """Regression (Issue 3, SAVE side): a Family-view number_input is a
+    main-area widget, so Streamlit drops its ``session_state`` key when another
+    view is active. Saving must read the durable ``_keep::`` mirror via
+    ``_sticky_get``, not the (garbage-collected) widget key — else the saved
+    project captures the default, not the user's value."""
+    ns, st = _load_sticky_helpers()
+    ss = st.session_state
+    # User is on the Family view and sets Min cases to 50; the widget mirrors it.
+    ss["cfg_family_min_cases"] = 50
+    ns["_sticky_save"]("cfg_family_min_cases")
+    # Navigate away → Streamlit garbage-collects the un-rendered widget key.
+    del ss["cfg_family_min_cases"]
+    # The raw key is gone, but the save gather still sees 50, not the default.
+    assert ns["_sticky_get"]("cfg_family_min_cases", 10) == 50
+    # And the gather is actually wired to _sticky_get for the family sizes.
+    app = (Path(__file__).resolve().parent.parent
+           / "web" / "streamlit_app_v5.py").read_text(encoding="utf-8")
+    for key in ("cfg_family_min_cases", "cfg_family_max_values",
+                "cfg_family_bins"):
+        assert f'_sticky_get("{key}"' in app, key
+
+
+def test_family_attr_restores_before_its_view_is_opened():
+    """Regression (Issue 3, RESTORE side): a project loads with a non-Family
+    active view, so seeding the raw ``family_attr1`` widget key would be
+    garbage-collected before the Family view is ever opened. Seeding the
+    durable ``_keep::`` mirror via ``_sticky_seed`` makes the first render of
+    the selectbox pick up the restored value."""
+    ns, st = _load_sticky_helpers()
+    ss = st.session_state
+    # Restore seeds the mirror (the raw key is deliberately NOT set).
+    ns["_sticky_seed"]("family_attr1", "Channel")
+    assert "family_attr1" not in ss
+    # First render of the selectbox: factory default is the first attribute.
+    opts = ["Broker", "Channel", "Online"]
+    assert ns["_sticky"]("family_attr1", lambda: opts[0], options=opts) \
+        == "Channel"
+    # And the restore path is actually wired to _sticky_seed for both attrs.
+    restore = _app_func_sources("_apply_project_config")["_apply_project_config"]
+    assert '_sticky_seed("family_attr1"' in restore
+    assert '_sticky_seed("family_attr2"' in restore

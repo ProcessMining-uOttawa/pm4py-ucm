@@ -120,6 +120,15 @@ def test_scenarios_opt_in():
     assert "def run_scenarios" in on
     assert "SCENARIO_STRATEGY = 'data-driven'" in on
     assert "run_scenarios(log)" in on
+    # Scenario clustering must pin the SAME noise-thresholded tree the app
+    # uses, else discover_scenarios re-mines at noise=0 and the variant count
+    # diverges from the GUI (extra variants for what the app treated as noise).
+    scen_body = on[on.index("def run_scenarios"):on.index("def ", on.index(
+        "def run_scenarios") + 1)]
+    assert "discover_process_tree_inductive(" in scen_body
+    assert "noise_threshold=NOISE_THRESHOLD" in scen_body
+    assert '"process_tree": tree' in scen_body
+    assert "parameters=params" in scen_body
 
 
 def test_all_sections_compile_together():
@@ -153,8 +162,9 @@ def test_notebook_is_a_tutorial_not_a_single_run_call():
     for call in ("ucm = run_model(log)", "run_scenarios(log)",
                  "run_family(log)"):
         assert call in joined, call
-    # Intermediate results are shown inline, not just written to disk.
-    for shown in ("log.head()", "Image(str(OUT_DIR",
+    # Intermediate results are shown inline, not just written to disk. The
+    # model/family previews prefer the SVG (crisp, scalable) via preview().
+    for shown in ("log.head()", 'preview("model")', "SVG(filename=",
                   'pd.read_csv(OUT_DIR / "variants.csv")'):
         assert shown in joined, shown
     # Interleaving: the load call appears before the family definition.

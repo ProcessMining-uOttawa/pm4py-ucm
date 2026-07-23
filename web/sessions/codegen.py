@@ -413,9 +413,17 @@ def _scenarios_fn() -> str:
     return (
         "def run_scenarios(log):\n"
         '    """Synthesize an executable UCM: one ScenarioDef per variant."""\n'
+        "    # Pin the SAME noise-thresholded tree the app clusters on, so the\n"
+        "    # variant count matches the GUI. Without it discover_scenarios\n"
+        "    # re-mines at noise_threshold=0 (perfect fit) and every trace the\n"
+        "    # app treated as noise becomes an extra variant.\n"
+        "    tree = pm4py.discover_process_tree_inductive(\n"
+        "        log, noise_threshold=NOISE_THRESHOLD)\n"
+        '    params = {"process_tree": tree}\n'
+        "    params.update(resource_params())\n"
         "    ucm_s, clustering = pm4py_ucm.discover_scenarios(\n"
         "        log,\n"
-        "        parameters=resource_params(),\n"
+        "        parameters=params,\n"
         "        decomposition=DECOMPOSITION,\n"
         "        condition_strategy=SCENARIO_STRATEGY,\n"
         "        group_name=SCENARIO_GROUP_NAME,\n"
@@ -693,7 +701,19 @@ def generate_notebook(
             f"also writing the artifact to the output folder."),
         _nb_md("## Imports"),
         _nb_code(_imports()
-                 + "\nfrom IPython.display import Image  # inline previews"),
+                 + "\nfrom IPython.display import Image, SVG  # inline previews"
+                 + "\n\n\n"
+                 + "def preview(stem):\n"
+                 '    """Show OUT_DIR/<stem>.svg inline (crisp, scalable) when '
+                 "it exists,\n"
+                 "    else the .png, else None. The artifacts are written "
+                 'either way."""\n'
+                 '    svg = OUT_DIR / f"{stem}.svg"\n'
+                 "    if svg.exists():\n"
+                 "        return SVG(filename=str(svg))\n"
+                 '    png = OUT_DIR / f"{stem}.png"\n'
+                 "    return Image(filename=str(png)) if png.exists() "
+                 "else None"),
         _nb_md("## Configuration\n\nEverything the session captured — edit any "
                "of these to adapt the pipeline."),
         _nb_code(_config(doc, cfg, out_dir, include_scenarios, inc_family,
@@ -721,9 +741,8 @@ def generate_notebook(
                "tree → UCM, with performers and the performance overlay. Writes "
                "`model.jucm` and `model.png`."),
         _nb_code(_model_fn() + "\n\nucm = run_model(log)"),
-        _nb_md("The mined model, previewed inline:"),
-        _nb_code('Image(str(OUT_DIR / "model.png")) '
-                 'if (OUT_DIR / "model.png").exists() else ucm'),
+        _nb_md("The mined model, previewed inline (SVG when available):"),
+        _nb_code('preview("model") or ucm'),
     ]
     if include_scenarios:
         cells += [
@@ -742,9 +761,9 @@ def generate_notebook(
                    "`family_grid.png` and `family_report.html`."),
             _nb_code(_family_fn()
                      + "\n\nfamily = run_family(log) if FAMILY_ATTRS else None"),
-            _nb_md("The family grid — one mined model per combination:"),
-            _nb_code('Image(str(OUT_DIR / "family_grid.png")) '
-                     'if (OUT_DIR / "family_grid.png").exists() else None'),
+            _nb_md("The family grid — one mined model per combination "
+                   "(SVG when available):"),
+            _nb_code('preview("family_grid")'),
         ]
     if inc_dash:
         cells += [
