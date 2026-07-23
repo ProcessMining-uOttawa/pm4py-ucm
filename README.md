@@ -136,16 +136,19 @@ resume either from the **log-source** area. Only *inputs* are stored — the
 model, scenarios, family and reports recompute on load. See
 [`docs/sessions.md`](docs/sessions.md).
 
-**Export the analysis as runnable Python.** The same **Project** group can emit
-the current session as a plain-Python **script** (`.py`, with a CLI entry point)
-or a **Jupyter notebook** (`.ipynb`) that reproduces it over the public
-`pm4py_ucm` API — log loading, the pre-mining rename + filters, mining,
-decomposition, performers, the performance overlay (including the heat-map on the
-exported images), and optionally the scenario and model-family pipelines. Because
-a project stores only *inputs*, the emitted script is a faithful, deterministic
-replay — a way to graduate a GUI exploration into an automatable, version-
-controllable pipeline (and a personalised tutorial). It is a template emitter, no
-LLM involved. See [`docs/code_export.md`](docs/code_export.md).
+**Export the analysis as runnable Python.** The same **Project** group emits the
+current session — in one download — as both a plain-Python **script** (`.py`, with
+a CLI entry point) and a **Jupyter notebook** (`.ipynb`), reproducing it over the
+public `pm4py_ucm` API: log loading, the pre-mining rename + filters, mining,
+decomposition, performers, the performance overlay (with the heat-map on the
+exported images, each written as both `.png` and vector `.svg`), and optionally
+the scenario, model-family and **dashboards** pipelines. The notebook is a
+personalised **tutorial** — each stage runs where it's defined and shows the
+result inline (the mined model and family grid as **SVG**, the variants, the live
+dashboards). Because a project stores only *inputs*, the output is a faithful,
+deterministic replay — a way to graduate a GUI exploration into an automatable,
+version-controllable pipeline. It is a template emitter, no LLM involved. See
+[`docs/code_export.md`](docs/code_export.md).
 
 Run locally with:
 

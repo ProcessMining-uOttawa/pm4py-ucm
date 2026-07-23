@@ -459,16 +459,23 @@ documented in [`docs/sessions.md`](../docs/sessions.md), and
 [`demo/sessions_tutorial.ipynb`](../demo/sessions_tutorial.ipynb) is a runnable
 walkthrough of the underlying `web/sessions` API.
 
-The **Project** group also has **⬇ Export Python script (.py)** and
-**⬇ Export Jupyter notebook (.ipynb)** — the current session emitted as a
-runnable pipeline over the public `pm4py_ucm` API: log loading, the pre-mining
+The **Project** group also has a single **⬇ Export Python (.py + .ipynb)**
+download — a zip with the current session emitted **both** as a runnable script
+and as a notebook, over the public `pm4py_ucm` API: log loading, the pre-mining
 rename + filters (including the cycle-time band), mining, decomposition,
-performers, the performance overlay and the model export, with optional
-check-boxes to add the **scenario-synthesis** and **model-family** pipelines.
-The exported images carry the **performance heat-map** too. Because a project
-stores only *inputs*, the script is a faithful, deterministic replay (no LLM — a
+performers, the performance overlay and the model export, with check-boxes to add
+the **scenario-synthesis**, **model-family** and **dashboards** pipelines (all
+pre-selected). The script writes each image as both `.png` and vector `.svg`, all
+carrying the **performance heat-map**; the dashboards go into one self-contained
+interactive HTML file with a read-only switcher (a pinned-model widget embeds the
+mined model as SVG). The `.ipynb` is laid out as a **tutorial** — each stage
+defines its function, runs it, and shows the result inline (the loaded log, the
+case counts, the mined model and family grid as **SVG**, the variants table, the
+live dashboards). The scenario step pins the same noise-thresholded tree the app
+clusters on, so its variant count matches the Scenarios view. Because a project
+stores only *inputs*, both are a faithful, deterministic replay (no LLM — a
 template emitter). It's the way to take a GUI exploration to an automatable,
-version-controllable script; see [`docs/code_export.md`](../docs/code_export.md).
+version-controllable pipeline; see [`docs/code_export.md`](../docs/code_export.md).
 
 ## Deploy to Streamlit Community Cloud
 
