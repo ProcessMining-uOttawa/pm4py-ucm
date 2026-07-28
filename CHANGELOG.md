@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.5] — 2026-07-28
+
+Two bug fixes: model families no longer hang while computing statistics on logs
+with long traces, and a CSV whose role/resource column is named `concept:name`
+now mines.
+
+### Fixed
+
+- **Model families no longer hang while computing statistics on logs with long
+  traces.** The concurrency-aware replay behind the per-cell variant/fitness
+  statistics memoises its sub-parses, but memo hits skipped the
+  `max_replay_states` budget — so the un-memoised sequence/loop backtracking
+  could revisit the same sub-problems exponentially often and spin forever on a
+  200+-event trace (the Family tab froze partway through "Computing family
+  statistics"). Every replay entry now charges the budget, so a trace that
+  can't be parsed within it is reported as noise, exactly as a budget-exhausted
+  parse already was.
+
+### Fixed — Web app (V5)
+
+- **A CSV whose role/resource column is literally named `concept:name` now
+  mines.** The chosen role/resource columns are mapped to `org:role` /
+  `org:resource` *before* `pm4py.format_dataframe` instead of after: because
+  `format_dataframe` writes the canonical `concept:name` activity column by
+  dropping any same-named column, a role column named `concept:name` was being
+  overwritten by the activity copy and then renamed away — leaving no activity
+  column, so mining failed with "the specified activity column is not contained
+  in the dataframe". The same fix is applied to the exported Python pipeline's
+  `read_log`.
+
 ## [0.7.4] — 2026-07-22
 
 Export the whole session — model, scenarios, model-family **and** dashboards — as

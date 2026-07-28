@@ -327,10 +327,20 @@ def _replay(
     """
     if budget[0] <= 0:
         return None
+    # Charge the budget on EVERY entry, before the memo lookup — memo hits
+    # included. The unmemoised sequence/loop backtrackers (_seq_split_first /
+    # _loop_continue) can revisit the same memoised (tree, s, e) subproblem
+    # exponentially many times while exploring peel splits; if hits were free
+    # the budget — the sole termination guarantee — would never deplete, so a
+    # long, ambiguous trace (e.g. a 200+-event trace on an alphabet-overlapping
+    # loop nest) spins effectively forever. Counting hits keeps total replay
+    # work bounded by max_replay_states regardless of how the search branches;
+    # a trace that can't be parsed within budget is reported NOFIT, exactly as
+    # a budget-exhausted parse already was.
+    budget[0] -= 1
     key = (id(tree), s, e)
     if key in memo:
         return memo[key]
-    budget[0] -= 1
     op = _op_value(tree)
     nid = node_ids[id(tree)]
     children = _children(tree)

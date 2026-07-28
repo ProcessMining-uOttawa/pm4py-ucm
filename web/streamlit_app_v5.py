@@ -265,18 +265,8 @@ def _log_and_tree(
             _phase("Reading CSV...")
             df = pd.read_csv(io.BytesIO(log_bytes), low_memory=False)
             _phase(f"Formatting {len(df):,} events...")
-            df = pm4py.format_dataframe(
-                df, case_id=case_col, activity_key=activity_col,
-                timestamp_key=ts_col,
-            )
-            renames: Dict[str, str] = {}
-            if role_col and role_col != "org:role":
-                renames[role_col] = "org:role"
-            if resource_col and resource_col != "org:resource":
-                renames[resource_col] = "org:resource"
-            if renames:
-                df = df.rename(columns=renames)
-            log = _coerce_str_object(df)
+            log = _format_csv_df(
+                df, case_col, activity_col, ts_col, role_col, resource_col)
         else:
             is_zip = (
                 log_kind == "zip"
@@ -511,6 +501,47 @@ def _coerce_str_object(df):
     return df
 
 
+def _format_csv_df(df, case_col, activity_col, ts_col, role_col, resource_col):
+    """Format a raw CSV DataFrame for pm4py, mapping the chosen role / resource
+    columns to ``org:role`` / ``org:resource``.
+
+    The role/resource rename is applied **before** ``format_dataframe`` — not
+    after — because ``format_dataframe`` writes the pm4py-canonical columns
+    (``concept:name``, ``case:concept:name``, ``time:timestamp``) by *dropping*
+    any existing same-named column and copying the mapped source into it. A log
+    whose role/resource column is literally named ``concept:name`` (a common
+    export convention: the phase/role sits in ``concept:name`` and the activity
+    in another column) would otherwise have that column overwritten by the
+    activity copy and then renamed to ``org:role`` — leaving **no**
+    ``concept:name`` activity column at all, so mining fails with "the specified
+    activity column is not contained in the dataframe". Renaming first makes the
+    user's column mapping authoritative regardless of the source names.
+    """
+    renames: Dict[str, str] = {}
+    if role_col and role_col != "org:role":
+        renames[role_col] = "org:role"
+    if resource_col and resource_col != "org:resource":
+        renames[resource_col] = "org:resource"
+    if renames:
+        # Drop any pre-existing target column that isn't itself a rename source,
+        # so the rename can't create duplicate labels (e.g. a log that already
+        # carries an unrelated ``org:resource`` while the user maps a different
+        # column to it).
+        sources = set(renames)
+        for tgt in set(renames.values()):
+            if tgt in df.columns and tgt not in sources:
+                del df[tgt]
+        df = df.rename(columns=renames)
+        # A format key that pointed at a renamed column follows the rename.
+        case_col = renames.get(case_col, case_col)
+        activity_col = renames.get(activity_col, activity_col)
+        ts_col = renames.get(ts_col, ts_col)
+    df = pm4py.format_dataframe(
+        df, case_id=case_col, activity_key=activity_col, timestamp_key=ts_col,
+    )
+    return _coerce_str_object(df)
+
+
 def _read_log_for_scenarios(log_bytes: bytes, log_kind: str, csv_columns):
     """Materialise the log as a DataFrame / EventLog, without mining.
 
@@ -523,18 +554,8 @@ def _read_log_for_scenarios(log_bytes: bytes, log_kind: str, csv_columns):
     if log_kind == "csv":
         case_col, activity_col, ts_col, role_col, resource_col = csv_columns
         df = pd.read_csv(io.BytesIO(log_bytes), low_memory=False)
-        df = pm4py.format_dataframe(
-            df, case_id=case_col, activity_key=activity_col,
-            timestamp_key=ts_col,
-        )
-        renames: Dict[str, str] = {}
-        if role_col and role_col != "org:role":
-            renames[role_col] = "org:role"
-        if resource_col and resource_col != "org:resource":
-            renames[resource_col] = "org:resource"
-        if renames:
-            df = df.rename(columns=renames)
-        return _coerce_str_object(df)
+        return _format_csv_df(
+            df, case_col, activity_col, ts_col, role_col, resource_col)
 
     is_zip = (
         log_kind == "zip"

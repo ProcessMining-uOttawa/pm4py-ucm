@@ -143,6 +143,13 @@ Sensible defaults are auto-detected from common column names
 mapping** to start mining. Mining is *blocked* until this button is clicked
 on a fresh upload, so the miner never runs against a wrongly-guessed mapping.
 
+Any column may fill any role — including one already named `concept:name`,
+`org:role`, etc. The role/resource columns are mapped to `org:role` /
+`org:resource` *before* the log is formatted, so picking a role column that
+happens to be named `concept:name` (e.g. a log where the phase sits in
+`concept:name` and the activity in another column) maps cleanly instead of
+colliding with the canonical activity column.
+
 Changing the dropdowns after the initial Apply shows a yellow banner and a
 re-apply button — but mining keeps using the last-applied mapping in the
 meantime, so other sidebar settings remain responsive.

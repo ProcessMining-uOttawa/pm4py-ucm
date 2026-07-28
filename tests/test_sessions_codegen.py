@@ -366,3 +366,33 @@ def test_emitted_apply_log_filters_applies_duration_pct():
         ["c01", "c02", "c03"]
     slowest10 = ns["apply_log_filters"](df, {"duration_pct": (90, 100)})
     assert sorted(slowest10["case:concept:name"].unique()) == ["c10"]
+
+
+def test_emitted_read_log_maps_role_column_named_concept_name(tmp_path):
+    """Exec the emitted ``read_log`` on a CSV whose *role* column is literally
+    ``concept:name`` and whose activity is a different column. The role/resource
+    rename must happen BEFORE ``format_dataframe`` so the activity copy lands in
+    a real ``concept:name`` column instead of being clobbered and renamed away
+    (which used to fail mining with "the specified activity column is not
+    contained in the dataframe")."""
+    pd = pytest.importorskip("pandas")
+    pytest.importorskip("pm4py")  # the emitted script imports it at module load
+    ns = {"__name__": "codegen_test"}  # not "__main__" → the CLI block is skipped
+    exec(compile(generate_script(_doc({})), "gen.py", "exec"), ns)
+
+    csv = tmp_path / "log.csv"
+    csv.write_text(
+        "case:concept:name,concept:name,tool,time:timestamp\n"
+        "1,EXPLORE,Read,2026-07-17T20:27:06Z\n"
+        "1,BROWSE,Nav,2026-07-17T20:27:16Z\n"
+        "2,EXPLORE,Read,2026-07-17T20:28:06Z\n",
+        encoding="utf-8")
+    out = ns["read_log"](
+        str(csv), kind="csv",
+        csv_columns=("case:concept:name", "tool", "time:timestamp",
+                     "concept:name", None))
+    # concept:name must carry the ACTIVITY (tool), and the original role values
+    # must survive under org:role.
+    assert "concept:name" in out.columns
+    assert set(out["concept:name"]) == {"Read", "Nav"}
+    assert set(out["org:role"]) == {"EXPLORE", "BROWSE"}
