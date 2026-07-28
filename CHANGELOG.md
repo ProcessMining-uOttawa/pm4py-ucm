@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.5] — 2026-07-28
+
+Two bug fixes: model families no longer hang while computing statistics on logs
+with long traces, and a CSV whose role/resource column is named `concept:name`
+now mines.
+
 ### Fixed
 
 - **Model families no longer hang while computing statistics on logs with long

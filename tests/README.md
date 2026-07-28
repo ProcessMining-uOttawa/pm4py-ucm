@@ -1,6 +1,6 @@
 # Test suite
 
-**883 tests** across **26 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
+**885 tests** across **26 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
 
 > Regenerate this file with `python tests/gen_readme.py` after adding or removing tests. Purposes are the first sentence of each module's docstring; edit the docstring, not this table.
 
@@ -12,11 +12,11 @@
 |  | [`test_stub_bindings.py`](test_stub_bindings.py) | Tests for stub plug-in binding round-trip. | 15 |
 | | _Object model & jUCMNav I/O subtotal_ | | **59** |
 | **Discovery & conversion** | [`test_boolean_detection.py`](test_boolean_detection.py) | Case-insensitive boolean type detection in decision mining (issue #6). | 12 |
-|  | [`test_choice_signature.py`](test_choice_signature.py) | Smoke tests for the concurrency-aware choice signature. | 18 |
+|  | [`test_choice_signature.py`](test_choice_signature.py) | Smoke tests for the concurrency-aware choice signature. | 19 |
 |  | [`test_conversion.py`](test_conversion.py) | Tests for the process tree → UCM converter. | 7 |
 |  | [`test_decomposition.py`](test_decomposition.py) | Tests for hierarchical decomposition of process trees into multi-map UCMs. | 37 |
 |  | [`test_expression_minimizer.py`](test_expression_minimizer.py) | Unit tests for the boolean simplifier used on data-driven OR-fork conditions. | 17 |
-| | _Discovery & conversion subtotal_ | | **91** |
+| | _Discovery & conversion subtotal_ | | **92** |
 | **Resources & performers** | [`test_resources.py`](test_resources.py) | Tests for resource mining and performer binding. | 22 |
 | **Scenario synthesis** | [`test_scenario_synthesis.py`](test_scenario_synthesis.py) | End-to-end smoke tests for variant clustering + scenario synthesis. | 41 |
 | **Model families** | [`test_family.py`](test_family.py) | Tests for attribute-based model families. | 49 |
@@ -35,10 +35,10 @@
 | | _Visualization subtotal_ | | **66** |
 | **Dashboards** | [`test_dashboards.py`](test_dashboards.py) | Tests for user-defined dashboards: the client contract, the metric engine, and the parity of the Python engine with its JS counterpart. | 374 |
 | **Sessions (save / share / resume)** | [`test_sessions.py`](test_sessions.py) | Tests for the project save/share/resume core (``web/sessions``). | 14 |
-|  | [`test_sessions_codegen.py`](test_sessions_codegen.py) | Tests for the Python code exporter (``web/sessions/codegen.py``). | 20 |
+|  | [`test_sessions_codegen.py`](test_sessions_codegen.py) | Tests for the Python code exporter (``web/sessions/codegen.py``). | 21 |
 |  | [`test_sessions_registry.py`](test_sessions_registry.py) | Tests for the Session Parameter Registry (``web/sessions/registry.py``). | 9 |
-| | _Sessions (save / share / resume) subtotal_ | | **43** |
+| | _Sessions (save / share / resume) subtotal_ | | **44** |
 | **Progress / infrastructure** | [`test_progress.py`](test_progress.py) | Tests for the progress-reporting layer and the vectorized DataFrame resource miner. | 15 |
-| | **Total** | | **883** |
+| | **Total** | | **885** |
 
 See the repository [`README.md`](../README.md#testing) for how to run the suite, and [`docs/metrics.md`](../docs/metrics.md) for the metric definitions the validation tests enforce.
