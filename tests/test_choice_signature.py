@@ -220,3 +220,45 @@ def test_collect_xor_choices_returns_branch_indices():
     xor_id = node_ids[id(xor_node)]
     assert choices_a[xor_id] == 0
     assert choices_b[xor_id] == 1
+
+
+# ---------------------------------------------------------------------------
+# Termination — the budget must bound backtracking (regression)
+# ---------------------------------------------------------------------------
+
+def test_replay_is_bounded_on_pathological_backtracking():
+    """A long trace on an alphabet-overlapping loop nest must terminate.
+
+    Regression for the Family-statistics freeze: the sequence/loop backtrackers
+    (``_seq_split_first`` / ``_loop_continue``) revisit the same memoised
+    ``(tree, s, e)`` subproblem exponentially often while exploring peel
+    splits. Memo hits used to skip the ``max_replay_states`` charge, so the
+    budget — the sole termination guarantee — never depleted and replay spun
+    forever on a 200+-event trace. The budget now charges every replay entry,
+    so a trace that cannot be parsed within it is reported NOFIT promptly.
+
+    Runs replay in a worker thread with a generous join timeout: with the fix
+    it finishes in well under a second; a regression makes the thread outlive
+    the timeout (the test fails after ~20 s rather than hanging the suite).
+    """
+    import threading
+
+    # Nested single-letter loops accept any tiling of A's; the trailing Z can
+    # never match, forcing the parser to exhaust every tiling before conceding.
+    tree = _loop(_loop(_leaf("A"), _leaf("A")), _loop(_leaf("A"), _leaf("A")))
+    trace = ["A"] * 40 + ["Z"]
+
+    result: dict = {}
+
+    def run() -> None:
+        result["sig"] = cs.replay(tree, trace, max_replay_states=50_000)
+
+    th = threading.Thread(target=run, daemon=True)
+    th.start()
+    th.join(timeout=20)
+    assert not th.is_alive(), (
+        "replay did not terminate within 20 s — the max_replay_states budget "
+        "is not bounding the sequence/loop backtracking (memo hits must be "
+        "charged against it)"
+    )
+    assert result["sig"] == cs.NOFIT
