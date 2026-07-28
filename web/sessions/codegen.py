@@ -63,16 +63,29 @@ def read_log(log_path, kind=LOG_KIND, csv_columns=CSV_COLUMNS):
             raise ValueError("CSV_COLUMNS mapping is required for a CSV log.")
         case_col, activity_col, ts_col, role_col, resource_col = csv_columns
         df = pd.read_csv(log_path, low_memory=False)
-        df = pm4py.format_dataframe(
-            df, case_id=case_col, activity_key=activity_col,
-            timestamp_key=ts_col)
+        # Map role/resource to org:role / org:resource BEFORE format_dataframe:
+        # format_dataframe writes the canonical concept:name / case:concept:name
+        # / time:timestamp by dropping any same-named column, so a source column
+        # literally named e.g. 'concept:name' would be clobbered and then
+        # renamed away, leaving no activity column. Renaming first makes the
+        # mapping authoritative regardless of the source names.
         renames = {}
         if role_col and role_col != "org:role":
             renames[role_col] = "org:role"
         if resource_col and resource_col != "org:resource":
             renames[resource_col] = "org:resource"
         if renames:
+            sources = set(renames)
+            for tgt in set(renames.values()):
+                if tgt in df.columns and tgt not in sources:
+                    del df[tgt]
             df = df.rename(columns=renames)
+            case_col = renames.get(case_col, case_col)
+            activity_col = renames.get(activity_col, activity_col)
+            ts_col = renames.get(ts_col, ts_col)
+        df = pm4py.format_dataframe(
+            df, case_id=case_col, activity_key=activity_col,
+            timestamp_key=ts_col)
         return _coerce_str_object(df)
     data = Path(log_path).read_bytes()
     if kind == "zip" or (len(data) >= 2 and data[:2] == b"PK"):
