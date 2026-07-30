@@ -67,6 +67,7 @@ from .engine import (  # noqa: F401
     compute_widget,
     fmt,
     per_case_values,
+    predicate_case_ids,
     scorecard,
     segment_axes,
     segment_keys,

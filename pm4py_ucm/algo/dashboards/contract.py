@@ -201,6 +201,12 @@ class FactTable:
     #: not, the UI should say so rather than let the reader assume the
     #: dashboard covers the whole log.
     dropped_events: int = 0
+    #: The case-id values, in the table's case order (buffer row *i* is
+    #: ``case_ids[i]``). Kept **server-side only** — never serialised into
+    #: :meth:`to_payload` — so a caller (e.g. a ƒ attribute log-filter) can
+    #: map a per-case result array back to case ids without re-deriving the
+    #: table's ordering. Empty on a table decoded from a payload.
+    case_ids: List[Any] = field(default_factory=list)
 
     @property
     def sampled(self) -> bool:
@@ -599,4 +605,5 @@ def build_fact_table(
         interval_log=interval,
         sampled_from=sampled_from,
         dropped_events=dropped_events,
+        case_ids=list(case_ids),
     )

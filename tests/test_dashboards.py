@@ -30,6 +30,7 @@ from pm4py_ucm.algo.dashboards import (
     fmt,
     write_dashboard,
     per_case_values,
+    predicate_case_ids,
     scorecard,
     segment_axes,
     segment_keys,
@@ -789,7 +790,51 @@ class TestFormulaParsing:
         assert "Use ==" in compile_formula("duration() = 5")["error"]
 
     def test_bare_string_rejected(self):
+        # A quoted value is only legal as one side of a categorical == / != .
         assert not compile_formula('"Payment"')["ok"]
+        assert not compile_formula('"a" + 1')["ok"]
+        assert not compile_formula('duration() + "x"')["ok"]
+
+    def test_categorical_equality_ok(self):
+        # attr("X") == "value" (and !=) parse and are 0/1 indicators.
+        for f in ('attr("Channel") == "Web"', 'attr("Channel") != "Web"',
+                  '"Web" == attr("Channel")',
+                  'attr("Channel") == "Web" or attr("Channel") == "Phone"'):
+            c = compile_formula(f)
+            assert c["ok"], (f, c["error"])
+            assert c["resultType"] == "percent"
+        # an inequality against a quoted value is rejected
+        assert not compile_formula('attr("Channel") > "Web"')["ok"]
+
+
+class TestPredicateCaseIds:
+    """The ƒ attribute log-filter — predicate_case_ids over a fact table."""
+
+    def test_categorical_equality_selects_cases(self):
+        # c0/c2 are AUS, c1/c3 NZL (see _log()).
+        aus = set(predicate_case_ids(_log(), 'attr("country") == "AUS"'))
+        assert aus == {"c0", "c2"}
+        nzl = set(predicate_case_ids(_log(), 'attr("country") != "AUS"'))
+        assert nzl == {"c1", "c3"}
+
+    def test_membership_via_or_and_unknown_value(self):
+        both = set(predicate_case_ids(
+            _log(), 'attr("country") == "AUS" or attr("country") == "NZL"'))
+        assert both == {"c0", "c1", "c2", "c3"}
+        assert set(predicate_case_ids(
+            _log(), 'attr("country") == "ZZZ"')) == set()
+
+    def test_numeric_and_time_predicate(self):
+        # A > 6-day case is only c3 (8 days); combine with a categorical term.
+        slow = set(predicate_case_ids(_log(), "duration() > 6"))
+        assert slow == {"c3"}
+        combined = set(predicate_case_ids(
+            _log(), 'duration() > 3 and attr("country") == "NZL"'))
+        assert combined == {"c1", "c3"}
+
+    def test_bad_formula_raises(self):
+        with pytest.raises(FormulaError):
+            predicate_case_ids(_log(), 'attr("country") >')
 
     def test_non_string_argument_rejected(self):
         assert not compile_formula("count(5)")["ok"]
@@ -1547,6 +1592,19 @@ _PARITY_SPECS = [
      "segment": {"rows": "attr:case:country", "cols": "resource"}},
     {"id": "cust-broken", "metric": "custom", "viz": "kpi",
      "params": {"formula": "duration( >"}},
+    # Categorical equality — the new attr("X") == "value" form (and !=, or,
+    # and a where clause mixing it with a numeric predicate). These exercise
+    # the attr_eq primitive and the cmp categorical branch in both engines.
+    {"id": "cust-cat-eq", "metric": "custom", "viz": "kpi",
+     "params": {"formula": 'attr("country") == "AUS"'}},
+    {"id": "cust-cat-ne", "metric": "custom", "viz": "kpi",
+     "params": {"formula": 'attr("country") != "AUS"'}},
+    {"id": "cust-cat-unknown", "metric": "custom", "viz": "kpi",
+     "params": {"formula": 'attr("country") == "ZZZ"'}},
+    {"id": "cust-cat-or", "metric": "custom", "viz": "kpi",
+     "params": {"formula": 'attr("country") == "AUS" or attr("country") == "NZL"'}},
+    {"id": "cust-cat-where", "metric": "custom", "viz": "kpi", "agg": "avg",
+     "params": {"formula": 'duration() where attr("country") == "AUS"'}},
     # A summed time — the aggregation a pie needs, now offered for times
     # as well as counts.
     {"id": "kpi-duration-sum", "metric": "duration", "viz": "kpi",

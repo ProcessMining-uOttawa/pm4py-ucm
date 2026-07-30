@@ -1017,7 +1017,9 @@ class FormulaParser {
     }
     if (t.kind === "ident") return this.call();
     if (t.kind === "str") {
-      throw new FormulaError(`A bare string ${t.value} is not a value — strings are only names inside a function like contains("…").`);
+      // Only meaningful as one side of a categorical == / != against an
+      // attr(...); formulaValidate enforces that after the parse.
+      this.next(); return { t: "str", v: t.value };
     }
     throw new FormulaError(`Expected a number or a function, found ${t.value == null ? "end of formula" : t.value}.`);
   }
@@ -1046,9 +1048,48 @@ class FormulaParser {
   }
 }
 
+/** The attribute name if `node` is an attr("…") call, else null. */
+function formulaAttrName(node) {
+  if (node && node.t === "call" && node.fn === "attr" && node.args
+      && node.args[0] && node.args[0].t === "str") return node.args[0].v;
+  return null;
+}
+
+/** [attr_name, string_value] when one side is attr("…") and the other a
+ *  quoted string (a categorical equality), else null. */
+function formulaCategoricalOperands(l, r) {
+  let name = formulaAttrName(l);
+  if (name !== null && r && r.t === "str") return [name, r.v];
+  name = formulaAttrName(r);
+  if (name !== null && l && l.t === "str") return [name, l.v];
+  return null;
+}
+
+/** Reject a quoted string used anywhere but as the operand of a categorical
+ *  == / != . Function-argument strings live in node.args (an array) and are
+ *  never visited. Mirror of formula._validate. */
+function formulaValidate(node) {
+  if (node.t === "cmp" && formulaCategoricalOperands(node.l, node.r)) {
+    if (node.op !== "==" && node.op !== "!=") {
+      throw new FormulaError(`A quoted value can only be compared with == or !=, not ${node.op}.`);
+    }
+    for (const child of [node.l, node.r]) if (child.t !== "str") formulaValidate(child);
+    return;
+  }
+  if (node.t === "str") {
+    throw new FormulaError(`A quoted value like "${node.v}" is only a value when compared to a categorical attribute with == or !=, e.g. attr("Channel") == "Web".`);
+  }
+  for (const k of Object.keys(node)) {
+    const v = node[k];
+    if (v && typeof v === "object" && !Array.isArray(v)) formulaValidate(v);
+  }
+}
+
 export function parseFormula(text) {
   if (!text || !text.trim()) throw new FormulaError("The formula is empty.");
-  return new FormulaParser(formulaTokenize(text)).parse();
+  const ast = new FormulaParser(formulaTokenize(text)).parse();
+  formulaValidate(ast);
+  return ast;
 }
 
 function formulaReferencesTime(node) {
@@ -1114,6 +1155,8 @@ export function evaluateFormula(ast, base, nCases) {
   const ev = (node) => {
     switch (node.t) {
       case "num": return filled(node.v);
+      case "str":
+        throw new FormulaError(`A quoted value like "${node.v}" is only a value when compared to a categorical attribute with == or !=, e.g. attr("Channel") == "Web".`);
       case "call": {
         const args = node.args.map((a) => a.v);
         return Float64Array.from(base[node.fn](...args));
@@ -1133,6 +1176,21 @@ export function evaluateFormula(ast, base, nCases) {
         return o;
       }
       case "cmp": {
+        // Categorical equality: attr("X") == "value" (either order), resolved
+        // through base.attr_eq rather than numerically. Mirror of formula.py.
+        const cat = formulaCategoricalOperands(node.l, node.r);
+        if (cat) {
+          if (node.op !== "==" && node.op !== "!=") {
+            throw new FormulaError(`A quoted value can only be compared with == or !=, not ${node.op}.`);
+          }
+          const eq = Float64Array.from(base.attr_eq(cat[0], cat[1]));
+          if (node.op === "!=") {
+            const o = new Float64Array(nCases);
+            for (let i = 0; i < nCases; i++) o[i] = Number.isNaN(eq[i]) ? NaN : 1 - eq[i];
+            return o;
+          }
+          return eq;
+        }
         const l = ev(node.l), r = ev(node.r), o = new Float64Array(nCases);
         for (let i = 0; i < nCases; i++) {
           const a = l[i], b = r[i];
@@ -1245,6 +1303,31 @@ function formulaBase(t) {
     for (let i = 0; i < t.nCases; i++) out[i] = buf[i];
     return out;
   };
+  // attr("X") == "value": 1/0 per case, NaN where the attribute is absent.
+  // Mirror of engine._formula_base.attr_eq.
+  const attrEq = (name, value) => {
+    const attr = attributeOf(t, name);
+    const out = new Float64Array(t.nCases).fill(NaN);
+    if (!attr) return out;
+    const buf = t.buffers[attr.buffer];
+    if (!buf) return out;
+    if (attr.type === "integer") {
+      const x = Number(value);
+      const ok = Number.isFinite(x);
+      for (let i = 0; i < t.nCases; i++) {
+        const v = buf[i];
+        out[i] = Number.isFinite(v) ? ((ok && v === x) ? 1 : 0) : NaN;
+      }
+      return out;
+    }
+    const vals = attr.values || [];
+    const target = vals.indexOf(String(value));   // -1 if the value is unknown
+    for (let i = 0; i < t.nCases; i++) {
+      const code = buf[i];
+      out[i] = (code >= vals.length) ? NaN : (code === target ? 1 : 0);
+    }
+    return out;
+  };
   const timestampOf = (act) => {
     const code = t.activities.indexOf(act);
     const out = new Float64Array(t.nCases).fill(NaN);
@@ -1263,6 +1346,7 @@ function formulaBase(t) {
     time_between: (a, b) => perCaseValues(t, "timeBetween", { from: a, to: b }),
     timestamp: timestampOf,
     attr: attrOf,
+    attr_eq: attrEq,
   };
 }
 

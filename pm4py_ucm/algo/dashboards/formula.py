@@ -19,14 +19,17 @@ server.
 One value type
 --------------
 Every expression evaluates, per case, to a **number or null** — there are
-no strings at runtime. Strings appear only as the *names* inside a call
-(``contains("Payment")``), fixed when the formula is written. That single
-type is what keeps this grammar agreeing between the Python evaluator
-here and the JS one in ``dash-engine.js``: there is no string/number
-coercion to get subtly wrong in two languages. A comparison yields
-``1``/``0``; ``null`` (a missing time, an absent attribute) propagates
-through arithmetic and comparison and is dropped by aggregation, exactly
-as everywhere else in the engine.
+no strings at runtime. Strings appear as the *names* inside a call
+(``contains("Payment")``), and in one other place: as the right- (or
+left-) hand operand of a categorical **equality**, ``attr("Channel") ==
+"Web"``. That form is still resolved to a per-case ``1``/``0``/null — the
+string is matched against the attribute's value dictionary, never carried
+as a runtime value — so the grammar stays single-typed and keeps agreeing
+between the Python evaluator here and the JS one in ``dash-engine.js``: a
+bare string used anywhere else (arithmetic, an inequality) is an error.
+A comparison yields ``1``/``0``; ``null`` (a missing time, an absent
+attribute) propagates through arithmetic and comparison and is dropped by
+aggregation, exactly as everywhere else in the engine.
 
 Grammar
 -------
@@ -40,8 +43,12 @@ Grammar
     additive    := term ( ("+"|"-") term )*
     term        := unary ( ("*"|"/") unary )*
     unary       := "-" unary | primary
-    primary     := number | call | "(" orExpr ")"
+    primary     := number | string | call | "(" orExpr ")"
     call        := IDENT "(" [ arg ( "," arg )* ] ")"
+
+A ``string`` primary is only valid as one side of an ``==``/``!=`` whose
+other side is an ``attr("…")`` (a categorical equality); anywhere else it
+is a parse-time-legal but evaluate-time error.
 
 Functions (all per case):
 
@@ -52,10 +59,12 @@ Functions (all per case):
 ``time_between(a, b)``  days, first ``a`` to the first ``b`` after it;
                         null when that never happens
 ``timestamp(act)``      epoch seconds of the first ``act``, else null
-``attr(name)``          a **numeric** case attribute; null if absent or
-                        non-numeric. Categorical attributes are filtered
-                        with the widget's Filter row, not here — keeping
-                        this grammar single-typed.
+``attr(name)``          a **numeric** case attribute (null if absent or
+                        non-numeric) for use in arithmetic / inequalities;
+                        for a categorical attribute use the equality form
+                        ``attr(name) == "value"`` (or ``!=``) instead,
+                        which matches the value against the attribute's
+                        dictionary and yields ``1``/``0``/null.
 ======================  ===========================================
 
 Result type
@@ -89,6 +98,26 @@ _TIME_FUNCS = {"duration", "time_between", "timestamp"}
 
 _KEYWORDS = {"where", "and", "or", "not"}
 _COMPARISONS = {"==", "!=", ">", ">=", "<", "<="}
+
+
+def _attr_name(node: Dict[str, Any]) -> Optional[str]:
+    """The attribute name if ``node`` is an ``attr("…")`` call, else None."""
+    if (node.get("t") == "call" and node.get("fn") == "attr"
+            and node.get("args") and node["args"][0]["t"] == "str"):
+        return node["args"][0]["v"]
+    return None
+
+
+def _categorical_operands(l: Dict[str, Any], r: Dict[str, Any]):
+    """``(attr_name, string_value)`` when one side is ``attr("…")`` and the
+    other a quoted string — the shape of a categorical equality — else None."""
+    name = _attr_name(l)
+    if name is not None and r.get("t") == "str":
+        return name, r["v"]
+    name = _attr_name(r)
+    if name is not None and l.get("t") == "str":
+        return name, l["v"]
+    return None
 
 
 class FormulaError(ValueError):
@@ -266,9 +295,12 @@ class _Parser:
         if t.kind == "ident":
             return self._call()
         if t.kind == "str":
-            raise FormulaError(
-                f"A bare string {t.value!r} is not a value — strings are "
-                "only names inside a function like contains(\"…\").")
+            # A quoted value is only meaningful as the operand of a
+            # categorical == / != against an attr(...); the evaluator
+            # enforces that. Parsing it as an atom (rather than erroring
+            # here) is what lets ``attr("Channel") == "Web"`` parse.
+            self._next()
+            return {"t": "str", "v": t.value}
         raise FormulaError(
             f"Expected a number or a function, found "
             f"{t.value if t.value is not None else 'end of formula'}.")
@@ -303,11 +335,38 @@ class _Parser:
             "A function argument must be a quoted name like \"Payment\".")
 
 
+def _validate(node: Dict[str, Any]) -> None:
+    """Reject a quoted string used anywhere but as the operand of a
+    categorical ``==``/``!=``. Strings that are *function arguments* live in
+    ``node["args"]`` (a list, not a dict child) and are legitimate — they are
+    never visited here."""
+    t = node.get("t")
+    if t == "cmp" and _categorical_operands(node["l"], node["r"]) is not None:
+        if node["op"] not in ("==", "!="):
+            raise FormulaError(
+                "A quoted value can only be compared with == or !=, "
+                f"not {node['op']}.")
+        for child in (node["l"], node["r"]):
+            if child.get("t") != "str":   # the attr(...) side, not the value
+                _validate(child)
+        return
+    if t == "str":
+        raise FormulaError(
+            f'A quoted value like "{node["v"]}" is only a value when compared '
+            'to a categorical attribute with == or !=, '
+            'e.g. attr("Channel") == "Web".')
+    for v in node.values():
+        if isinstance(v, dict):
+            _validate(v)
+
+
 def parse(text: str) -> Dict[str, Any]:
     """Parse a formula to its AST, or raise :class:`FormulaError`."""
     if not text or not text.strip():
         raise FormulaError("The formula is empty.")
-    return _Parser(_tokenize(text)).parse()
+    ast = _Parser(_tokenize(text)).parse()
+    _validate(ast)
+    return ast
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +469,11 @@ def evaluate(ast: Dict[str, Any], base: Dict[str, Any], n_cases: int):
         t = node["t"]
         if t == "num":
             return np.full(n_cases, node["v"], dtype=np.float64)
+        if t == "str":
+            raise FormulaError(
+                f'A quoted value like "{node["v"]}" is only a value when '
+                'compared to a categorical attribute with == or !=, '
+                'e.g. attr("Channel") == "Web".')
         if t == "call":
             fn = base[node["fn"]]
             args = [a["v"] for a in node["args"]]
@@ -431,8 +495,26 @@ def evaluate(ast: Dict[str, Any], base: Dict[str, Any], n_cases: int):
             # but keep a genuine nan-from-input as nan (already is)
             return out
         if t == "cmp":
-            l, r = ev(node["l"]), ev(node["r"])
             op = node["op"]
+            # Categorical equality: attr("X") == "value" (either order).
+            # Resolved through the base's attr_eq primitive (which knows the
+            # attribute's value dictionary) rather than numerically, so a
+            # string operand never needs a numeric value.
+            cat = _categorical_operands(node["l"], node["r"])
+            if cat is not None:
+                if op not in ("==", "!="):
+                    raise FormulaError(
+                        "A quoted value can only be compared with == or !=, "
+                        f"not {op}.")
+                name, value = cat
+                eq = np.asarray(base["attr_eq"](name, value),
+                                dtype=np.float64)
+                if op == "!=":
+                    out = 1.0 - eq
+                    out[np.isnan(eq)] = np.nan
+                    return out
+                return eq
+            l, r = ev(node["l"]), ev(node["r"])
             if op == "==":
                 res = (l == r)
             elif op == "!=":
