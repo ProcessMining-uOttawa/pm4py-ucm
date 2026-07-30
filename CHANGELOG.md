@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.6] — 2026-07-30
+
+An attribute-based log filter written in the ƒ metric language (which gained
+categorical equality to support it), and a collapsible log-source section.
+
 ### Added
 
 - **The ƒ custom-formula language gained categorical equality.** Alongside its
