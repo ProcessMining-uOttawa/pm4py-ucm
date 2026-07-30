@@ -812,6 +812,9 @@ def _apply_log_filters(log, filter_spec):
       frequency rank falls in ``[lo, hi]`` (rank 1 = most frequent), so a
       range slider can keep the most, the least, or a middle band;
     * ``exclude_activities`` (tuple) — drop these activity names;
+    * ``attr_expr`` (ƒ string) — keep cases whose per-case attribute
+      predicate is true, e.g. ``attr("Channel") == "Web"`` or
+      ``attr("amount") > 500 and duration() < 30``;
     * ``duration_pct`` ``(lo, hi)`` — keep cases whose end-to-end cycle time
       (last − first event) falls in the ``[lo, hi]`` percentile band of the
       remaining cases (0 = fastest, 100 = slowest);
@@ -844,6 +847,17 @@ def _apply_log_filters(log, filter_spec):
         keep -= set(exclude or ())
         df = pm4py.filter_event_attribute_values(
             df, "concept:name", keep, level="event", retain=True)
+
+    # Attribute predicate (the ƒ language): keep the cases whose per-case
+    # expression is true — e.g. attr("Channel") == "Web", attr("amount") > 500
+    # and duration() < 30. Reuses the dashboards' fact table + formula
+    # evaluator so the same grammar works here. Applied before the cycle-time
+    # and variant filters so those populations are the attribute-filtered cases.
+    attr_expr = spec.get("attr_expr")
+    if attr_expr and str(attr_expr).strip():
+        from pm4py_ucm.algo.dashboards import predicate_case_ids
+        keep_ids = set(predicate_case_ids(df, str(attr_expr)))
+        df = df[df["case:concept:name"].isin(keep_ids)]
 
     # End-to-end cycle-time band: keep cases whose per-case duration (last
     # minus first event) falls in the [lo, hi] percentile of the remaining
@@ -898,6 +912,9 @@ def _filter_summary(filter_spec) -> str:
     if "exclude_activities" in spec:
         n = len(spec["exclude_activities"])
         parts.append(f"−{n} activit{'y' if n == 1 else 'ies'}")
+    if spec.get("attr_expr"):
+        _expr = str(spec["attr_expr"]).strip()
+        parts.append(f"ƒ {_expr if len(_expr) <= 30 else _expr[:29] + '…'}")
     if "duration_pct" in spec:
         lo, hi = spec["duration_pct"]
         parts.append(f"cycle {lo}–{hi}%")
@@ -2383,13 +2400,15 @@ def _apply_filter_spec_to_state(fspec, fh, pr):
             str(a): str(b) for a, b in (tuple(p) for p in spec["rename_map"])}
     if any(k in spec for k in ("activity_ranks", "exclude_activities",
                                "variant_ranks", "time_from", "time_to",
-                               "duration_pct")):
+                               "duration_pct", "attr_expr")):
         pr["log_filter_on"] = True
     if "activity_ranks" in spec:
         _lo, _hi = spec["activity_ranks"]
         pr[f"flt_arank::{fh}"] = (int(_lo), int(_hi))
     if "exclude_activities" in spec:
         pr[f"flt_excl::{fh}"] = list(spec["exclude_activities"])
+    if spec.get("attr_expr"):
+        pr[f"flt_attrexpr::{fh}"] = str(spec["attr_expr"])
     if "duration_pct" in spec:
         _lo, _hi = spec["duration_pct"]
         pr[f"flt_cyc::{fh}"] = (int(_lo), int(_hi))
@@ -2416,6 +2435,8 @@ def _apply_filter_spec_to_state(fspec, fh, pr):
                                          int(spec["activity_ranks"][1]))
         if "exclude_activities" in spec:
             partial["exclude_activities"] = tuple(spec["exclude_activities"])
+        if spec.get("attr_expr"):
+            partial["attr_expr"] = str(spec["attr_expr"])
         if "duration_pct" in spec:
             partial["duration_pct"] = (int(spec["duration_pct"][0]),
                                        int(spec["duration_pct"][1]))
@@ -2958,9 +2979,19 @@ if _SESSIONS_OK:
     for _n in st.session_state.get("project_notes", []):
         _load_exp.caption(f"ℹ️ {_n}")
 
+# The log-source picker + CSV mapping live in one collapsible expander so they
+# stop eating vertical space on every view once a log is loaded. It auto-opens
+# while there is no usable log — or a CSV whose columns still need Apply, so that
+# blocking gate stays reachable — and collapses once mining can proceed. Widgets
+# are added through the expander handle (``_src_exp.…``) so the later CSV-mapping
+# section lands inside it too, without re-indenting the whole block.
+_log_ready = ("log_bytes" in st.session_state) and (
+    st.session_state.get("log_kind") != "csv"
+    or st.session_state.get("applied_csv_columns") is not None)
+_src_exp = st.expander("📁 Log source & columns", expanded=not _log_ready)
 src_tabs = (
-    st.tabs(["Sample log", "Upload your own"])
-    if samples else (None, st.container())
+    _src_exp.tabs(["Sample log", "Upload your own"])
+    if samples else (None, _src_exp.container())
 )
 
 if samples:
@@ -3078,19 +3109,21 @@ if _BRIDGE_OK:
 # ---- CSV column mapping ----------------------------------------------------
 csv_columns: Optional[Tuple[str, str, str, str, str]] = None
 if log_kind == "csv":
+    # Rendered through the _src_exp handle so the mapping sits inside the same
+    # "Log source & columns" expander as the picker above.
     columns = _csv_columns(log_bytes, file_hash)
     if not columns:
-        st.error("Could not read columns from the uploaded CSV.")
+        _src_exp.error("Could not read columns from the uploaded CSV.")
         st.stop()
-    st.subheader("CSV columns")
+    _src_exp.subheader("CSV columns")
     if st.session_state.get("csv_seeded_for_hash") != file_hash:
         _seed_csv_selectors(columns)
         st.session_state["csv_seeded_for_hash"] = file_hash
-    cc1, cc2, cc3 = st.columns(3)
+    cc1, cc2, cc3 = _src_exp.columns(3)
     case_col = cc1.selectbox("Case id column", options=columns, key="csv_case")
     activity_col = cc2.selectbox("Activity column", options=columns, key="csv_activity")
     ts_col = cc3.selectbox("Timestamp column", options=columns, key="csv_timestamp")
-    cc4, cc5 = st.columns(2)
+    cc4, cc5 = _src_exp.columns(2)
     role_col = cc4.selectbox(
         "Role column (optional)",
         options=[_NONE_OPT] + columns, key="csv_role",
@@ -3106,17 +3139,17 @@ if log_kind == "csv":
     )
     applied_csv_columns = st.session_state.get("applied_csv_columns")
     if applied_csv_columns is None:
-        st.info("Review the column mapping above, then click "
-                "**Apply column mapping** to start mining.")
-        if st.button("Apply column mapping", type="primary",
-                     key="apply_csv_initial"):
+        _src_exp.info("Review the column mapping above, then click "
+                      "**Apply column mapping** to start mining.")
+        if _src_exp.button("Apply column mapping", type="primary",
+                           key="apply_csv_initial"):
             st.session_state["applied_csv_columns"] = candidate_csv_columns
             st.rerun()
         st.stop()
     elif applied_csv_columns != candidate_csv_columns:
-        st.warning("Column mapping has unapplied changes.")
-        if st.button("Apply column mapping", type="primary",
-                     key="apply_csv_update"):
+        _src_exp.warning("Column mapping has unapplied changes.")
+        if _src_exp.button("Apply column mapping", type="primary",
+                           key="apply_csv_update"):
             st.session_state["applied_csv_columns"] = candidate_csv_columns
             st.rerun()
     csv_columns = st.session_state["applied_csv_columns"]
@@ -3301,6 +3334,46 @@ with st.sidebar:
                      "Sorted alphabetically.")
             if _excl:
                 _flt["exclude_activities"] = tuple(sorted(_excl))
+        # Attribute predicate (the ƒ language) — keep cases whose per-case
+        # expression is true. Reuses the dashboards' formula grammar; placed
+        # before the cycle-time / variant widgets so their populations reflect
+        # it (attr_expr rides in _partial_spec, re-minting the variant widget).
+        try:
+            _attr_rows = _detect_family_attributes(
+                log_bytes, log_kind, csv_columns,
+                tuple(sorted(_flt.items())), file_hash)
+        except Exception:
+            _attr_rows = []
+        _attr_labels = [
+            (r["attribute"][len("case:"):] if r["attribute"].startswith("case:")
+             else r["attribute"]) for r in _attr_rows]
+        _attr_expr = _flt_exp.text_input(
+            "Attribute filter (ƒ)",
+            value=_rv(f"flt_attrexpr::{_k}", ""),
+            key=f"flt_attrexpr::{_k}",
+            placeholder='attr("Channel") == "Web" and duration() > 5',
+            help=(
+                "Keep cases whose per-case ƒ expression is true — the same "
+                "grammar as a custom dashboard metric. Categorical attribute: "
+                'attr("Name") == "Value" (or !=), OR-ed for a set. Numeric: '
+                'attr("Name") > 500. Combine with and / or / not, and the '
+                'functions duration(), count("Act"), contains("Act"), '
+                "time_between(a, b). Leave empty to skip."),
+        )
+        if _attr_expr and _attr_expr.strip():
+            from pm4py_ucm.algo.dashboards import compile_formula
+            _c = compile_formula(
+                _attr_expr, activities=tuple(_f_acts),
+                attributes=tuple(_attr_labels))
+            if not _c["ok"]:
+                _flt_exp.error(f"ƒ error: {_c['error']}")
+            else:
+                _flt["attr_expr"] = _attr_expr.strip()
+                if _c["unknown"]:
+                    _flt_exp.caption(
+                        "⚠ not in this log: " + ", ".join(_c["unknown"]))
+        if _attr_labels:
+            _flt_exp.caption("Attributes: " + ", ".join(sorted(_attr_labels)))
         # Date range — a two-handled slider over the log's own span (fewer
         # clicks than two calendars). Placed before the variant filter so the
         # variant count/coverage below can be recomputed on the date-narrowed

@@ -101,9 +101,12 @@ param whose widget key is `flt_arank::<hash>` can build the right key for the
   scale (`"local"` / `"global"` / `"family"`). A project written before the
   3-way scale carried a boolean `overlay_heatmap_global`, migrated on load.
 - `filter_spec` — the **semantic** filter tuple (`activity_ranks`,
-  `exclude_activities`, `variant_ranks`, `time_*`, `rename_map`). Storing the
-  semantic spec (not raw widget positions) is robust; `apply` reverse-seeds the
-  filter widgets from it. Note `rename_map` already lives here.
+  `exclude_activities`, `attr_expr`, `duration_pct`, `variant_ranks`, `time_*`,
+  `rename_map`). Storing the semantic spec (not raw widget positions) is robust;
+  `apply` reverse-seeds the filter widgets from it. Note `rename_map` already
+  lives here. `attr_expr` is a ƒ-language predicate string (the same grammar as a
+  custom dashboard metric) that keeps the cases it evaluates true for — e.g.
+  `attr("Channel") == "Web" and duration() > 5`.
 - `family` — `selected_attrs`, `min_cases`, `max_values`, `bins`,
   `include_values`, `dedup`.
 - `scenarios` — the four synthesis controls, so a saved run reproduces the

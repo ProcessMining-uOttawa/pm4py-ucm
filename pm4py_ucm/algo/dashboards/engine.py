@@ -334,9 +334,39 @@ def _formula_base(table: FactTable) -> Dict[str, Any]:
         values, spec = case_attribute_values(table, name)
         if values is None or spec is None or spec.type != "integer":
             # Only numeric attributes are values; a categorical one is
-            # filtered with the widget's Filter row, not read here.
+            # compared with the attr(...) == "value" equality form (attr_eq).
             return np.full(table.n_cases, np.nan)
         return np.asarray(values, dtype=np.float64)
+
+    def attr_eq(name: str, value: str):
+        """Per-case 1.0 / 0.0 / NaN for ``attr(name) == value`` — the ƒ
+        categorical equality. NaN where the attribute is absent for the
+        case (so it propagates and is dropped, like any null)."""
+        values, spec = case_attribute_values(table, name)
+        if values is None or spec is None:
+            return np.full(table.n_cases, np.nan)
+        if spec.type == "integer":
+            # A quoted value against a numeric attribute: match numerically
+            # when the value parses as a number, else nothing matches.
+            v = np.asarray(values, dtype=np.float64)
+            known = np.isfinite(v)
+            try:
+                x = float(value)
+            except (TypeError, ValueError):
+                out = np.zeros(table.n_cases, dtype=np.float64)
+            else:
+                out = (v == x).astype(np.float64)
+            out[~known] = np.nan
+            return out
+        # Enumeration / boolean: codes index spec.values; anything outside
+        # that range is the missing sentinel (see contract._code_column).
+        labels = spec.values or []
+        codes = np.asarray(values)
+        missing = codes >= len(labels)
+        target = labels.index(str(value)) if str(value) in labels else -1
+        out = (codes == target).astype(np.float64)
+        out[missing] = np.nan
+        return out
 
     return {
         "duration": lambda: per_case_values(table, "duration"),
@@ -347,6 +377,7 @@ def _formula_base(table: FactTable) -> Dict[str, Any]:
             table, "timeBetween", {"from": a, "to": b}),
         "timestamp": timestamp,
         "attr": attr,
+        "attr_eq": attr_eq,
     }
 
 
@@ -367,6 +398,32 @@ def custom_values(table: FactTable, formula: str):
         return evaluate(ast, _formula_base(table), table.n_cases)
     except (FormulaError, KeyError, ValueError):
         return np.full(table.n_cases, np.nan)
+
+
+def predicate_case_ids(log_df, formula, *, case_id_col="case:concept:name"):
+    """Case ids whose ƒ predicate ``formula`` is truthy (evaluates to 1.0).
+
+    For an attribute-based **log filter**: builds a full (un-sampled) fact
+    table over ``log_df``, evaluates the formula per case, and returns the ids
+    where the result is 1.0. A null (``NaN`` — e.g. an absent attribute) does
+    not match. Unlike :func:`custom_values` (which renders a widget and hides a
+    bad formula as all-null), this **raises** ``FormulaError`` so the caller can
+    show the message. Ordering-safe: it reads the ids the table recorded in its
+    own case order, never re-deriving them.
+    """
+    import numpy as np
+
+    from .contract import build_fact_table
+    from .formula import evaluate, parse
+
+    # max_payload_bytes=0 disables the byte-budget sampling: a filter must see
+    # every case, not a deterministic sample of them.
+    table = build_fact_table(log_df, max_payload_bytes=0, case_id_col=case_id_col)
+    vals = np.asarray(
+        evaluate(parse(formula), _formula_base(table), table.n_cases),
+        dtype=np.float64)
+    ids = np.asarray(table.case_ids, dtype=object)
+    return ids[vals == 1.0]
 
 
 def _rework(table: FactTable):

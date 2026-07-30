@@ -215,6 +215,14 @@ middle band:
 
 - **Activities by frequency rank** — keep activities whose rank falls in the
   selected band (rank 1 = most frequent); plus an **Exclude activities** list.
+- **Attribute filter (ƒ)** — a one-line predicate over case attributes, using
+  the **same ƒ grammar as a custom dashboard metric**: keep the cases it
+  evaluates true for. Categorical: `attr("Channel") == "Web"` (or `!=`, OR-ed
+  for a set — `attr("Channel") == "Web" or attr("Channel") == "Phone"`).
+  Numeric / temporal: `attr("amount") > 500 and duration() < 30`, also
+  `count("Act")`, `contains("Act")`, `time_between(a, b)`, and `and` / `or` /
+  `not`. The detected attribute names are listed under the box; an invalid
+  expression shows an inline error and is ignored until fixed.
 - **Variants by frequency rank** — keep trace variants in the selected band,
   with a **top variants by case coverage %** box synced to the slider.
 - **Date range** — a slider over the log's own span (fewer clicks than two

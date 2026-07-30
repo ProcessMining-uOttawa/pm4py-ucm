@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.6] — 2026-07-30
+
+An attribute-based log filter written in the ƒ metric language (which gained
+categorical equality to support it), and a collapsible log-source section.
+
+### Added
+
+- **The ƒ custom-formula language gained categorical equality.** Alongside its
+  numeric/temporal expressions, a formula can now compare a categorical case
+  attribute to a value: `attr("Channel") == "Web"` (and `!=`), matched against
+  the attribute's value dictionary and yielding a per-case `1`/`0`/null. A
+  quoted value is legal only as one side of such an `==`/`!=`; anywhere else it
+  is an error. Mirrored in both the Python evaluator and `dash-engine.js`
+  (pinned by the parity test), so dashboard metrics get it too.
+
+### Added — Web app (V5)
+
+- **Attribute-based log filter.** A new **Attribute filter (ƒ)** box under **Log
+  filters** keeps the cases whose per-case ƒ predicate is true — the same
+  grammar as a custom dashboard metric, e.g. `attr("Channel") == "Web"`,
+  `attr("amount") > 500 and duration() < 30`. It rides in `filter_spec` as
+  `attr_expr`, so it round-trips through save/resume and the exported Python
+  pipeline like every other filter. (New public helper
+  `pm4py_ucm.algo.dashboards.predicate_case_ids`.)
+
+### Changed — Web app (V5)
+
+- **The log-source picker and CSV column mapping are now collapsible.** They
+  live in one **📁 Log source & columns** expander that auto-opens while there
+  is no usable log (or a CSV whose columns still need Apply) and collapses once
+  mining can proceed, reclaiming the vertical space they used to take on every
+  view.
+
 ## [0.7.5] — 2026-07-28
 
 Two bug fixes: model families no longer hang while computing statistics on logs

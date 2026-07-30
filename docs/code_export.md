@@ -58,7 +58,7 @@ Nearly 1:1 with the public API (`pm4py_ucm.__all__`):
 | Session config | Emitted code |
 |---|---|
 | `LogRef` + `csv_columns` | `pm4py.read_xes(...)` / read CSV + `format_dataframe(...)` |
-| `filter_spec` (incl. `rename_map`) | pre-mining transform (see §6a) |
+| `filter_spec` (incl. `rename_map`, `attr_expr`) | pre-mining transform (see §6a) |
 | `noise_threshold`, `min_support`, `notation`, `decomposition` | `discover_ucm_inductive(log, parameters=…, decomposition=…)` |
 | `resource_attribute` | `discover_resources(...)` + `bind_performers(...)` |
 | `overlay_nodes`, `overlay_edges`, `overlay_heatmap*` | `annotate_performance(...)` (+ heat-map render args) |

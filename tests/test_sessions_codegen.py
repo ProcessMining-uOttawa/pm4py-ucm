@@ -368,6 +368,31 @@ def test_emitted_apply_log_filters_applies_duration_pct():
     assert sorted(slowest10["case:concept:name"].unique()) == ["c10"]
 
 
+def test_emitted_apply_log_filters_applies_attr_expr():
+    """Exec the emitted helpers and confirm ``apply_log_filters`` applies the
+    ƒ attribute predicate (a categorical equality over a case attribute)."""
+    pd = pytest.importorskip("pandas")
+    pytest.importorskip("pm4py")
+    ns = {"__name__": "codegen_test"}
+    exec(compile(generate_script(_doc({})), "gen.py", "exec"), ns)
+
+    base = pd.Timestamp("2026-01-01", tz="UTC")
+    rows = []
+    for i in range(1, 7):  # c01..c06, channel Web / Phone by parity
+        cid = f"c{i:02d}"
+        chan = "Web" if i % 2 else "Phone"
+        rows.append((cid, "A", base, chan))
+        rows.append((cid, "B", base + pd.Timedelta(days=1), chan))
+    df = pd.DataFrame(rows, columns=[
+        "case:concept:name", "concept:name", "time:timestamp", "case:channel"])
+
+    web = ns["apply_log_filters"](df, {"attr_expr": 'attr("channel") == "Web"'})
+    assert sorted(web["case:concept:name"].unique()) == ["c01", "c03", "c05"]
+    notweb = ns["apply_log_filters"](
+        df, {"attr_expr": 'attr("channel") != "Web"'})
+    assert sorted(notweb["case:concept:name"].unique()) == ["c02", "c04", "c06"]
+
+
 def test_emitted_read_log_maps_role_column_named_concept_name(tmp_path):
     """Exec the emitted ``read_log`` on a CSV whose *role* column is literally
     ``concept:name`` and whose activity is a different column. The role/resource
