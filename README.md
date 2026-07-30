@@ -58,9 +58,11 @@ renaming** applied before mining across every view:
 - **Model** — upload an event log (XES or CSV), tune the inductive
   miner / decomposition / performer settings interactively, optionally
   **filter the log** (range sliders over activity- and variant-frequency
-  ranks, an exclude list, a date range, and a **cycle-time percentile** band
-  that keeps the fastest or slowest cases by end-to-end duration) and
-  **rename or merge activities**
+  ranks, an exclude list, a date range, a **cycle-time percentile** band
+  that keeps the fastest or slowest cases by end-to-end duration, and an
+  **attribute filter** written in the ƒ metric language — e.g.
+  `attr("Channel") == "Web" and duration() > 5`) and **rename or merge
+  activities**
   before mining, preview the diagram in UCM or BPMN notation, and download
   the rendered PNG, the `.jucm` file, or the **filtered log itself** as
   XES/CSV. The filter and rename are global — every view below (and its

@@ -131,6 +131,14 @@ def apply_log_filters(log, filter_spec):
         keep -= set(exclude or ())
         df = pm4py.filter_event_attribute_values(
             df, "concept:name", keep, level="event", retain=True)
+    attr_expr = spec.get("attr_expr")
+    if attr_expr and str(attr_expr).strip():
+        # Keep cases whose per-case ƒ predicate is true, via the same fact
+        # table + formula evaluator the dashboards use (attr("X") == "Web",
+        # attr("amount") > 500 and duration() < 30, ...).
+        from pm4py_ucm.algo.dashboards import predicate_case_ids
+        keep_ids = set(predicate_case_ids(df, str(attr_expr)))
+        df = df[df["case:concept:name"].isin(keep_ids)]
     dpct = spec.get("duration_pct")
     if dpct:
         lo_pct, hi_pct = dpct       # percentile band; 0 = fastest, 100 = slowest
