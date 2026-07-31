@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.7] — 2026-07-31
+
+Shape-fitted decomposition: `"auto"` now scales its map-size parameters to the
+process-tree shape instead of fixed magic numbers, and the Model-view control is
+reworked (off / auto / two pre-sets / Custom).
+
 ### Changed
 
 - **Decomposition `"auto"` now fits its parameters to the process-tree shape**
