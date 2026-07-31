@@ -75,6 +75,15 @@ def test_decomposition_off_vs_dict():
     dic = generate_script(_doc({
         "decomposition": [["max_leaves_per_map", 10], ["on_loop", True]]}))
     assert "DECOMPOSITION = {'max_leaves_per_map': 10, 'on_loop': True}" in dic
+    # The "auto" (shape-fit) spec carries the sentinel through verbatim, so the
+    # emitted script's discover_ucm_inductive resolves it against its own tree —
+    # a resumed session and its export decompose identically.
+    auto = generate_script(_doc({"decomposition": [
+        ["max_leaves_per_map", "auto"], ["min_leaves_to_decompose", "auto"],
+        ["on_root_sequence", True]]}))
+    assert "'max_leaves_per_map': 'auto'" in auto
+    assert "'min_leaves_to_decompose': 'auto'" in auto
+    compile(auto, "auto.py", "exec")
 
 
 def test_filter_spec_and_rename_emitted():

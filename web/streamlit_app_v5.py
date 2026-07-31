@@ -2465,16 +2465,32 @@ def _apply_project_config(cfg, fh, csv_columns=None):
     if "notation" in cfg:
         ss["cfg_notation"] = "BPMN" if cfg["notation"] == "bpmn" else "UCM"
     if "decomposition" in cfg:
+        from pm4py_ucm.objects.ucm.conversion.decomposition import AUTO_DIM
         _dec = cfg["decomposition"]
-        if _dec == "off":
+        if _dec == "off" or not _dec:
             ss["applied_decomp"] = "off"
             ss["cfg_decomp_preset"] = "off"
         else:
-            ss["applied_decomp"] = tuple(sorted(
-                (str(k), v) for k, v in (tuple(p) for p in _dec)))
-            ss["cfg_decomp_preset"] = "auto"
-            notes.append("decomposition was restored as its effective spec; "
-                         "the preset selector may read 'auto'.")
+            _dd = {str(k): v for k, v in (tuple(p) for p in _dec)}
+            ss["applied_decomp"] = tuple(sorted(_dd.items()))
+            # Boundary-rule toggles (fixed keys, shared across modes).
+            for _bk in ("on_root_sequence", "on_parallel",
+                        "on_alternative", "on_loop"):
+                if _bk in _dd:
+                    ss[f"decomp_{_bk}"] = bool(_dd[_bk])
+            # Map the stored dimensions back to the dropdown choice.
+            _mx = _dd.get("max_leaves_per_map")
+            _mn = _dd.get("min_leaves_to_decompose")
+            if _mx == AUTO_DIM or _mn == AUTO_DIM:
+                ss["cfg_decomp_preset"] = "auto"
+            elif (_mx, _mn) == (8, 4):
+                ss["cfg_decomp_preset"] = "Pre-set: Max=8/Min=4"
+            elif (_mx, _mn) == (6, 3):
+                ss["cfg_decomp_preset"] = "Pre-set: Max=6/Min=3"
+            else:
+                ss["cfg_decomp_preset"] = "auto"
+                notes.append("decomposition dimensions didn't match a preset; "
+                             "restored as 'auto' (shape-fitted).")
     if "resource_attribute" in cfg:
         _ra = cfg["resource_attribute"]
         if _ra in ("org:role", "org:resource"):
@@ -2687,76 +2703,50 @@ with st.sidebar:
     )
 
     st.subheader("Decomposition")
+    from pm4py_ucm.objects.ucm.conversion.decomposition import AUTO_DIM
+    # Fixed-dimension presets (max / min leaves per map). "auto" instead fits
+    # both to the mined tree's shape (see suggest_decomposition).
+    _DECOMP_PRESETS = {
+        "Pre-set: Max=8/Min=4": (8, 4),
+        "Pre-set: Max=6/Min=3": (6, 3),
+    }
     decomposition_preset = st.selectbox(
         "Decomposition",
-        options=["off", "auto", "aggressive"],
+        options=["off", "auto"] + list(_DECOMP_PRESETS),
         index=0, key="cfg_decomp_preset",
         help=(
             "Splits the Model tab's UCM into a root map + plug-ins. "
-            "The Scenarios tab always runs flat (decomposition=None) "
-            "so every OR-fork can receive a variant_id condition."
+            "**auto** fits the map size to the mined tree's shape; a "
+            "**Pre-set** pins a fixed max/min activity-leaves per map. The "
+            "Scenarios tab always runs flat (decomposition=None) so every "
+            "OR-fork can receive a variant_id condition."
         ),
     )
-    decomposition_overrides: Dict[str, Any] = {}
-    if decomposition_preset != "off":
-        from pm4py_ucm.objects.ucm.conversion.decomposition import (
-            AUTO_DEFAULTS, AGGRESSIVE_DEFAULTS,
-        )
-        # V3-specific overrides on the package presets: tighter caps
-        # than the API defaults so the multi-map UCMs the web preview
-        # renders stay readable on screen. The package's own defaults
-        # remain unchanged.
-        if decomposition_preset == "auto":
-            _preset_defaults = dict(
-                AUTO_DEFAULTS,
-                max_leaves_per_map=8,
-                min_leaves_to_decompose=4,
-            )
-        else:
-            _preset_defaults = dict(
-                AGGRESSIVE_DEFAULTS,
-                max_leaves_per_map=6,
-                min_leaves_to_decompose=3,
-            )
-        with st.expander("Advanced", expanded=False):
-            kp = f"decomp_{decomposition_preset}_"
-            for key, label, help_txt in [
-                ("on_root_sequence", "on_root_sequence",
-                 "Each child of a top-level sequence becomes a plug-in."),
-                ("on_parallel", "on_parallel",
-                 "Each + branch becomes a plug-in."),
-                ("on_alternative", "on_alternative",
-                 "Each XOR branch becomes a plug-in."),
-                ("on_loop", "on_loop",
-                 "Each loop expansion becomes a plug-in."),
-            ]:
-                decomposition_overrides[key] = st.checkbox(
-                    label, value=bool(_preset_defaults[key]),
-                    key=kp + key, help=help_txt,
-                )
-            decomposition_overrides["max_leaves_per_map"] = st.number_input(
-                "max_leaves_per_map",
-                min_value=1, max_value=500,
-                value=int(_preset_defaults["max_leaves_per_map"]),
-                step=1, key=kp + "mx",
-            )
-            decomposition_overrides["min_leaves_to_decompose"] = st.number_input(
-                "min_leaves_to_decompose",
-                min_value=1, max_value=100,
-                value=int(_preset_defaults["min_leaves_to_decompose"]),
-                step=1, key=kp + "mn",
-            )
-            decomposition_overrides["balance_ratio"] = st.slider(
-                "balance_ratio",
-                min_value=0.0, max_value=1.0,
-                value=float(_preset_defaults["balance_ratio"]),
-                step=0.05, key=kp + "br",
-            )
-
     if decomposition_preset == "off":
         candidate_spec: object = "off"
     else:
-        candidate_spec = tuple(sorted(decomposition_overrides.items()))
+        # Which operators become plug-in boundaries — kept as toggles, all on
+        # by default. Fixed keys (not preset-scoped) so a toggle persists when
+        # the dropdown changes; they apply to auto and the pre-sets alike.
+        _on: Dict[str, Any] = {}
+        with st.expander("Advanced — boundary rules", expanded=False):
+            for key, help_txt in [
+                ("on_root_sequence",
+                 "Each child of a top-level sequence becomes a plug-in."),
+                ("on_parallel", "Each + branch becomes a plug-in."),
+                ("on_alternative", "Each XOR branch becomes a plug-in."),
+                ("on_loop", "Each loop expansion becomes a plug-in."),
+            ]:
+                _on[key] = st.checkbox(
+                    key, value=True, key=f"decomp_{key}", help=help_txt)
+        if decomposition_preset == "auto":
+            _dims = {"max_leaves_per_map": AUTO_DIM,
+                     "min_leaves_to_decompose": AUTO_DIM}
+        else:
+            _mx, _mn = _DECOMP_PRESETS[decomposition_preset]
+            _dims = {"max_leaves_per_map": _mx, "min_leaves_to_decompose": _mn}
+        candidate_spec = tuple(sorted(
+            {**_on, **_dims, "balance_ratio": 0.2}.items()))
     if "applied_decomp" not in st.session_state:
         st.session_state["applied_decomp"] = candidate_spec
     if candidate_spec != st.session_state["applied_decomp"]:
