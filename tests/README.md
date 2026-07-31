@@ -1,6 +1,6 @@
 # Test suite
 
-**950 tests** across **28 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
+**951 tests** across **28 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
 
 > Regenerate this file with `python tests/gen_readme.py` after adding or removing tests. Purposes are the first sentence of each module's docstring; edit the docstring, not this table.
 
@@ -18,7 +18,7 @@
 |  | [`test_expression_minimizer.py`](test_expression_minimizer.py) | Unit tests for the boolean simplifier used on data-driven OR-fork conditions. | 17 |
 | | _Discovery & conversion subtotal_ | | **95** |
 | **Resources & performers** | [`test_resources.py`](test_resources.py) | Tests for resource mining and performer binding. | 22 |
-| **Scenario synthesis** | [`test_scenario_synthesis.py`](test_scenario_synthesis.py) | End-to-end smoke tests for variant clustering + scenario synthesis. | 45 |
+| **Scenario synthesis** | [`test_scenario_synthesis.py`](test_scenario_synthesis.py) | End-to-end smoke tests for variant clustering + scenario synthesis. | 46 |
 | **Model families** | [`test_family.py`](test_family.py) | Tests for attribute-based model families. | 49 |
 |  | [`test_family_stats.py`](test_family_stats.py) | Tests for the family statistics layer and the HTML report. | 32 |
 |  | [`test_partition_advisor.py`](test_partition_advisor.py) | Tests for the deterministic partition advisor (docs/ai_insights.md §4.1b). | 8 |
@@ -41,6 +41,6 @@
 |  | [`test_sessions_registry.py`](test_sessions_registry.py) | Tests for the Session Parameter Registry (``web/sessions/registry.py``). | 10 |
 | | _Sessions (save / share / resume) subtotal_ | | **46** |
 | **Progress / infrastructure** | [`test_progress.py`](test_progress.py) | Tests for the progress-reporting layer and the vectorized DataFrame resource miner. | 15 |
-| | **Total** | | **950** |
+| | **Total** | | **951** |
 
 See the repository [`README.md`](../README.md#testing) for how to run the suite, and [`docs/metrics.md`](../docs/metrics.md) for the metric definitions the validation tests enforce.

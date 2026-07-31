@@ -130,6 +130,44 @@ def test_loop_decrement_is_not_placed_inside_a_choice():
         f"expected a dedicated always-executed decrement node, got {sites}")
 
 
+def test_loop_decrement_runs_after_the_bodys_choices():
+    """The decrement must sit at the END of the body, immediately before
+    the LoopFork.
+
+    The inside-loop XOR conditions partition the counter as
+    ``(lower, upper]`` with ``upper`` starting at the counter's initial
+    value M_V, so they assume the counter still reads M_V the first time
+    a body XOR is evaluated. Decrementing at the TOP of the body shifts
+    every evaluation down by one and makes the topmost range
+    unreachable — the branch that should fire on the first iteration
+    never fires at all, and its activity appears in no scenario. (Seen
+    on a real log: "First symptoms (if known)" was never executed by any
+    of the four generated scenarios.)"""
+    from pm4py_ucm.objects.ucm.obj import UCM
+
+    tree = _seq(_loop(_xor(_leaf("A"), _leaf("B")), _tau()), _leaf("C"))
+    log = [("c1", ["A", "B", "C"]), ("c2", ["A", "B", "C"]),
+           ("c3", ["B", "C"])]
+    ucm = pm4py_ucm.discover_ucm_inductive(
+        log, parameters={"process_tree": tree})
+    _scenarios.synthesize_scenarios(ucm, tree, _clustering.cluster(log, tree))
+
+    decrements = [n for m in ucm.maps for n in m.nodes
+                  if isinstance(n, UCM.RespRef)
+                  and n.resp_def is not None
+                  and (n.resp_def.expression or "").count("- 1")]
+    assert decrements, "the loop must decrement its counter"
+    for ref in decrements:
+        targets = [a.target for a in ref.succ_connections]
+        assert len(targets) == 1
+        assert isinstance(targets[0], UCM.OrFork) and \
+            targets[0].name == "LoopFork", (
+                "the decrement must be the last thing in the body, so the "
+                "body's choices see the counter's entering value; it is "
+                f"followed by {type(targets[0]).__name__} "
+                f"{targets[0].name!r}")
+
+
 def test_loop_entry_guard_does_not_raise_an_and_joins_arity():
     """An AND-join fires only when EVERY incoming arc has delivered, so
     the loop-entry guard's bypass arc must not land on one directly: a
@@ -604,10 +642,15 @@ def test_synthesis_loop_entry_guard_excluded_from_orfork_condition_emission():
         assert _LOOP_COUNTER_RE.search(expr)
 
 
-def test_synthesis_loop_body_responsibility_carries_decrement():
-    """A body responsibility (Review in this fixture) is decorated
-    with the counter-decrement expression so the counter steps down
-    once per loop iteration."""
+def test_synthesis_loop_body_carries_decrement():
+    """The loop body carries the counter-decrement expression, so the
+    counter steps down once per iteration.
+
+    It rides on a dedicated node at the end of the body rather than on a
+    body activity (``Review`` here): the position has to be one nothing
+    can bypass AND after the body's choices — see
+    ``test_loop_decrement_runs_after_the_bodys_choices`` and
+    ``test_loop_decrement_is_not_placed_inside_a_choice``."""
     loop_tree = T(operator="->", children=[
         _leaf("Open"),
         T(operator="*", children=[_leaf("Review"), _leaf("Revise")]),
@@ -622,10 +665,17 @@ def test_synthesis_loop_body_responsibility_carries_decrement():
     _scenarios.synthesize_scenarios(
         ucm, loop_tree, result, emit_conditions=True,
     )
-    body_resp = next(r for r in ucm.responsibilities if r.name == "Review")
+    decrements = [r for r in ucm.responsibilities
+                  if "- 1" in (r.expression or "")]
+    assert len(decrements) == 1, (
+        f"expected exactly one decrement, got {[r.name for r in decrements]}")
+    body_resp = decrements[0]
     assert _LOOP_COUNTER_RE.search(body_resp.expression or "")
     assert "= " in body_resp.expression
-    assert "- 1" in body_resp.expression
+    # The activity itself is left clean — the decrement is not smuggled
+    # onto a step the modeller wrote.
+    review = next(r for r in ucm.responsibilities if r.name == "Review")
+    assert not (review.expression or "")
 
 
 def test_synthesis_per_variant_loop_counter_initialised_to_max_iterations():
@@ -1307,25 +1357,34 @@ def test_synthesis_decomposed_pairs_each_loop_with_its_own_responsibility():
     result = _clustering.cluster(log, tree)
     _scenarios.synthesize_scenarios(ucm, tree, result)
 
-    # Pair every responsibility carrying a Loop_<X> decrement with its
-    # owning loop name. Each decrement must reference the loop whose
-    # body the responsibility lives in.
-    body_decrements: dict = {}  # {responsibility_name: counter_name}
-    for resp in ucm.responsibilities:
-        expr = resp.expression or ""
-        m = re.search(r"(Loop_\w+) = \1 - 1", expr)
-        if m:
-            body_decrements[resp.name] = m.group(1)
+    # Each loop's decrement must land in the map holding that loop's
+    # body. Alpha's loop is in the root map, Beta's in the plug-in; if
+    # the cross-map correlation got mixed up, a decrement would be
+    # spliced into the wrong map (and so into the wrong loop's body).
+    from pm4py_ucm.objects.ucm.obj import UCM
 
-    # Alpha is inside Loop_Alpha; Beta inside Loop_Beta. If the cross-
-    # map correlation got mixed up, one of the bodies would carry
-    # the OTHER loop's decrement.
-    assert body_decrements.get("Alpha") == "Loop_Alpha", (
-        f"Alpha must decrement Loop_Alpha, got {body_decrements.get('Alpha')!r}"
-    )
-    assert body_decrements.get("Beta") == "Loop_Beta", (
-        f"Beta must decrement Loop_Beta, got {body_decrements.get('Beta')!r}"
-    )
+    map_of: dict = {}          # responsibility name -> map name
+    for m in ucm.maps:
+        for n in m.nodes:
+            if isinstance(n, UCM.RespRef) and n.resp_def is not None:
+                map_of[n.resp_def.name] = m.name
+
+    decrements = {}            # counter name -> responsibility name
+    for resp in ucm.responsibilities:
+        found = re.search(r"(Loop_\w+) = \1 - 1", resp.expression or "")
+        if found:
+            decrements[found.group(1)] = resp.name
+
+    assert set(decrements) == {"Loop_Alpha", "Loop_Beta"}, (
+        f"expected one decrement per loop, got {decrements}")
+    assert map_of[decrements["Loop_Alpha"]] == map_of["Alpha"], (
+        "Loop_Alpha's decrement landed in a different map from Alpha: "
+        f"{map_of[decrements['Loop_Alpha']]!r} vs {map_of['Alpha']!r}")
+    assert map_of[decrements["Loop_Beta"]] == map_of["Beta"], (
+        "Loop_Beta's decrement landed in a different map from Beta: "
+        f"{map_of[decrements['Loop_Beta']]!r} vs {map_of['Beta']!r}")
+    assert map_of["Alpha"] != map_of["Beta"], (
+        "fixture must place the two loops in different maps")
 
 
 def test_synthesis_decomposed_loop_into_stub_keeps_single_bound_entry():

@@ -777,85 +777,35 @@ def _label(node):
     return getattr(node, "label", None)
 
 
-def _body_exit_reachable_avoiding(
-    loop_join: UCM.PathNode, loop_fork: UCM.PathNode,
-    avoid: UCM.PathNode,
-) -> bool:
-    """Can the body run from ``loop_join`` to ``loop_fork`` **without**
-    passing through ``avoid``?
-
-    Walking forward from LoopJoin and stopping at LoopFork enumerates
-    exactly the body: the redo back-edge runs the other way (LoopFork ->
-    redo -> LoopJoin) so it is never traversed."""
-    seen = {id(loop_join), id(avoid)}
-    stack: List[UCM.PathNode] = [
-        arc.target for arc in loop_join.succ_connections
-    ]
-    while stack:
-        node = stack.pop()
-        if id(node) in seen:
-            continue
-        seen.add(id(node))
-        if node is loop_fork:
-            return True          # reached the exit while avoiding ``avoid``
-        stack.extend(arc.target for arc in node.succ_connections)
-    return False
-
-
-def _find_loop_body_resp_ref(
-    loop_join: UCM.PathNode, loop_fork: UCM.PathNode,
-) -> Optional[UCM.RespRef]:
-    """Return a body :class:`UCM.RespRef` that runs on **every**
-    iteration, or ``None`` if the body has no such responsibility.
-
-    The decrement expression rides on this node, so it must be one the
-    traversal cannot miss. Taking simply the *first* responsibility
-    reachable from LoopJoin is not enough: when the body starts with a
-    choice, that responsibility sits inside one branch, and an iteration
-    taking any other branch leaves the counter untouched — the redo
-    condition stays true and the scenario spins forever. (Seen on a real
-    log whose loop body was ``X(A, ->(…))``: every synthesised scenario
-    deadlocked in jUCMNav, reported variously as an infinite loop, a
-    blocked AND-join, or a scenario that never reached its end point.)
-
-    So each candidate is checked for **domination** — remove it and see
-    whether the body can still reach LoopFork. Callers fall back to
-    :func:`_synthesize_decrement_resp_ref`, which splices a dedicated
-    node directly after LoopJoin where nothing can bypass it."""
-    visited = {id(loop_join)}
-    queue: List[UCM.PathNode] = [
-        arc.target for arc in loop_join.succ_connections
-    ]
-    while queue:
-        node = queue.pop(0)
-        if id(node) in visited:
-            continue
-        visited.add(id(node))
-        if node is loop_fork:
-            continue
-        if (isinstance(node, UCM.RespRef) and node.resp_def is not None
-                and not _body_exit_reachable_avoiding(
-                    loop_join, loop_fork, node)):
-            return node
-        for arc in node.succ_connections:
-            queue.append(arc.target)
-    return None
-
-
 def _synthesize_decrement_resp_ref(
     ucm: UCM,
     target_map: UCM.UCMmap,
-    loop_join: UCM.PathNode,
+    loop_fork: UCM.PathNode,
     counter_name: str,
 ) -> UCM.RespRef:
     """Insert a synthetic ``decrement_<counter>`` :class:`UCM.RespRef`
-    immediately after ``loop_join`` and return it.
+    at the **end** of the loop body — on the arc entering ``loop_fork``
+    — and return it.
 
-    Called for loops whose body contains no real responsibility (e.g.
-    a tau body). The synthesizer needs *some* node inside the body to
-    carry the ``counter = counter - 1`` expression, so we create one
-    and splice it onto the first outgoing connection of LoopJoin. The
-    visual layout coordinates default to (0, 0); the auto-layouter
+    Two properties make this the right place, and both matter:
+
+    * **it always runs.** Every path through the body converges on the
+      LoopFork, so nothing can bypass it. Attaching the decrement to an
+      arbitrary body responsibility instead risks a body that starts
+      with a choice, where that responsibility sits in one branch and
+      iterations taking another never decrement — the counter never
+      reaches 0 and the scenario spins forever.
+    * **it runs after the body's choices.** The inside-loop XOR
+      conditions (see :func:`_set_inside_loop_xor_conditions`) partition
+      the counter's range as ``(lower, upper]`` with ``upper`` starting
+      at the counter's *initial* value ``M_V``, so they assume the
+      counter still holds ``M_V`` the first time a body XOR is
+      evaluated. Decrementing at the top of the body instead shifts
+      every evaluation down by one, leaving the topmost range
+      unreachable: the branch that should fire on the first iteration
+      never fires at all.
+
+    The visual layout coordinates default to (0, 0); the auto-layouter
     would normally re-flow on the next save, but this kind of edit
     happens after the converter's layout pass — see the comment in
     :func:`_wire_loop_counters` for the resulting trade-off."""
@@ -863,12 +813,12 @@ def _synthesize_decrement_resp_ref(
     resp_def = ucm.get_or_add_responsibility(name)
     ref = UCM.RespRef(name=name, resp_def=resp_def)
     target_map.add_node(ref)
-    # Splice into LoopJoin's outgoing arc: src -> ref -> original_target.
-    out_arc = loop_join.succ_connections[0]
-    next_node = out_arc.target
-    target_map.remove_connection(out_arc)
-    target_map.add_connection(loop_join, ref)
-    target_map.add_connection(ref, next_node)
+    # Splice into the body's arc INTO LoopFork: src -> ref -> LoopFork.
+    in_arc = loop_fork.pred_connections[0]
+    src, cond = in_arc.source, in_arc.condition
+    target_map.remove_connection(in_arc)
+    target_map.add_connection(src, ref, condition=cond)
+    target_map.add_connection(ref, loop_fork)
     return ref
 
 
@@ -978,11 +928,12 @@ def _wire_loop_counters(
         # synthesising the decrement responsibility into the root map
         # would put it outside the loop body.
         lj_map = _owning_map(ucm, lj) or ucm.maps[0]
-        body_resp = _find_loop_body_resp_ref(lj, lf)
-        if body_resp is None or body_resp.resp_def is None:
-            body_resp = _synthesize_decrement_resp_ref(
-                ucm, lj_map, lj, name,
-            )
+        # Always a dedicated node at the end of the body, never an
+        # arbitrary body responsibility: the position has to be both
+        # unavoidable and after the body's choices, and only this one
+        # is. See _synthesize_decrement_resp_ref for what goes wrong
+        # with each of the alternatives.
+        body_resp = _synthesize_decrement_resp_ref(ucm, lj_map, lf, name)
         decrement = f"{name} = {name} - 1;"
         resp_def = body_resp.resp_def
         existing = resp_def.expression or ""

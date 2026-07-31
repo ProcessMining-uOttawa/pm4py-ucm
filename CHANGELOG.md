@@ -24,6 +24,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     otherwise a dedicated decrement node is spliced directly after the
     LoopJoin, where nothing can bypass it (that fallback already
     existed for tau-only bodies).
+  - a **branch inside a loop body could never fire**. The inside-loop
+    XOR conditions partition the counter as `(lower, upper]` with
+    `upper` starting at the counter's initial value, so they assume the
+    counter still reads that value the first time a body choice is
+    evaluated. Decrementing at the top of the body shifted every
+    evaluation down by one and left the topmost range unreachable — the
+    branch that should fire on the first iteration never fired, and its
+    activity appeared in no scenario at all. The decrement now sits at
+    the **end** of the body, immediately before the LoopFork: the one
+    position that is both unavoidable and after the body's choices. It
+    is always a dedicated node, so a modeller's own activity is no
+    longer decorated with bookkeeping either.
   - the **loop-entry guard raised an AND-join's arity**. Its bypass arc
     was wired straight to the post-loop node; when that node is an
     AND-join — which fires only once *every* incoming arc has delivered
