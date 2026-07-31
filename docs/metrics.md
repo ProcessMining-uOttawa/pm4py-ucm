@@ -60,6 +60,7 @@ Computed per distinct activity name.
 | `repeat_frequency`    | `frequency − case_coverage` = repeat executions (events beyond the first per case) — a **rework** indicator. |
 | `mean/median/min/max/total/std/p90/p95_time` | **service time** = `completion − start`, aggregated over the activity's events. **Interval logs only**; omitted entirely on single-timestamp logs. |
 | `sojourn_mean/median/min/max/total/std/p90/p95_time` | **sojourn time** = `completion − previous event's completion` in the same case, aggregated over the activity's events. Defined on **any** timestamped log. |
+| `traversal_frequency` | replay-based: how many times the *model* walks this activity — see [§9](#9-traversal-metrics-replay-on-the-model). Differs from `frequency` wherever the model over- or under-generalises. |
 
 `std` is the **sample** standard deviation (`ddof = 1`) and is omitted
 when the metric has fewer than two samples; `p90` / `p95` are the 90th /
@@ -92,6 +93,13 @@ byte-unchanged by their presence.
 
 Computed per directly-follows pair `(a, b)` observed in the log.
 
+> **These counts measure event *adjacency*, not flow.** On a model with
+> concurrency or silent skips they do not conserve — an activity's
+> outgoing edge can read a small fraction of the activity's own count,
+> because the event that actually follows it belongs to a parallel
+> branch. Use the **traversal metrics of [§9](#9-traversal-metrics-replay-on-the-model)**
+> when you need numbers that add up.
+
 | Metric                | Definition |
 |-----------------------|------------|
 | `frequency`           | number of times `b` directly follows `a` (across all cases). |
@@ -99,6 +107,7 @@ Computed per directly-follows pair `(a, b)` observed in the log.
 | `relative_frequency`  | `frequency / (n_events − n_cases)` — share of all directly-follows traversals. Sums to 1 across pairs. |
 | `mean/median/min/max/total/std/p90/p95_time` | **waiting time** between the two events, aggregated over all occurrences of the pair. |
 | `percentage`          | *(overlay only, on OR-fork branches)* this branch's share of its fork's outgoing traversals — see [§3.3](#33-branch-percentage). |
+| `traversal_frequency`, `traversal_percentage` | replay-based — see [§9](#9-traversal-metrics-replay-on-the-model). |
 
 **Waiting time depends on the log kind:**
 
@@ -303,3 +312,101 @@ interval-vs-completion waiting semantics of §3 are accounted for. The
 suite ships a pm4py differential test on a synthetic single-timestamp
 log (skipped when pm4py is absent), so the reconciliation runs in CI
 without any private data.
+
+---
+
+## 9. Traversal metrics (replay on the model)
+
+Everything above counts **the log**: events, and pairs of events that
+were adjacent in a trace. Those are the right definitions for what they
+measure, but neither answers the question a reader actually asks of a
+diagram — *how many cases go this way?* — and on a model with
+concurrency the difference is not small.
+
+### 9.1 Why the log-based counts don't conserve
+
+A directly-follows pair `(a, b)` exists only when `b` immediately follows
+`a` **in the trace**. Two structures break that:
+
+* **Concurrency.** On a parallel block the activity that actually follows
+  `a` is usually one from a *sibling* branch — a transition the model has
+  no edge for. The traversal is counted nowhere, so `a`'s outgoing edge
+  reads far less than `a` itself.
+* **Silent skips.** A `tau` branch produces no event, so a choice whose
+  alternative is "do nothing" has no pair to count on that side: the
+  observable branch reports **100 %** no matter how rare it is.
+
+Both were observed on a 258-case clinical log: an activity with 257
+executions whose only outgoing edge read `40`; a fork with 197 inflow
+whose choice split `25`/`4`; and a death branch reported at `100 %` where
+the true figure is `25 %` (64 of 258).
+
+### 9.2 Definition
+
+Traversal metrics count how often the log **walks the model**, by
+replaying each case on the process tree the model was built from. A
+process tree is block-structured, so a replay gives an exact count per
+tree node, and the counts conserve by construction:
+
+| Metric | Definition |
+|--------|------------|
+| `traversal_frequency` *(activities and edges)* | number of times the counted cases walk this element. A node inside a loop body counts once per iteration. |
+| `traversal_percentage` *(OR-fork branches)* | the branch's share of its fork's own traversals, rendered **with the base it divides** (`25% of 258`). |
+
+Identities that hold by construction — each is asserted in
+[`tests/test_traversal.py`](../tests/test_traversal.py):
+
+* an activity's count equals the count on its incoming and on its
+  outgoing edge;
+* every branch of a **parallel** fork carries the fork's inflow (each
+  case runs all of them);
+* the branches of a **choice** sum to the fork's own count, so
+  `traversal_percentage` over one fork sums to 100 %;
+* a silent branch is counted like any other.
+
+Counts are attributed to model elements through provenance: every node
+and connection the tree→UCM converter emits records the `id()` of the
+subtree it came from. The counts are keyed by that subtree, so they
+survive decomposition into plug-in maps (a stub carries the count of the
+subtree it stands for).
+
+### 9.3 Coverage — the number to report alongside
+
+A trace only has an exact parse if it **fits** the tree, and a model
+mined with a noise threshold deliberately discards infrequent behaviour.
+Fit is therefore a property of *how much you simplified*, not of the
+counting. On the clinical log above:
+
+| `noise_threshold` | cases fitting exactly |
+|---|---|
+| 0.0 | 258 / 258 (100 %) |
+| 0.1 | 191 / 258 (74 %) |
+| 0.2 | 144 / 258 (56 %) |
+
+Two strategies, selected by `repair`:
+
+* **`repair=False`** — count only the cases that fit. Every number is a
+  real observed case, but they describe the fitting sub-log alone and
+  systematically under-report.
+* **`repair=True`** *(default)* — additionally align each non-fitting
+  case to its nearest path through the model and count that path.
+  Coverage reaches the whole log. The trade-off is that a *repaired*
+  path is counted rather than an observed one: for an activity the model
+  treats as mandatory, alignment inserts the missing execution, so
+  `traversal_frequency` can exceed the observed `frequency`. That gap is
+  meaningful — it is how much the model over-claims.
+
+`TraversalStats` reports `fitting_cases`, `repaired_cases`,
+`unexplained_cases`, `coverage` and `fitting_ratio` so a consumer can
+state what the numbers cover. **`fitting_ratio` is the one to show a
+reader**; the web app puts it under the model's metrics row and, below
+70 %, points at the noise threshold as the knob that changes it.
+
+### 9.4 Cost
+
+Traversal counts are a function of the *parse*, not of the trace, so the
+work is deduplicated twice: once per distinct activity sequence (which is
+what saves the replay itself) and again per concurrency-aware signature
+(which is what the counts are keyed on). On the clinical log, 258 cases
+reduce to 111 distinct sequences and 14 signatures. Alignment repair
+likewise runs once per distinct non-fitting sequence.

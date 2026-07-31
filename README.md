@@ -104,6 +104,16 @@ activities and edges, applied to every tab's outputs) with an optional
 **heat-map** that colours and thickens activities and edges by value. See
 [`docs/model_families.md`](docs/model_families.md).
 
+The overlay's default counts are **replay-based**: they measure how often
+the log walks each part of the model, so the numbers **conserve** —
+an activity's count matches the count on its own edges, parallel branches
+all carry their fork's inflow, and a choice's branches sum to it. (Event
+counts and directly-follows counts, still available, measure different
+things and disagree with each other wherever the model has concurrency or
+a silently skipped branch.) The view reports how much of the log the
+model explains alongside them. See
+[`docs/metrics.md` §9](docs/metrics.md).
+
 Deployed on Streamlit Community Cloud at
 **https://pm4py-ucm.streamlit.app/** (`streamlit_app.py`, the
 deployment's main file, is a shim that runs V5, so that URL always

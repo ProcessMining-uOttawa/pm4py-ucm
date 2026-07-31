@@ -62,6 +62,7 @@ AREAS: dict[str, list[str]] = {
     ],
     "Performance & metrics": [
         "test_performance.py",
+        "test_traversal.py",
         "test_metric_validation.py",
     ],
     "Layout": [

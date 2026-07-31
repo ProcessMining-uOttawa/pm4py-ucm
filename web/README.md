@@ -274,10 +274,34 @@ Downloads:
 
 **Performance overlay & heat-map.** The sidebar's **Performance overlay** group
 annotates the model with up to two activity metrics and two edge metrics
-(frequency, coverage, service / waiting / sojourn times, an OR-fork branch's
-share …) — shown as a small gray sub-line and written to the `.jucm` as
-jUCMNav metadata. Because changing a metric re-annotates the model, the pickers
-stage behind an **Apply metric changes** button. Tick **Heat-map emphasis** to
+(traversal counts, frequency, coverage, service / waiting / sojourn times, an
+OR-fork branch's share …) — shown as a small gray sub-line and written to the
+`.jucm` as jUCMNav metadata. Because changing a metric re-annotates the model,
+the pickers stage behind an **Apply metric changes** button.
+
+*Which count?* The defaults are `traversal_frequency` /
+`traversal_percentage`, which count how often the log **walks the model** —
+computed by replaying the log on the mined process tree. They are the ones
+that **add up**: an activity's count equals the count on its own incoming and
+outgoing edges, every branch of a parallel fork carries the fork's inflow, and
+a choice's branches sum to it. The older `frequency` counts events
+(activities) and *directly-follows pairs* (edges) — how often two activities
+were **adjacent in a trace**. That is a different measurement, and on a model
+with parallel branches or silently skipped ones it is much smaller than the
+real flow: the event that follows an activity is usually one from a sibling
+branch, and a silent skip produces no pair at all (which is how a branch can
+report a bare "100 %"). Both remain available; the diagram caption always says
+which is in use, and a share is shown with the base it divides ("25 % of 258").
+
+*How much of the log does this describe?* Under the metrics row the Model view
+reports how many cases fit the model exactly — e.g. "4,990 of 5,600 cases
+(89 %)". A model mined with a **noise threshold** deliberately drops
+infrequent behaviour, so it explains only part of its log; the remaining cases
+are counted on their closest path through the model, so the numbers still
+cover everything (for an activity the model treats as mandatory that can read
+higher than the events actually observed). Below 70 % the note becomes a
+warning suggesting a lower noise threshold — `0.0` explains every case, at the
+cost of a busier model. See [`docs/metrics.md` §9](../docs/metrics.md). Tick **Heat-map emphasis** to
 additionally colour and thicken activities and edges by the value of the
 **first** metric of each layer: a **time** metric drives a **red** ramp, any
 other a **blue** one, with lighter/thinner = lower and darker/thicker = higher.
