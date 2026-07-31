@@ -91,6 +91,67 @@ AUTO_DEFAULTS: Dict[str, Any] = {
 #: "aggressive" preset — same boundary rules, tighter cap.
 AGGRESSIVE_DEFAULTS: Dict[str, Any] = dict(AUTO_DEFAULTS, max_leaves_per_map=10)
 
+#: Sentinel for a dimension whose value is fitted to the tree shape at
+#: :func:`apply`-time rather than fixed. A decomposition dict may carry it for
+#: ``max_leaves_per_map`` / ``min_leaves_to_decompose`` / ``balance_ratio``;
+#: :func:`suggest_decomposition` supplies the value. This is what the string
+#: spec ``"auto"`` expands to.
+AUTO_DIM = "auto"
+
+
+def suggest_decomposition(tree, *, level: str = "auto") -> Dict[str, Any]:
+    """Decomposition parameters *fitted to the shape* of ``tree``.
+
+    The map layout is set mostly by the tree's operator boundaries (all four
+    ``on_*`` rules are enabled — there is no value in decomposing on only some
+    operator kinds), so the two size knobs are what a good default should scale
+    with the tree's activity-leaf count ``N`` rather than fix at magic numbers:
+
+    * ``max_leaves_per_map = clamp(round(k·√N), 6, 40)`` — a **sub-linear** cap
+      (``k`` = 1.5 for ``"auto"``, 1.0 for ``"fine"``); the force-cut safety net
+      for a wide, flat subtree with no internal boundary to split on.
+    * ``min_leaves_to_decompose = clamp(round(0.15·N), 3, 12)`` — the real
+      fragmentation floor: a large tree gets bigger plug-ins instead of dozens
+      of tiny maps, while a small tree falls below it and renders flat.
+
+    ``balance_ratio`` stays 0.2. Returns a complete options dict for
+    :func:`apply` (no sentinels).
+    """
+    import math
+
+    n = _annotate(tree)[id(tree)]["leaves"] if tree is not None else 0
+    if n <= 0:
+        cap, floor = 8, 4
+    else:
+        k = 1.0 if level == "fine" else 1.5
+        cap = max(6, min(40, round(k * math.sqrt(n))))
+        floor = max(3, min(12, round(0.15 * n)))
+        floor = min(floor, cap - 1)
+    return {
+        "on_root_sequence": True, "on_parallel": True,
+        "on_alternative": True, "on_loop": True,
+        "max_leaves_per_map": int(cap),
+        "min_leaves_to_decompose": int(floor),
+        "balance_ratio": 0.2,
+    }
+
+
+def _resolve_shape_dims(opts: Optional[Dict[str, Any]], tree):
+    """Replace any :data:`AUTO_DIM` sentinel in ``opts`` with the value
+    :func:`suggest_decomposition` fits to ``tree``. A no-op when there is none,
+    so the tree is only walked for leaf-count when actually needed."""
+    if not opts:
+        return opts
+    autos = [k for k in ("max_leaves_per_map", "min_leaves_to_decompose",
+                         "balance_ratio") if opts.get(k) == AUTO_DIM]
+    if not autos:
+        return opts
+    fitted = suggest_decomposition(tree)
+    opts = dict(opts)
+    for k in autos:
+        opts[k] = fitted[k]
+    return opts
+
 
 def parse_decomposition(spec) -> Optional[Dict[str, Any]]:
     """Coerce a user-supplied ``decomposition`` argument into a
@@ -99,17 +160,23 @@ def parse_decomposition(spec) -> Optional[Dict[str, Any]]:
     Accepts:
 
     * ``None`` or ``"off"`` — returns ``None``.
-    * ``"auto"`` — returns the :data:`AUTO_DEFAULTS` preset.
-    * ``"aggressive"`` — returns the :data:`AGGRESSIVE_DEFAULTS` preset.
-    * a ``dict`` — merged onto :data:`AUTO_DEFAULTS`. Unknown keys raise
-      :class:`ValueError` with the list of valid keys.
+    * ``"auto"`` — **shape-fitted**: all boundary rules on, the two size
+      dimensions carried as the :data:`AUTO_DIM` sentinel and resolved against
+      the tree in :func:`apply` (see :func:`suggest_decomposition`).
+    * ``"aggressive"`` — returns the fixed :data:`AGGRESSIVE_DEFAULTS` preset.
+    * a ``dict`` — merged onto :data:`AUTO_DEFAULTS`; a size dimension may be
+      the :data:`AUTO_DIM` sentinel to fit just that one to the shape. Unknown
+      keys raise :class:`ValueError` with the list of valid keys.
 
     Any other type raises :class:`ValueError`.
     """
     if spec is None or spec == "off":
         return None
     if spec == "auto":
-        return dict(AUTO_DEFAULTS)
+        # Shape-fit: dimensions resolved against the tree in apply() via the
+        # AUTO_DIM sentinels; all boundary rules on.
+        return dict(AUTO_DEFAULTS, max_leaves_per_map=AUTO_DIM,
+                    min_leaves_to_decompose=AUTO_DIM)
     if spec == "aggressive":
         return dict(AGGRESSIVE_DEFAULTS)
     if isinstance(spec, dict):
@@ -747,6 +814,11 @@ def apply(tree, parameters: Optional[Dict[str, Any]] = None) -> UCM:
     if opts is None:
         # Defensive: caller should have routed this to the flat path.
         return _ft.apply(tree, parameters=parameters)
+    # Fit any shape-derived dimensions (the "auto" spec) to this tree — done
+    # here because this is the one place with both the options and the tree,
+    # so the app, the exported pipeline, and every family cell resolve
+    # identically.
+    opts = _resolve_shape_dims(opts, tree)
 
     map_name: str = parameters.get("map_name", "DiscoveredMap")
     urn_name: str = parameters.get("urn_name", "PM4PyDiscovery")

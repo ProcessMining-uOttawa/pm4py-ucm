@@ -38,6 +38,7 @@ from .api import (
     compute_family_stats,
     write_family_report,
     annotate_performance,
+    suggest_decomposition,
 )
 from .objects.ucm.obj import UCM
 
@@ -64,6 +65,7 @@ __all__ = [
     "compute_family_stats",
     "write_family_report",
     "annotate_performance",
+    "suggest_decomposition",
 ]
 
 __version__ = "0.7.6"

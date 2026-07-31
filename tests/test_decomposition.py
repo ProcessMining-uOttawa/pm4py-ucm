@@ -59,14 +59,43 @@ class ParameterParsingTests(unittest.TestCase):
         self.assertIsNone(_decomp.parse_decomposition(None))
         self.assertIsNone(_decomp.parse_decomposition("off"))
 
-    def test_auto_preset(self):
+    def test_auto_is_shape_fitted(self):
+        # "auto" now means "fit the dimensions to the tree shape": the
+        # boundary rules are all on and the two size knobs carry the AUTO_DIM
+        # sentinel, resolved against the tree in apply().
         opts = _decomp.parse_decomposition("auto")
         self.assertTrue(opts["on_root_sequence"])
         self.assertTrue(opts["on_parallel"])
         self.assertTrue(opts["on_loop"])
-        self.assertEqual(opts["max_leaves_per_map"], 20)
-        self.assertEqual(opts["min_leaves_to_decompose"], 4)
+        self.assertEqual(opts["max_leaves_per_map"], _decomp.AUTO_DIM)
+        self.assertEqual(opts["min_leaves_to_decompose"], _decomp.AUTO_DIM)
         self.assertAlmostEqual(opts["balance_ratio"], 0.2)
+
+    def test_suggest_decomposition_scales_with_leaf_count(self):
+        # Small tree -> small cap and a floor that keeps it effectively flat;
+        # a large tree -> a larger (but sub-linear) cap and floor.
+        small = _seq(*[f"a{i}" for i in range(6)])
+        big = _seq(*[f"b{i}" for i in range(100)])
+        s = _decomp.suggest_decomposition(small)
+        b = _decomp.suggest_decomposition(big)
+        self.assertTrue(all(s[k] for k in ("on_root_sequence", "on_parallel",
+                                           "on_alternative", "on_loop")))
+        self.assertGreaterEqual(b["max_leaves_per_map"], s["max_leaves_per_map"])
+        self.assertGreater(b["min_leaves_to_decompose"],
+                           s["min_leaves_to_decompose"])
+        self.assertLess(b["max_leaves_per_map"], 100)  # sub-linear
+        self.assertLess(s["min_leaves_to_decompose"], s["max_leaves_per_map"])
+
+    def test_auto_sentinels_resolve_in_apply(self):
+        # A root sequence of six 5-leaf phases (30 leaves): each phase clears
+        # the shape-fitted floor, so "auto" must split it into several maps —
+        # proving the sentinels resolved to concrete ints (a leftover "auto"
+        # string would raise in the leaf-count comparisons).
+        phase = lambda i: T(operator="->",
+                            children=[T(label=f"a{i}_{j}") for j in range(5)])
+        tree = T(operator="->", children=[phase(i) for i in range(6)])
+        ucm = _decomp.apply(tree, parameters={"decomposition": "auto"})
+        self.assertGreater(len(ucm.maps), 1)
 
     def test_aggressive_preset(self):
         opts = _decomp.parse_decomposition("aggressive")

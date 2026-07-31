@@ -24,6 +24,9 @@ from .objects.ucm.obj import UCM
 from .objects.ucm.exporter.variants import jucm as _jucm_exporter
 from .objects.ucm.importer.variants import jucm as _jucm_importer
 from .objects.ucm.conversion import from_process_tree as _tree_converter
+from .objects.ucm.conversion.decomposition import (  # noqa: F401
+    suggest_decomposition,
+)
 from .visualization.ucm import visualizer as _visualizer
 from .algo.discovery.ucm import algorithm as _discovery
 from .algo.discovery.resources import algorithm as _resources
