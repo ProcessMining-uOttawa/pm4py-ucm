@@ -158,12 +158,13 @@ meantime, so other sidebar settings remain responsive.
 
 #### Notation
 
-- **UCM** (default) — Z.151 / jUCMNav notation. Filled circle for the start
+- **BPMN** (default) — Activity boxes for responsibilities, gateway diamonds
+  with `X` / `+` markers, BPMN-canonical start / end events. The notation most
+  readers already know, so it is what the app shows out of the box.
+- **UCM** — Z.151 / jUCMNav notation. Filled circle for the start
   point, perpendicular bar for the end point, small black square + name for
   each responsibility, synchronisation bars for AND-forks/joins, dots for
   OR-forks/joins, diamond reserved for stubs.
-- **BPMN** — Activity boxes for responsibilities, gateway diamonds with
-  `X` / `+` markers, BPMN-canonical start / end events.
 
 Switching notation re-renders the PNG but does **not** re-run the miner.
 

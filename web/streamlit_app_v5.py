@@ -3009,7 +3009,7 @@ with st.sidebar:
     st.divider()
     notation = st.radio(
         "Notation (Model tab)",
-        options=["UCM", "BPMN"], index=0, key="cfg_notation",
+        options=["UCM", "BPMN"], index=1, key="cfg_notation",
     )
 
 

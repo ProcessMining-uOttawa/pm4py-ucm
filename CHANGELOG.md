@@ -41,8 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *down* to its plug-in map; now each plug-in map's **end point links back up to
   its parent map** (UCM and BPMN), so a decomposed model is no longer one-way.
 - **Sample logs carry a one-line description** in the picker.
-- **Useful defaults out of the box.** Decomposition now defaults to **auto**
-  (shape-fitted) instead of off; the activity overlay leads with the **time**
+- **Useful defaults out of the box.** The Model tab now opens in **BPMN**
+  notation — the notation most readers already know — with UCM one click away
+  (the library's own `style=` default is unchanged); decomposition now defaults
+  to **auto** (shape-fitted) instead of off; the activity overlay leads with the **time**
   metric (median service/sojourn time) then frequency; and the first time an
   overlay is active the **heat-map emphasis** turns on automatically with the
   **Per family member** scale. Each remains freely changeable and the choice
