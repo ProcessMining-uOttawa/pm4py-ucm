@@ -2478,19 +2478,34 @@ def _apply_project_config(cfg, fh, csv_columns=None):
                         "on_alternative", "on_loop"):
                 if _bk in _dd:
                     ss[f"decomp_{_bk}"] = bool(_dd[_bk])
-            # Map the stored dimensions back to the dropdown choice.
+            # Map the stored dimensions back to the dropdown choice + the
+            # size inputs (via the restore slot, keyed per mode).
             _mx = _dd.get("max_leaves_per_map")
             _mn = _dd.get("min_leaves_to_decompose")
+            _br = _dd.get("balance_ratio", 0.2)
             if _mx == AUTO_DIM or _mn == AUTO_DIM:
                 ss["cfg_decomp_preset"] = "auto"
-            elif (_mx, _mn) == (8, 4):
-                ss["cfg_decomp_preset"] = "Pre-set: Max=8/Min=4"
+                _mk = "auto"
             elif (_mx, _mn) == (6, 3):
                 ss["cfg_decomp_preset"] = "Pre-set: Max=6/Min=3"
+                _mk = "p63"
             else:
-                ss["cfg_decomp_preset"] = "auto"
-                notes.append("decomposition dimensions didn't match a preset; "
-                             "restored as 'auto' (shape-fitted).")
+                # 8/4 or any hand-set dimensions land in the Max=8/Min=4 pre-set
+                # whose fields carry the actual restored values.
+                ss["cfg_decomp_preset"] = "Pre-set: Max=8/Min=4"
+                _mk = "p84"
+                if (_mx, _mn) != (8, 4):
+                    notes.append("custom decomposition sizes restored into the "
+                                 "Max=8/Min=4 pre-set's fields.")
+            if _mk != "auto":
+                if isinstance(_mx, int):
+                    pr[f"decomp_{_mk}_mx"] = int(_mx)
+                if isinstance(_mn, int):
+                    pr[f"decomp_{_mk}_mn"] = int(_mn)
+            try:
+                pr[f"decomp_{_mk}_br"] = float(_br)
+            except (TypeError, ValueError):
+                pass
     if "resource_attribute" in cfg:
         _ra = cfg["resource_attribute"]
         if _ra in ("org:role", "org:resource"):
@@ -2725,11 +2740,17 @@ with st.sidebar:
     if decomposition_preset == "off":
         candidate_spec: object = "off"
     else:
-        # Which operators become plug-in boundaries — kept as toggles, all on
-        # by default. Fixed keys (not preset-scoped) so a toggle persists when
-        # the dropdown changes; they apply to auto and the pre-sets alike.
+        _is_auto = decomposition_preset == "auto"
+        # Mode slug for the size-input keys, so each mode remembers its own
+        # numbers (and switching pre-sets reseeds them).
+        _mk = {"auto": "auto", "Pre-set: Max=8/Min=4": "p84",
+               "Pre-set: Max=6/Min=3": "p63"}[decomposition_preset]
+        _seed_mx, _seed_mn = (8, 4) if _is_auto else \
+            _DECOMP_PRESETS[decomposition_preset]
         _on: Dict[str, Any] = {}
-        with st.expander("Advanced — boundary rules", expanded=False):
+        with st.expander("Advanced — boundary rules & sizes", expanded=False):
+            # Which operators become plug-in boundaries — all on by default,
+            # fixed keys so a toggle persists across a dropdown change.
             for key, help_txt in [
                 ("on_root_sequence",
                  "Each child of a top-level sequence becomes a plug-in."),
@@ -2739,14 +2760,39 @@ with st.sidebar:
             ]:
                 _on[key] = st.checkbox(
                     key, value=True, key=f"decomp_{key}", help=help_txt)
-        if decomposition_preset == "auto":
+            if _is_auto:
+                st.caption(
+                    "**auto** fits max / min to the mined tree's shape — pick a "
+                    "Pre-set to pin them by hand.")
+            # Manual size knobs. Editable for the pre-sets; shown (disabled) for
+            # auto, which fits them to the tree. balance_ratio is always manual.
+            _mx = st.number_input(
+                "max_leaves_per_map", min_value=1, max_value=500,
+                value=int(_rv(f"decomp_{_mk}_mx", _seed_mx)), step=1,
+                key=f"decomp_{_mk}_mx", disabled=_is_auto,
+                help="Hard cap on activity leaves per map; over-sized maps "
+                     "force-cut the largest operator-subtree until it fits.")
+            _mn = st.number_input(
+                "min_leaves_to_decompose", min_value=1, max_value=100,
+                value=int(_rv(f"decomp_{_mk}_mn", _seed_mn)), step=1,
+                key=f"decomp_{_mk}_mn", disabled=_is_auto,
+                help="Subtrees smaller than this stay inlined regardless of the "
+                     "boundary rules.")
+            _br = st.slider(
+                "balance_ratio", min_value=0.0, max_value=1.0,
+                value=float(_rv(f"decomp_{_mk}_br", 0.2)), step=0.05,
+                key=f"decomp_{_mk}_br",
+                help="Sibling share threshold under -> and +: a child needs at "
+                     "least this fraction of the parent's leaves to be pulled "
+                     "into its own plug-in.")
+        if _is_auto:
             _dims = {"max_leaves_per_map": AUTO_DIM,
                      "min_leaves_to_decompose": AUTO_DIM}
         else:
-            _mx, _mn = _DECOMP_PRESETS[decomposition_preset]
-            _dims = {"max_leaves_per_map": _mx, "min_leaves_to_decompose": _mn}
+            _dims = {"max_leaves_per_map": int(_mx),
+                     "min_leaves_to_decompose": int(_mn)}
         candidate_spec = tuple(sorted(
-            {**_on, **_dims, "balance_ratio": 0.2}.items()))
+            {**_on, **_dims, "balance_ratio": float(_br)}.items()))
     if "applied_decomp" not in st.session_state:
         st.session_state["applied_decomp"] = candidate_spec
     if candidate_spec != st.session_state["applied_decomp"]:

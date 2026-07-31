@@ -23,8 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Decomposition control reworked.** The dropdown is now **off / auto /
   Pre-set: Max=8/Min=4 / Pre-set: Max=6/Min=3** — `auto` fits the map size to the
   tree shape, the pre-sets pin the previous fixed dimensions. All modes decompose
-  on every operator kind; the four `on_*` boundary toggles remain (all on) under
-  **Advanced — boundary rules**, and the manual max/min/balance inputs are gone.
+  on every operator kind; under **Advanced — boundary rules & sizes** the four
+  `on_*` toggles (all on) and the `max_leaves_per_map` / `min_leaves_to_decompose`
+  / `balance_ratio` inputs remain — editable for the pre-sets, and shown fitted
+  (read-only) under `auto`.
 
 ## [0.7.6] — 2026-07-30
 
