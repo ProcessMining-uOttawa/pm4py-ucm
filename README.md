@@ -82,8 +82,10 @@ renaming** applied before mining across every view:
 
   ![Scenarios view](web/PM4Py-UCM-Scenarios.png)
 
-- **Family** — pick 1–2 case attributes (with per-value filters and a
-  pre-mining coverage heatmap) and mine one model per combination. A
+- **Family** — a **deterministic advisor** ranks the case attributes by
+  discriminative power (which one yields genuinely different processes), then
+  pick 1–2 (with per-value filters and a pre-mining coverage heatmap) and mine
+  one model per combination. A
   single **Prepare downloads** button then builds the per-cell zip, the
   combined `.jucm`, the dynamic-stub umbrella `.jucm`, the grid PNG, and
   the interactive HTML statistics report — download-only artifacts built

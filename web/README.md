@@ -158,12 +158,13 @@ meantime, so other sidebar settings remain responsive.
 
 #### Notation
 
-- **UCM** (default) — Z.151 / jUCMNav notation. Filled circle for the start
+- **BPMN** (default) — Activity boxes for responsibilities, gateway diamonds
+  with `X` / `+` markers, BPMN-canonical start / end events. The notation most
+  readers already know, so it is what the app shows out of the box.
+- **UCM** — Z.151 / jUCMNav notation. Filled circle for the start
   point, perpendicular bar for the end point, small black square + name for
   each responsibility, synchronisation bars for AND-forks/joins, dots for
   OR-forks/joins, diamond reserved for stubs.
-- **BPMN** — Activity boxes for responsibilities, gateway diamonds with
-  `X` / `+` markers, BPMN-canonical start / end events.
 
 Switching notation re-renders the PNG but does **not** re-run the miner.
 
@@ -257,7 +258,9 @@ Once mining completes, the **Model** view shows a metrics row (activities,
 cases and events — selected/total when filtered — plus maps and nodes) and
 the diagram as a **vector SVG** in a zoom / pan viewer — scroll to zoom, drag to pan, and for a
 decomposed model **click a stub** to jump to its plug-in map (a dynamic
-stub opens a picker of its preconditioned plug-ins). Downloads:
+stub opens a picker of its preconditioned plug-ins), and click a plug-in
+map's **end point to jump back to its parent** — navigation runs both ways.
+Downloads:
 
 - **Download SVG** — the vector render (crisp at any zoom, text
   selectable).
@@ -307,6 +310,13 @@ you ask, since this view shows no model on screen. Works on flat and
 decomposed models alike.
 
 ### 6 · Family
+
+A **💡 Suggested attributes** table ranks the case attributes by
+**discriminative power** — how much the process actually changes across each
+attribute's values (control-flow divergence + case-duration effect, discounting
+identifiers and near-constant fields) — so the picker isn't a blind guess. It is
+fully **deterministic** (no LLM; `pm4py_ucm.rank_partition_attributes`); when
+nothing scores high it says so, rather than pretend.
 
 Pick **1–2 case attributes**; a **coverage heatmap** previews the cell
 sizes *before* mining, with per-value filters, a `min_cases` floor, and

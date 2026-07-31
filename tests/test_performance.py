@@ -207,6 +207,42 @@ class TestAnnotate:
         assert "6 · 60%" in all_branch_texts  # E branch, through join
         assert "4 · 40%" in all_branch_texts  # F branch
 
+    def test_and_fork_branches_show_inflow_not_interleaving_split(self):
+        # ->(A, +(B, C), D): B and C are concurrent, so every case reaching
+        # the fork runs BOTH branches. Each branch's frequency must therefore
+        # be the fork's inflow (10), NOT the interleaving-dependent
+        # directly-follows split (6 cases ran B first, 4 ran C first) — the
+        # split contradicts the branch activities' own frequencies (B=10,
+        # C=10) and is exactly the bug this guards.
+        rows = []
+        ts = pd.Timestamp("2026-01-01")
+        cid = 0
+        for order, n in ((["B", "C"], 6), (["C", "B"], 4)):
+            for _ in range(n):
+                for act in ["A", *order, "D"]:
+                    rows.append({"case:concept:name": f"c{cid:02d}",
+                                 "concept:name": act, "time:timestamp": ts})
+                    ts += pd.Timedelta(minutes=10)
+                cid += 1
+        df = pd.DataFrame(rows)
+        tree = T(operator="->", children=[
+            T(label="A"),
+            T(operator="+", children=[T(label="B"), T(label="C")]),
+            T(label="D"),
+        ])
+        ucm = convert_to_ucm(tree)
+        # sanity: both parallel activities run in every one of the 10 cases
+        stats = compute_performance_stats(df)
+        assert stats.activity["B"]["frequency"] == 10
+        assert stats.activity["C"]["frequency"] == 10
+        annotate_performance(ucm, df, node_metrics=[],
+                             edge_metrics=["frequency"])
+        fork = next(n for m in ucm.maps for n in m.nodes
+                    if isinstance(n, UCM.AndFork))
+        texts = {self._branch_perf(fork, i)
+                 for i in range(len(fork.succ_connections))}
+        assert texts == {"10"}, texts   # both branches = inflow, not 6 / 4
+
     def test_reannotation_replaces(self):
         ucm = _ucm()
         annotate_performance(ucm, _log(),

@@ -115,6 +115,13 @@ def _embed_html(html: str, *, height: int, scrolling: bool = False) -> None:
 
 
 _SAMPLES_DIR = Path(__file__).resolve().parent / "samples"
+#: One-line description per bundled sample (keyed by its display label — the
+#: filename without extension), shown in the sample picker.
+_SAMPLE_DESCRIPTIONS = {
+    "ClaimsPaymentLog": "synthetic insurance claims-payment process (XES)",
+    "IssueTrackerSyntheticLog": "synthetic software issue-tracking workflow (XES)",
+    "devlog": "real AI-assisted developer-activity log, rich case attributes (CSV)",
+}
 _LOGO_PATH = Path(__file__).resolve().parent / "assets" / "logo.png"
 _DISPLAY_WIDTH_PX = 1100
 _NONE_OPT = "(none)"
@@ -142,7 +149,7 @@ def _list_samples() -> List[Path]:
         if not p.is_file():
             continue
         name = p.name.lower()
-        if name.endswith((".xes", ".xes.gz", ".gz", ".zip")):
+        if name.endswith((".xes", ".xes.gz", ".gz", ".zip", ".csv")):
             out.append(p)
     return sorted(out, key=lambda p: p.name.lower())
 
@@ -1155,6 +1162,21 @@ def _detect_family_attributes(
         })
     rows.sort(key=lambda r: r["attribute"])
     return rows
+
+
+@st.cache_data(show_spinner="Ranking attributes by discriminative power...")
+def _partition_advisor(
+    log_bytes: bytes, log_kind: str, csv_columns, filter_spec: Tuple,
+    _file_hash: str,
+) -> List[Dict[str, Any]]:
+    """Rank case attributes by discriminative power (deterministic — no LLM;
+    see docs/ai_insights.md §4.1b), best first, as flat rows for a table.
+    Computed on the filtered log so the advice matches what the family mines."""
+    from pm4py_ucm.algo.discovery.families import rank_partition_attributes
+
+    df = _filtered_log_df(log_bytes, log_kind, csv_columns, filter_spec,
+                          _file_hash)
+    return [s.to_row() for s in rank_partition_attributes(df)]
 
 
 @st.cache_data(show_spinner="Computing partition coverage...")
@@ -2722,7 +2744,7 @@ with st.sidebar:
     decomposition_preset = st.selectbox(
         "Decomposition",
         options=["off", "auto"] + list(_DECOMP_PRESETS) + ["Custom"],
-        index=0, key="cfg_decomp_preset",
+        index=1, key="cfg_decomp_preset",   # default "auto" — useful out of the box
         help=(
             "Splits the Model tab's UCM into a root map + plug-ins. "
             "**auto** fits the map size to the mined tree's shape; a "
@@ -2858,8 +2880,10 @@ with st.sidebar:
     _node_key = f"overlay_nodes::{_ov_hash}"
     _edge_key = f"overlay_edges::{_ov_hash}"
     if _node_key not in st.session_state:
+        # Time metric first (so the heat-map emphasises time — red — by
+        # default), frequency second.
         st.session_state[_node_key] = [
-            "frequency", "median_time" if _interval else "sojourn_median_time"]
+            "median_time" if _interval else "sojourn_median_time", "frequency"]
     if _edge_key not in st.session_state:
         st.session_state[_edge_key] = ["percentage", "frequency"]
     # The metric multiselects only STAGE a choice; picking a metric
@@ -2926,9 +2950,18 @@ with st.sidebar:
     # Heat-map emphasis: colour + thickness on activities/edges by the FIRST
     # applied metric of each layer. A render-time overlay (no change to the
     # .jucm), so it applies instantly — no Apply needed.
+    # One-shot: the first time an overlay is active for this log and the heat-map
+    # hasn't been touched, default it ON with the per-family-member scale — a
+    # useful out-of-the-box view. Later manual changes stick (the keys are then
+    # present, so this no-ops). Direct key seed, like the project-restore path.
+    _hm_key = f"overlay_heatmap::{_ov_hash}"
+    if _hm_key not in st.session_state and (overlay_nodes or overlay_edges):
+        st.session_state[_hm_key] = True
+        st.session_state[f"overlay_heat_scope::{_ov_hash}"] = \
+            "Per family member (across its maps)"
     overlay_heatmap = _ovl_exp.checkbox(
         "Heat-map emphasis",
-        key=f"overlay_heatmap::{_ov_hash}",
+        key=_hm_key,
         help=(
             "Colour and thicken activity contours / fills (BPMN) or "
             "responsibility markers (UCM) and edges by the value of the "
@@ -2976,7 +3009,7 @@ with st.sidebar:
     st.divider()
     notation = st.radio(
         "Notation (Model tab)",
-        options=["UCM", "BPMN"], index=0, key="cfg_notation",
+        options=["UCM", "BPMN"], index=1, key="cfg_notation",
     )
 
 
@@ -3033,7 +3066,7 @@ if samples:
     with src_tabs[0]:
         def _label(p: Path) -> str:
             stem = p.name
-            for suffix in (".xes.gz", ".xes", ".zip", ".gz"):
+            for suffix in (".xes.gz", ".xes", ".zip", ".gz", ".csv"):
                 if stem.lower().endswith(suffix):
                     stem = stem[: -len(suffix)]
                     break
@@ -3041,7 +3074,17 @@ if samples:
 
         label_to_path = {_label(p): p for p in samples}
         labels = list(label_to_path.keys())
-        st.selectbox("Choose a bundled log", options=labels, key="sample_choice")
+
+        def _sample_option(lbl: str) -> str:
+            desc = _SAMPLE_DESCRIPTIONS.get(lbl)
+            return f"{lbl} — {desc}" if desc else lbl
+
+        st.selectbox("Choose a bundled log", options=labels,
+                     key="sample_choice", format_func=_sample_option)
+        _sel_desc = _SAMPLE_DESCRIPTIONS.get(
+            st.session_state.get("sample_choice"))
+        if _sel_desc:
+            st.caption(_sel_desc)
         if st.button("Load sample", type="primary", key="load_sample"):
             chosen = label_to_path[st.session_state["sample_choice"]]
             _accept_log_bytes(chosen.name, chosen.read_bytes())
@@ -4246,6 +4289,35 @@ if _view == "Family":
             "age, or admission channel.)"
         )
     else:
+        # Deterministic partition advisor (docs/ai_insights.md §4.1b): rank the
+        # attributes by how much the process actually changes across their
+        # values, so the picker below isn't a blind guess.
+        try:
+            _advice = _partition_advisor(
+                log_bytes, log_kind, csv_columns, filter_spec, file_hash)
+        except Exception:
+            _advice = []
+        if _advice:
+            with st.expander("💡 Suggested attributes to partition on",
+                             expanded=True):
+                st.caption(
+                    "Ranked by discriminative power — control-flow divergence "
+                    "(how much the trace variant depends on the attribute) plus "
+                    "case-duration effect, discounting identifiers and "
+                    "near-constant fields. A deterministic hint, not a rule.")
+                st.dataframe(pd.DataFrame(_advice), width="stretch",
+                             hide_index=True)
+                if _advice[0]["score"] >= 0.1:
+                    st.caption(
+                        f"Top suggestion: **{_advice[0]['attribute']}** — "
+                        f"{_advice[0]['note']}.")
+                else:
+                    st.caption(
+                        "No attribute strongly discriminates the process in "
+                        "this log — the scores are low, so partitioning may "
+                        "just reproduce similar models. (The ranking is "
+                        "relative.)")
+
         with st.expander("Detected case attributes", expanded=False):
             st.dataframe(
                 pd.DataFrame(attr_rows), width="stretch",

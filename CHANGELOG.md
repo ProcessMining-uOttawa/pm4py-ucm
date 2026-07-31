@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Partition advisor (Family view) — deterministic, no LLM.** A new
+  **💡 Suggested attributes** table ranks the log's case attributes by
+  *discriminative power* — control-flow divergence (normalised mutual
+  information between the attribute and the trace variant) plus case-duration
+  effect size, discounting identifiers and near-constant fields — so choosing
+  *which* attribute to build a family on is a guided recommendation rather than a
+  guess. When nothing scores high it says so. New public
+  `pm4py_ucm.rank_partition_attributes(log)` returning ranked `AttributeScore`s.
+  (This is the deterministic half of the AI-insights §4.1 "partition &
+  decomposition advisor"; the optional LLM sense-check is a separate later
+  layer. See `docs/ai_insights.md`.)
+- **`devlog` sample log** — a real developer-activity CSV (285 cases, rich case
+  attributes) bundled alongside the two synthetic samples; CSV files are now
+  accepted as sample logs.
+
+### Fixed
+
+- **AND-fork edge frequencies.** On a parallel (`+`) fork, every case that
+  reaches the fork runs *every* branch, so a branch's traversal frequency is the
+  fork's inflow — not the interleaving-dependent directly-follows count, which
+  split the inflow across branches (e.g. `8` + `197` = `205`) and contradicted
+  the branch activities' own frequencies. Each AND-fork branch now reads the
+  inflow, consistent with its activity. (An XOR whose alternative is a silent
+  *skip to the end of the process* still can't show the skipped cases — those
+  produce no directly-follows pair — a separate, deeper limitation.)
+
+### Changed — Web app (V5)
+
+- **Sub-maps are navigable both ways.** A stub / composite activity already links
+  *down* to its plug-in map; now each plug-in map's **end point links back up to
+  its parent map** (UCM and BPMN), so a decomposed model is no longer one-way.
+- **Sample logs carry a one-line description** in the picker.
+- **Useful defaults out of the box.** The Model tab now opens in **BPMN**
+  notation — the notation most readers already know — with UCM one click away
+  (the library's own `style=` default is unchanged); decomposition now defaults
+  to **auto** (shape-fitted) instead of off; the activity overlay leads with the **time**
+  metric (median service/sojourn time) then frequency; and the first time an
+  overlay is active the **heat-map emphasis** turns on automatically with the
+  **Per family member** scale. Each remains freely changeable and the choice
+  sticks.
+
 ## [0.7.7] — 2026-07-31
 
 Shape-fitted decomposition: `"auto"` now scales its map-size parameters to the

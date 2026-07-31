@@ -32,7 +32,7 @@ REGISTRY: Tuple[Param, ...] = (
     # Inductive miner + rendering.
     Param("noise_threshold", "miner", 0.2),
     Param("min_support", "miner", 0.0),
-    Param("notation", "miner", "ucm"),          # "ucm" | "bpmn"
+    Param("notation", "miner", "bpmn"),         # "ucm" | "bpmn"
     Param("decomposition", "miner", "off"),     # "off" | list of [k, v] pairs
     # Performers.
     Param("resource_attribute", "performers", "org:role"),

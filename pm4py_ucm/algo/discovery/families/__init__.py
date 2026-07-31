@@ -26,6 +26,10 @@ from .partition import (  # noqa: F401
     detect_case_attributes,
     partition_log,
 )
+from .advisor import (  # noqa: F401
+    AttributeScore,
+    rank_partition_attributes,
+)
 from .family import FamilyCell, ModelFamily, write_family  # noqa: F401
 from .algorithm import discover  # noqa: F401
 from .assembly import assemble_combined, assemble_umbrella  # noqa: F401
