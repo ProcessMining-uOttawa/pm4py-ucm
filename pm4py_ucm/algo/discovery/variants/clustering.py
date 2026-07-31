@@ -251,16 +251,32 @@ def cluster(
     bucket_xor_totals: Dict[tuple, Dict[int, Dict[int, int]]] = {}
     noise: List[str] = []
     sequence_variants_seen: set = set()
+    # A trace's parse is a function of its activity sequence alone, so
+    # cases sharing a sequence are replayed once and the result reused.
+    # Real logs repeat sequences heavily, and the saving is largest on
+    # exactly the traces that cost the most: a NOFIT verdict is only
+    # reached after the backtracking search exhausts its budget, so a
+    # repeated non-fitting sequence used to pay that price every time.
+    # The per-case loop below is otherwise untouched — each case still
+    # contributes its own counts, in the original order.
+    replays: Dict[tuple, tuple] = {}
     for case_id, trace in cases:
         seq_key = tuple(trace)
         sequence_variants_seen.add(seq_key)
-        trace_loop_iters: Dict[int, int] = {}
-        trace_xor_counts: Dict[int, Dict[int, int]] = {}
-        signature = _cs.replay(
-            tree, trace, node_ids=node_ids, coarsen_loops=coarsen_loops,
-            loop_iter_counts=trace_loop_iters,
-            xor_branch_counts=trace_xor_counts,
-        )
+        cached = replays.get(seq_key)
+        if cached is None:
+            trace_loop_iters: Dict[int, int] = {}
+            trace_xor_counts: Dict[int, Dict[int, int]] = {}
+            signature = _cs.replay(
+                tree, trace, node_ids=node_ids, coarsen_loops=coarsen_loops,
+                loop_iter_counts=trace_loop_iters,
+                xor_branch_counts=trace_xor_counts,
+            )
+            # Read-only from here on, so one copy can serve every case
+            # with this sequence.
+            cached = (signature, trace_loop_iters, trace_xor_counts)
+            replays[seq_key] = cached
+        signature, trace_loop_iters, trace_xor_counts = cached
         if signature == _cs.NOFIT:
             noise.append(case_id)
             ticker.tick()

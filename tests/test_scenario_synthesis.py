@@ -94,6 +94,46 @@ def test_cluster_collapses_parallel_interleavings_into_one_variant():
     assert result.fitness_percentage == 1.0
 
 
+def test_cluster_replays_once_per_distinct_sequence(monkeypatch):
+    """A trace's parse depends only on its activity sequence, so cases
+    sharing one must not be replayed again — the saving is largest on
+    non-fitting traces, which only give up after exhausting the
+    backtracking budget."""
+    tree, log = _build_tree_and_log()
+    log = list(log) + [("bad_1", ["X", "Y", "Z", "A", "NOPE"]),
+                       ("bad_2", ["X", "Y", "Z", "A", "NOPE"])]
+    calls = []
+    real = _clustering._cs.replay
+
+    def counting(tree_, trace, **kwargs):
+        calls.append(tuple(trace))
+        return real(tree_, trace, **kwargs)
+
+    monkeypatch.setattr(_clustering._cs, "replay", counting)
+    result = _clustering.cluster(log, tree)
+
+    assert len(calls) == len(set(calls)), "a sequence was replayed twice"
+    # 3 fitting sequences + 1 non-fitting one, over 102 cases.
+    assert len(calls) == 4
+    assert result.total_cases == 102
+    # Memoising changes nothing a caller can observe.
+    assert [v.frequency for v in result.variants] == [70, 30]
+    assert list(result.noise_case_ids) == ["bad_1", "bad_2"]
+
+
+def test_cluster_counts_every_case_even_when_sequences_repeat():
+    """The per-case aggregates must still see each case individually."""
+    tree = _seq(_leaf("X"), _xor(_leaf("A"), _leaf("B")))
+    log = [(f"c{i}", ["X", "A"]) for i in range(5)]
+    log += [(f"d{i}", ["X", "B"]) for i in range(3)]
+    result = _clustering.cluster(log, tree)
+    assert [v.frequency for v in result.variants] == [5, 3]
+    # Branch totals are summed per case, not per sequence.
+    totals = [sum(sum(b.values()) for b in (v.xor_branch_totals or {}).values())
+              for v in result.variants]
+    assert totals == [5, 3]
+
+
 def test_cluster_reports_sequence_variant_count():
     tree, log = _build_tree_and_log()
     result = _clustering.cluster(log, tree)

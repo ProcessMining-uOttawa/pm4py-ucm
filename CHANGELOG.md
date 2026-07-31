@@ -66,6 +66,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *skip to the end of the process* still can't show the skipped cases — those
   produce no directly-follows pair — a separate, deeper limitation.)
 
+### Changed
+
+- **Concurrency-aware variant clustering replays once per distinct
+  activity sequence** instead of once per case. A trace's parse depends
+  only on its sequence, so cases sharing one were doing identical work —
+  and the waste was worst on non-fitting traces, which only give up after
+  exhausting the backtracking budget. On the bundled claims log this cuts
+  5,600 replays to 164 (34× fewer, ~1.8× faster end to end); on a
+  258-case clinical log, 258 to 111. Output is unchanged — same variants,
+  same case ordering, same noise bucket.
+
 ### Changed — Web app (V5)
 
 - **The performance overlay now leads with the traversal counts, and says
