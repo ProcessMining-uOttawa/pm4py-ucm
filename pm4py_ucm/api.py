@@ -429,6 +429,8 @@ def annotate_performance(
     node_metrics=("frequency",),
     edge_metrics=("frequency",),
     parameters: Optional[Dict[str, Any]] = None,
+    traversal=None,
+    tree=None,
 ) -> UCM:
     """Overlay performance information from ``log`` on ``ucm``.
 
@@ -442,6 +444,15 @@ def annotate_performance(
     ``frequency``, ``percentage`` (an OR-fork branch's share of the
     fork's traversals), and ``mean_time`` / ``median_time`` /
     ``total_time`` waiting times between the edge's two activities.
+
+    Passing ``traversal`` (from :func:`compute_traversal_stats`) together
+    with the ``tree`` the model was discovered from adds the
+    ``traversal_frequency`` / ``traversal_percentage`` metrics, which
+    count how often the log **walks the model** instead of counting
+    events and directly-follows pairs. Prefer them on any model with
+    concurrency or silent skips: they conserve across the diagram, and
+    they are the only ones that can measure a branch that skips
+    silently.
 
     The overlay is stored as ``_perf`` metadata: rendered by the
     visualizer as a small gray annotation under activity names and on
@@ -460,7 +471,31 @@ def annotate_performance(
         node_metrics=node_metrics,
         edge_metrics=edge_metrics,
         parameters=parameters,
+        traversal=traversal,
+        tree=tree,
     )
+
+
+def compute_traversal_stats(tree, log, **kwargs):
+    """Count how often ``log`` walks each part of the model built from
+    ``tree`` — the input to the ``traversal_*`` overlay metrics.
+
+    Replays the log on the process tree, so the counts conserve across
+    the model (an activity's own count equals the count on its incoming
+    and outgoing edges) and a silently skipped branch is measurable.
+    Pass the result, with the same ``tree``, to
+    :func:`annotate_performance`.
+
+    By default non-fitting cases are aligned to their nearest model path
+    so the counts cover the whole log; pass ``repair=False`` to count
+    only cases that fit exactly. Either way the returned
+    :class:`~pm4py_ucm.algo.traversal.TraversalStats` reports coverage —
+    ``fitting_ratio`` is what to show a reader, since a model mined with
+    a noise threshold explains only part of its log. See
+    :mod:`pm4py_ucm.algo.traversal`.
+    """
+    from .algo.traversal import compute_traversal_stats as _cts
+    return _cts(tree, log, **kwargs)
 
 
 # ---------------------------------------------------------------------------

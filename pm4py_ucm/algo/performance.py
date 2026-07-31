@@ -11,6 +11,11 @@ Available metrics
 
 Activities (:data:`NODE_METRICS`):
 
+* ``traversal_frequency`` — how many times the *model* walks through
+  this activity, from replaying the log on the process tree (see
+  :mod:`pm4py_ucm.algo.traversal`). Unlike the event-based metrics
+  below this one **conserves**: it equals the count on the activity's
+  own incoming and outgoing edges. Requires ``traversal`` + ``tree``;
 * ``frequency`` — number of executions (events);
 * ``case_coverage`` — number of cases containing the activity;
 * ``relative_frequency`` — share of all events;
@@ -28,6 +33,18 @@ Activities (:data:`NODE_METRICS`):
 
 Edges (:data:`EDGE_METRICS`):
 
+* ``traversal_frequency`` — how many times the log walks this edge,
+  from replaying it on the process tree. This is the metric to prefer
+  on any model with concurrency or silent skips: the directly-follows
+  count below measures event adjacency, which a parallel branch or a
+  ``tau`` skip breaks (an activity with 257 executions can show an
+  outgoing directly-follows count of 40 because the event that
+  actually follows it belongs to a sibling branch). Requires
+  ``traversal`` + ``tree``;
+* ``traversal_percentage`` — the branch's share of its fork's
+  traversals, rendered with the base it is a share *of* (``25% of
+  258``) so a bare percentage can't mislead. Branches of one fork sum
+  to 100 %. Only on arcs leaving an OR-fork;
 * ``frequency`` — traversals of the activity-to-activity segment the
   edge belongs to (directly-follows count);
 * ``case_frequency`` — distinct cases traversing the segment (single-
@@ -55,15 +72,21 @@ unannotated rather than guessed.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import (
+    TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple,
+)
 
 from ..objects.ucm.obj import UCM
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from .traversal import TraversalStats
 
 
 #: Metadata key carrying the rendered overlay text.
 PERF_KEY = "_perf"
 
 NODE_METRICS = (
+    "traversal_frequency",
     "frequency", "case_coverage", "relative_frequency", "repeat_frequency",
     "mean_time", "median_time", "min_time", "max_time",
     "std_time", "p90_time", "p95_time", "total_time",
@@ -73,10 +96,18 @@ NODE_METRICS = (
     "sojourn_total_time",
 )
 EDGE_METRICS = (
+    "traversal_frequency", "traversal_percentage",
     "frequency", "case_frequency", "relative_frequency", "percentage",
     "mean_time", "median_time", "min_time", "max_time",
     "std_time", "p90_time", "p95_time", "total_time",
 )
+
+#: Metrics computed by replaying the log on the process tree rather than
+#: by counting events / directly-follows pairs. They require
+#: ``traversal`` + ``tree`` to be passed to :func:`annotate_performance`;
+#: without them these metrics are simply absent.
+TRAVERSAL_METRICS = frozenset(
+    {"traversal_frequency", "traversal_percentage"})
 
 
 @dataclass
@@ -281,11 +312,28 @@ _TIME_PREFIX = {"mean_time": "avg", "median_time": "med",
                 "sojourn_total_time": "soj sum"}
 
 
+def _traversal_percentage_text(entry: Dict[str, float]) -> Optional[str]:
+    """``25% of 258`` — a share always carries the base it divides.
+
+    A bare percentage is what made a silent skip read as ``100%``: the
+    denominator was 4 observed handovers, not the 258 cases a reader
+    assumes."""
+    if "traversal_frequency" not in entry:
+        return None
+    total = entry.get("traversal_total")
+    if not total:
+        return None
+    share = entry["traversal_frequency"] / total
+    return f"{share * 100:.0f}% of {int(total)}"
+
+
 def _node_text(entry: Dict[str, float],
                metrics: Sequence[str]) -> Optional[str]:
     parts: List[str] = []
     for m in metrics:
-        if m == "frequency":
+        if m == "traversal_frequency" and "traversal_frequency" in entry:
+            parts.append(f"n={int(entry['traversal_frequency'])}")
+        elif m == "frequency":
             parts.append(f"n={entry['frequency']}")
         elif m == "case_coverage":
             parts.append(f"{entry['case_coverage']} cases")
@@ -304,7 +352,13 @@ def _edge_text(entry: Dict[str, float], metrics: Sequence[str],
                percentage: Optional[float]) -> Optional[str]:
     parts: List[str] = []
     for m in metrics:
-        if m == "frequency":
+        if m == "traversal_frequency" and "traversal_frequency" in entry:
+            parts.append(str(int(entry["traversal_frequency"])))
+        elif m == "traversal_percentage":
+            text = _traversal_percentage_text(entry)
+            if text:
+                parts.append(text)
+        elif m == "frequency" and "frequency" in entry:
             parts.append(str(int(entry["frequency"])))
         elif m == "case_frequency" and "case_frequency" in entry:
             parts.append(f"{int(entry['case_frequency'])}c")
@@ -486,8 +540,10 @@ def _metric_value(metric: str, entry: Dict[str, float],
                   percentage: Optional[float] = None) -> Optional[str]:
     """One metric as a human-readable metadata value."""
     if metric in ("frequency", "case_coverage", "repeat_frequency",
-                  "case_frequency") and metric in entry:
+                  "case_frequency", "traversal_frequency") and metric in entry:
         return str(int(entry[metric]))
+    if metric == "traversal_percentage":
+        return _traversal_percentage_text(entry)
     if metric == "relative_frequency" and "relative_frequency" in entry:
         return f"{entry['relative_frequency'] * 100:.1f}%"
     if metric == "percentage":
@@ -495,6 +551,54 @@ def _metric_value(metric: str, entry: Dict[str, float],
     if metric in _TIME_PREFIX and metric in entry:
         return _format_duration(entry.get(metric))
     return None
+
+
+class _TraversalIndex:
+    """Resolves replay-based counts onto UCM elements.
+
+    Every node and connection the process-tree converter emits records
+    the ``id()`` of the subtree it came from; the counts are keyed by
+    that subtree's stable integer id. This class joins the two. It is
+    inert (every lookup returns ``None``) when either half is missing,
+    which is what keeps the traversal metrics purely additive.
+    """
+
+    def __init__(self, stats: Optional["TraversalStats"], tree) -> None:
+        self._stats = stats
+        self._node_ids: Dict[int, int] = {}
+        if stats is not None and tree is not None:
+            from .discovery.variants.choice_signature import assign_node_ids
+            self._node_ids = assign_node_ids(tree)
+
+    @property
+    def active(self) -> bool:
+        return bool(self._node_ids) and self._stats is not None
+
+    def count(self, element) -> Optional[int]:
+        """Traversals of the tree node ``element`` was built from."""
+        if not self.active:
+            return None
+        nid = self._node_ids.get(getattr(element, "_tree_python_id", None))
+        if nid is None:
+            return None
+        return self._stats.node_counts.get(nid)
+
+    def augment(self, entry: Dict[str, float], element,
+                total: Optional[int] = None) -> Dict[str, float]:
+        """Return ``entry`` plus this element's traversal count.
+
+        ``total`` is the denominator a share is taken of — the fork's own
+        traversals for a branch arc. The input is never mutated: entries
+        come from the shared statistics and are reused across elements.
+        """
+        value = self.count(element)
+        if value is None:
+            return entry
+        out = dict(entry)
+        out["traversal_frequency"] = value
+        if total:
+            out["traversal_total"] = total
+        return out
 
 
 def _add_metric_metadata(element, metrics: Sequence[str],
@@ -516,12 +620,23 @@ def annotate_performance(
     stats: Optional[PerformanceStats] = None,
     parameters: Optional[Dict[str, Any]] = None,
     maps: Optional[Sequence["UCM.UCMmap"]] = None,
+    traversal: Optional["TraversalStats"] = None,
+    tree=None,
 ) -> UCM:
     """Attach performance overlay metadata to ``ucm`` from ``log``.
 
     ``node_metrics`` / ``edge_metrics`` pick what is shown (up to two
     each keeps the diagram readable — see :data:`NODE_METRICS` /
     :data:`EDGE_METRICS`; pass empty sequences to disable a layer).
+
+    ``traversal`` (a :class:`~pm4py_ucm.algo.traversal.TraversalStats`)
+    together with the ``tree`` the model was built from enables the
+    :data:`TRAVERSAL_METRICS` — replay-based counts that conserve across
+    the model, and the only ones that can measure a silent skip. Both
+    are needed: the counts are keyed by process-tree node, and ``tree``
+    resolves the provenance each UCM element carries. Without them those
+    metrics are simply absent and everything else is unchanged.
+
     Two metadata layers are attached to RespRefs and connections:
 
     * ``perf_<metric>`` — **every** available metric, one entry per
@@ -562,6 +677,7 @@ def annotate_performance(
     target_maps = list(maps) if maps is not None else list(ucm.maps)
     _strip_perf(target_maps)
     resolver = _SegmentResolver(ucm)
+    traversals = _TraversalIndex(traversal, tree)
 
     for m in target_maps:
         for n in m.nodes:
@@ -570,6 +686,7 @@ def annotate_performance(
             entry = stats.activity.get(n.resp_def.name)
             if not entry:
                 continue
+            entry = traversals.augment(entry, n)
             # Every available metric as its own metadata line; the
             # display overlay carries only the selected ones.
             _add_metric_metadata(n, NODE_METRICS, entry)
@@ -588,13 +705,19 @@ def annotate_performance(
             if isinstance(c.source, _ROUTING_TYPES):
                 continue
             prevs = resolver.prev_activities(c)
-            if not prevs:
-                continue
             entry = _aggregate_pair_stats(
                 stats, prevs, resolver.next_activities(c),
-            )
+            ) if prevs else None
             if entry is None:
-                continue
+                # No directly-follows evidence for this arc. Replay still
+                # has something to say — indeed this is exactly the case
+                # that matters most, since a silent skip produces no
+                # directly-follows pair at all and so used to be left
+                # blank. Carry on with an empty entry when a traversal
+                # count is available, and skip as before when not.
+                if traversals.count(c) is None:
+                    continue
+                entry = {}
             percentage = None
             if isinstance(c.source, UCM.OrFork):
                 total = 0
@@ -604,7 +727,7 @@ def annotate_performance(
                     )
                     if s_entry:
                         total += s_entry["frequency"]
-                if total:
+                if total and "frequency" in entry:
                     percentage = entry["frequency"] / total
             elif isinstance(c.source, UCM.AndFork):
                 # Every case reaching an AND-fork traverses EVERY branch, so a
@@ -630,6 +753,13 @@ def annotate_performance(
                     entry["frequency"] = inflow_f
                     if "case_frequency" in entry:
                         entry["case_frequency"] = inflow_c
+            # A branch's share is taken of its fork's own traversals, so
+            # the branches of one choice always sum to 100 %.
+            entry = traversals.augment(
+                entry, c,
+                total=(traversals.count(c.source)
+                       if isinstance(c.source, UCM.OrFork) else None),
+            )
             try:
                 branch = c.source.succ_connections.index(c)
             except ValueError:

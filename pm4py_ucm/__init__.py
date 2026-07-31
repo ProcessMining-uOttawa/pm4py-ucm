@@ -39,6 +39,7 @@ from .api import (
     compute_family_stats,
     write_family_report,
     annotate_performance,
+    compute_traversal_stats,
     suggest_decomposition,
 )
 from .objects.ucm.obj import UCM
@@ -66,6 +67,7 @@ __all__ = [
     "compute_family_stats",
     "write_family_report",
     "annotate_performance",
+    "compute_traversal_stats",
     "suggest_decomposition",
     "rank_partition_attributes",
 ]
