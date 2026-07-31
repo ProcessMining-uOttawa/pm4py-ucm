@@ -20,6 +20,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (This is the deterministic half of the AI-insights §4.1 "partition &
   decomposition advisor"; the optional LLM sense-check is a separate later
   layer. See `docs/ai_insights.md`.)
+- **`devlog` sample log** — a real developer-activity CSV (285 cases, rich case
+  attributes) bundled alongside the two synthetic samples; CSV files are now
+  accepted as sample logs.
+
+### Changed — Web app (V5)
+
+- **Useful defaults out of the box.** Decomposition now defaults to **auto**
+  (shape-fitted) instead of off; the activity overlay leads with the **time**
+  metric (median service/sojourn time) then frequency; and the first time an
+  overlay is active the **heat-map emphasis** turns on automatically with the
+  **Per family member** scale. Each remains freely changeable and the choice
+  sticks.
 
 ## [0.7.7] — 2026-07-31
 

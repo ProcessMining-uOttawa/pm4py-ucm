@@ -142,7 +142,7 @@ def _list_samples() -> List[Path]:
         if not p.is_file():
             continue
         name = p.name.lower()
-        if name.endswith((".xes", ".xes.gz", ".gz", ".zip")):
+        if name.endswith((".xes", ".xes.gz", ".gz", ".zip", ".csv")):
             out.append(p)
     return sorted(out, key=lambda p: p.name.lower())
 
@@ -2737,7 +2737,7 @@ with st.sidebar:
     decomposition_preset = st.selectbox(
         "Decomposition",
         options=["off", "auto"] + list(_DECOMP_PRESETS) + ["Custom"],
-        index=0, key="cfg_decomp_preset",
+        index=1, key="cfg_decomp_preset",   # default "auto" — useful out of the box
         help=(
             "Splits the Model tab's UCM into a root map + plug-ins. "
             "**auto** fits the map size to the mined tree's shape; a "
@@ -2873,8 +2873,10 @@ with st.sidebar:
     _node_key = f"overlay_nodes::{_ov_hash}"
     _edge_key = f"overlay_edges::{_ov_hash}"
     if _node_key not in st.session_state:
+        # Time metric first (so the heat-map emphasises time — red — by
+        # default), frequency second.
         st.session_state[_node_key] = [
-            "frequency", "median_time" if _interval else "sojourn_median_time"]
+            "median_time" if _interval else "sojourn_median_time", "frequency"]
     if _edge_key not in st.session_state:
         st.session_state[_edge_key] = ["percentage", "frequency"]
     # The metric multiselects only STAGE a choice; picking a metric
@@ -2941,9 +2943,18 @@ with st.sidebar:
     # Heat-map emphasis: colour + thickness on activities/edges by the FIRST
     # applied metric of each layer. A render-time overlay (no change to the
     # .jucm), so it applies instantly — no Apply needed.
+    # One-shot: the first time an overlay is active for this log and the heat-map
+    # hasn't been touched, default it ON with the per-family-member scale — a
+    # useful out-of-the-box view. Later manual changes stick (the keys are then
+    # present, so this no-ops). Direct key seed, like the project-restore path.
+    _hm_key = f"overlay_heatmap::{_ov_hash}"
+    if _hm_key not in st.session_state and (overlay_nodes or overlay_edges):
+        st.session_state[_hm_key] = True
+        st.session_state[f"overlay_heat_scope::{_ov_hash}"] = \
+            "Per family member (across its maps)"
     overlay_heatmap = _ovl_exp.checkbox(
         "Heat-map emphasis",
-        key=f"overlay_heatmap::{_ov_hash}",
+        key=_hm_key,
         help=(
             "Colour and thicken activity contours / fills (BPMN) or "
             "responsibility markers (UCM) and edges by the value of the "
@@ -3048,7 +3059,7 @@ if samples:
     with src_tabs[0]:
         def _label(p: Path) -> str:
             stem = p.name
-            for suffix in (".xes.gz", ".xes", ".zip", ".gz"):
+            for suffix in (".xes.gz", ".xes", ".zip", ".gz", ".csv"):
                 if stem.lower().endswith(suffix):
                     stem = stem[: -len(suffix)]
                     break
