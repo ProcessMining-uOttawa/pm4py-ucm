@@ -212,6 +212,51 @@ def test_every_branch_a_variant_takes_gets_a_satisfiable_condition():
         assert any("variant_id" in e for e in exprs), exprs
 
 
+def test_activities_of_fitting_cases_are_all_demonstrable():
+    """The coverage contract, stated as the guarantee it is.
+
+    Every activity that appears in a case the variants cover must have a
+    satisfiable route through the conditions. Activities appearing ONLY
+    in non-fitting cases have no variant to demonstrate them, and that
+    is the honest boundary of the guarantee — the premise is "if the
+    variants cover the cases".
+    """
+    from pm4py_ucm.objects.ucm.obj import UCM
+
+    # A four-way choice inside a loop, plus one activity that only ever
+    # occurs in a trace the tree cannot parse.
+    tree = _seq(_leaf("S"),
+                _loop(_xor(_leaf("A"), _leaf("B"), _leaf("C"), _leaf("D")),
+                      _tau()),
+                _leaf("Z"))
+    log = [("c1", ["S", "A", "B", "Z"]),
+           ("c2", ["S", "C", "D", "Z"]),
+           ("c3", ["S", "A", "Z"]),
+           ("c4", ["S", "A", "NEVER_FITS", "Z"])]
+    clustering = _clustering.cluster(log, tree)
+    covered = {a for cid, acts in log if cid not in clustering.noise_case_ids
+               for a in acts}
+    assert covered >= {"A", "B", "C", "D"}, covered
+
+    ucm = pm4py_ucm.discover_ucm_inductive(
+        log, parameters={"process_tree": tree})
+    _scenarios.synthesize_scenarios(ucm, tree, clustering)
+
+    # Each of the four branches must be satisfiable for some variant.
+    fork = next(n for m in ucm.maps for n in m.nodes
+                if isinstance(n, UCM.OrFork) and n.name == "OrFork"
+                and len(n.succ_connections) == 4)
+    exprs = [(a.condition.expression if a.condition else "true")
+             for a in fork.succ_connections]
+    unsatisfiable = [e for e in exprs if e.strip() == "false"]
+    assert not unsatisfiable, (
+        "every branch of the 4-way choice is taken by some variant, so "
+        f"none may be unsatisfiable; got {exprs}")
+
+    # And the loop must be sized to make four branches demonstrable.
+    assert max(_scenarios.suggest_loop_iterations(tree).values()) >= 4
+
+
 def test_loop_decrement_runs_after_the_bodys_choices():
     """The decrement must sit at the END of the body, immediately before
     the LoopFork.

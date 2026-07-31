@@ -38,14 +38,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the old `true / false / false / …` fallback that made every branch but
   the first unreachable.
 
-  Measured over the bundled samples plus a real clinical log, scenarios
-  now reach **every activity** of the mined model on the clinical log
-  (was 6 of 10), on `ClaimsPaymentLog` (was 24 of 25) and on
-  `IssueTrackerSyntheticLog`, with every scenario still running to
-  completion. The remaining unreached arcs on those three are
-  loop-*bypass* paths — the 0-iteration case — which no case in those
-  logs exhibits. `devlog`, whose tree has 17 loops nested 15 deep, still
-  has gaps.
+  Measured over the three bundled samples and a real clinical log, at
+  two noise thresholds, decomposed and flat: every scenario runs to
+  completion, and the scenarios collectively reach **every activity that
+  appears in a case the variants cover** — on the clinical log (was 6 of
+  10), `ClaimsPaymentLog` (was 24 of 25), `IssueTrackerSyntheticLog`,
+  and `devlog`, whose tree has 17 loops nested 15 deep. On `devlog` the
+  four activities still unreached occur *only* in cases that do not fit
+  the model, so no variant represents them — that is the honest boundary
+  of the guarantee, whose premise is "if the variants cover the cases".
+
+  The remaining unreached *arcs* are loop-**bypass** paths — the
+  0-iteration case — which no case in these logs exhibits.
 
 ### Fixed
 
