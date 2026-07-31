@@ -46,6 +46,41 @@ def _tau():
 # Sequence + parallel — the cornerstone case
 # ---------------------------------------------------------------------------
 
+def test_parallel_projection_does_not_reuse_the_outer_traces_memo():
+    """A parallel block replays each child against a PROJECTION of the
+    window — a fresh list whose positions are their own coordinate
+    space. The parse memo is keyed on (subtree, start, end) with no list
+    identity, so sharing it across that boundary would let the parse of
+    one window answer for a different one.
+
+    Here the parallel block is entered twice inside a loop, once with a
+    'P' and once with a 'Q'. Cross-contaminated memo entries make the
+    second entry reuse the first's parse, reporting P twice and Q never.
+
+    The projections must have the same LENGTH but different content for
+    the keys to collide, so the contaminated branch is a choice between
+    two activities: entry one projects one P, entry two one Q, and both
+    ask the memo for the same one-event window of the same subtree.
+    """
+    # *( ->( S, +( X(tau, X(P, Q)), X(tau, Z) ) ), R )
+    p_or_q = _xor(_leaf("P"), _leaf("Q"))
+    left = _xor(_tau(), p_or_q)
+    right = _xor(_tau(), _leaf("Z"))
+    tree = _loop(_seq(_leaf("S"), _par(left, right)), _leaf("R"))
+
+    ids = cs.assign_node_ids(tree)
+    xor_counts = {}
+    trace = ["S", "P", "R", "S", "Q"]
+    sig = cs.replay(tree, trace, node_ids=ids, xor_branch_counts=xor_counts)
+    assert sig != cs.NOFIT, "the trace does fit this tree"
+
+    taken = xor_counts.get(ids[id(p_or_q)], {})
+    assert (taken.get(0, 0), taken.get(1, 0)) == (1, 1), (
+        "the trace has one P and one Q, so each branch of X(P, Q) ran "
+        f"exactly once; got P={taken.get(0, 0)} Q={taken.get(1, 0)}"
+    )
+
+
 def test_parallel_interleavings_share_signature():
     # X -> (Y || Z)
     tree = _seq(_leaf("X"), _par(_leaf("Y"), _leaf("Z")))

@@ -159,23 +159,25 @@ def node_counts_for_parse(
     tree,
     node_ids: Dict[int, int],
     xor_branch_counts: Dict[int, Dict[int, int]],
-    loop_iter_counts: Dict[int, int],
+    loop_total_counts: Dict[int, int],
 ) -> Dict[int, int]:
     """Executions per tree node for **one** replayed trace.
 
     Derived top-down from the two by-products a
     :func:`choice_signature.replay` already produces: a choice's branch
-    counts (absolute, summed over the trace) and a loop's iteration
-    count. Sequence and concurrent children inherit their parent's count
-    — every child of a ``->`` or ``+`` runs whenever the block does,
-    which is precisely the property a directly-follows count fails to
-    capture.
+    counts and a loop's body-execution total, both **absolute** — summed
+    over every visit the trace makes. Sequence and concurrent children
+    inherit their parent's count — every child of a ``->`` or ``+`` runs
+    whenever the block does, which is precisely the property a
+    directly-follows count fails to capture.
 
-    Loops record the number of ``do`` iterations, so the ``do`` child
-    runs ``iterations`` times and the ``redo`` child ``iterations − 1``.
-    A loop nested inside another loop is approximate: the underlying
-    replay records the *maximum* iteration count per node rather than
-    one entry per visit.
+    Loops are exact under nesting. A loop node visited ``V`` times whose
+    body ran ``D`` times in total (over all those visits) executes its
+    ``do`` child ``D`` times and its ``redo`` child ``D − V`` — one redo
+    fewer than a ``do`` per visit, since ``do (redo do)*`` starts with a
+    ``do``. Both numbers are absolute, so the recursion below a nested
+    loop continues with the true execution count rather than a
+    per-visit figure multiplied by the number of visits.
     """
     out: Dict[int, int] = {}
 
@@ -196,10 +198,15 @@ def node_counts_for_parse(
             for i, child in enumerate(children):
                 rec(child, branches.get(i, 0))
         elif op == _LOOP:
-            iterations = loop_iter_counts.get(nid, 1)
-            rec(children[0], times * max(0, iterations))
+            # ``times`` is how often this loop is ENTERED; the recorded
+            # total is how often its body RAN across those entries. They
+            # differ only under nesting, which is exactly the case a
+            # per-visit iteration count would get wrong.
+            visits = times
+            total = loop_total_counts.get(nid, visits)
+            rec(children[0], max(0, total))
             if len(children) > 1:
-                rec(children[1], times * max(0, iterations - 1))
+                rec(children[1], max(0, total - visits))
             for child in children[2:]:
                 rec(child, times)
         else:
@@ -216,16 +223,16 @@ def _replay_sequence(tree, node_ids, seq: Sequence[str], **kwargs):
     """Replay one activity sequence → ``(node_counts, branch_counts)``
     or ``None`` when it does not fit."""
     xor_counts: Dict[int, Dict[int, int]] = {}
-    loop_iters: Dict[int, int] = {}
+    loop_totals: Dict[int, int] = {}
     signature = _cs.replay(
         tree, list(seq), node_ids=node_ids,
-        xor_branch_counts=xor_counts, loop_iter_counts=loop_iters,
+        xor_branch_counts=xor_counts, loop_total_counts=loop_totals,
         **kwargs,
     )
     if signature == _cs.NOFIT:
         return None
     return (signature,
-            node_counts_for_parse(tree, node_ids, xor_counts, loop_iters),
+            node_counts_for_parse(tree, node_ids, xor_counts, loop_totals),
             xor_counts)
 
 

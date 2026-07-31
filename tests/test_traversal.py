@@ -133,6 +133,97 @@ def test_loop_counts_do_per_iteration_and_redo_once_less():
     assert _counts_by_label(tree, stats) == {"A": 6, "R": 3}
 
 
+def test_nested_loop_body_counts_every_iteration():
+    """A loop entered several times runs a different number of body
+    iterations each time, so its executions are the TOTAL over visits —
+    not the per-visit maximum multiplied by the visit count, which is
+    what a max-based iteration record would give."""
+    # outer: *( ->(S, inner), Z ) with inner: *(A, B)
+    inner = _loop(_leaf("A"), _leaf("B"))
+    tree = _loop(_seq(_leaf("S"), inner), _leaf("Z"))
+
+    # One case, two outer iterations:
+    #   S A B A B A   (inner runs 3 times)  Z  S A   (inner runs 1)
+    # inner do  A: 3 + 1 = 4        (a max would say 2 visits x 3 = 6)
+    # inner redo B: 2 + 0 = 2       (a max would say 2 x 2 = 4)
+    trace = ["S", "A", "B", "A", "B", "A", "Z", "S", "A"]
+    stats = tv.compute_traversal_stats(tree, [trace], repair=False)
+    assert stats.fitting_cases == 1, "the trace must fit for this to mean anything"
+    counts = _counts_by_label(tree, stats)
+    assert counts["S"] == 2, "outer body runs twice"
+    assert counts["Z"] == 1, "outer redo runs once"
+    assert counts["A"] == 4
+    assert counts["B"] == 2
+    # And the events actually observed agree with the counts.
+    assert counts["A"] == trace.count("A")
+    assert counts["B"] == trace.count("B")
+    assert counts["S"] == trace.count("S")
+    assert counts["Z"] == trace.count("Z")
+
+
+def test_nested_loop_counts_conserve_against_the_log():
+    """Across a mixed log, every activity's traversal count equals the
+    number of times it was actually observed — the strongest available
+    check that nesting is handled exactly."""
+    inner = _loop(_leaf("A"), _leaf("B"))
+    tree = _loop(_seq(_leaf("S"), inner), _leaf("Z"))
+    log = [
+        ["S", "A"],
+        ["S", "A", "B", "A", "Z", "S", "A", "B", "A", "B", "A"],
+        ["S", "A", "B", "A", "Z", "S", "A"],
+        ["S", "A", "B", "A", "B", "A", "B", "A"],
+    ]
+    stats = tv.compute_traversal_stats(tree, log, repair=False)
+    assert stats.fitting_cases == len(log)
+    counts = _counts_by_label(tree, stats)
+    for activity in ("S", "A", "B", "Z"):
+        observed = sum(t.count(activity) for t in log)
+        assert counts[activity] == observed, (
+            f"{activity}: counted {counts[activity]}, observed {observed}")
+
+
+def test_counts_match_observed_events_on_a_loop_and_parallel_nest():
+    """The end-to-end guarantee: on cases that fit, an activity's
+    traversal count IS the number of times it was observed. The shape
+    here nests a parallel block with a multi-activity choice inside a
+    loop — the combination that exercises both loop-visit accounting and
+    the per-projection parse memo."""
+    inner = _par(_xor(_tau(), _xor(_leaf("P"), _leaf("Q"))),
+                 _xor(_tau(), _leaf("Z")))
+    tree = _loop(_seq(_leaf("S"), inner), _leaf("R"))
+    log = [
+        ["S", "P", "R", "S", "Q"],
+        ["S"],
+        ["S", "Z", "R", "S", "P", "Z", "R", "S", "Q"],
+        ["S", "Q", "R", "S"],
+        ["S", "P", "Z"],
+    ]
+    stats = tv.compute_traversal_stats(tree, log, repair=False)
+    assert stats.fitting_cases == len(log), "all of these fit by construction"
+    counts = _counts_by_label(tree, stats)
+    for activity in ("S", "P", "Q", "Z", "R"):
+        observed = sum(t.count(activity) for t in log)
+        assert counts.get(activity, 0) == observed, (
+            f"{activity}: counted {counts.get(activity, 0)}, "
+            f"observed {observed}")
+
+
+def test_loop_iteration_max_is_still_the_max_for_scenario_synthesis():
+    """The traversal fix must not disturb the max the synthesizer sizes
+    its loop counter with."""
+    inner = _loop(_leaf("A"), _leaf("B"))
+    tree = _loop(_seq(_leaf("S"), inner), _leaf("Z"))
+    ids = cs.assign_node_ids(tree)
+    maxes, totals = {}, {}
+    sig = cs.replay(tree, ["S", "A", "B", "A", "B", "A", "Z", "S", "A"],
+                    node_ids=ids, loop_iter_counts=maxes,
+                    loop_total_counts=totals)
+    assert sig != cs.NOFIT
+    inner_id = ids[id(inner)]
+    assert maxes[inner_id] == 3, "heaviest visit ran 3 body iterations"
+    assert totals[inner_id] == 4, "but the body ran 4 times in all"
+
+
 def test_counts_scale_with_repeated_cases():
     # Deduplicating by activity sequence must not lose the multiplicity.
     tree = _seq(_leaf("A"), _leaf("B"))

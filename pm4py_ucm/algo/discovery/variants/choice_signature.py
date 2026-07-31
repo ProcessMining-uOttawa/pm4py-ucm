@@ -154,6 +154,7 @@ def replay(
     loop_iter_counts: Optional[Dict[int, int]] = None,
     xor_branch_counts: Optional[Dict[int, Dict[int, int]]] = None,
     max_replay_states: int = DEFAULT_MAX_REPLAY_STATES,
+    loop_total_counts: Optional[Dict[int, int]] = None,
 ) -> Union[tuple, str]:
     """Replay ``trace`` on ``tree`` and return its canonical signature.
 
@@ -176,10 +177,13 @@ def replay(
         to the result.
     loop_iter_counts
         Optional dict populated during replay. For every LOOP node
-        encountered, ``loop_iter_counts[node_id] = actual_iter_count``
-        is written **before** coarsening, so callers can recover the
-        underlying iteration count even when the signature was
-        coarsened for clustering purposes. Pass ``None`` to discard.
+        encountered, ``loop_iter_counts[node_id]`` is the **maximum**
+        body-iteration count over that node's visits, written **before**
+        coarsening, so callers can recover the underlying iteration
+        count even when the signature was coarsened for clustering
+        purposes. Pass ``None`` to discard. For the *total* over all
+        visits — which is what an execution count is — see
+        ``loop_total_counts``.
     xor_branch_counts
         Optional dict populated during replay. For every XOR/OR node
         encountered, the chosen branch index is counted:
@@ -190,6 +194,15 @@ def replay(
         across all loop iterations. Used by scenario synthesis to
         distribute branches across iterations via the loop counter
         when the XOR sits inside a loop.
+    loop_total_counts
+        Optional dict populated during replay with the **total** body
+        executions per LOOP node — the sum over every visit, where
+        ``loop_iter_counts`` records the maximum. The two coincide for a
+        loop entered once and differ when a loop is **nested inside
+        another loop**: with an outer loop running twice and the inner
+        one running 3 then 1 iterations, the max is 3 but the body
+        really executed 4 times. Traversal counting needs the total;
+        scenario synthesis needs the max (it sizes a counter).
     max_replay_states
         Cap on the number of subtree-replay attempts consumed by this
         one call before giving up. Backtracking on ambiguous trees
@@ -255,8 +268,11 @@ def replay(
     frag, loop_delta, xor_delta = parse
     # Merge deltas of the WINNING parse into the caller's dicts.
     # Backtracking discards deltas of every rejected attempt.
-    for lid, ic in loop_delta.items():
-        loop_iter_counts[lid] = max(loop_iter_counts.get(lid, 0), ic)
+    for lid, (ic_max, ic_total) in loop_delta.items():
+        loop_iter_counts[lid] = max(loop_iter_counts.get(lid, 0), ic_max)
+        if loop_total_counts is not None:
+            loop_total_counts[lid] = (
+                loop_total_counts.get(lid, 0) + ic_total)
     for xid, by_branch in xor_delta.items():
         acc = xor_branch_counts.setdefault(xid, {})
         for b, c in by_branch.items():
@@ -269,18 +285,40 @@ def replay(
 # to the caller-side ``loop_iter_counts`` / ``xor_branch_counts`` dicts.
 # The public :func:`replay` merges them only for the winning parse; any
 # rejected attempt is discarded intact.
-_Delta = Tuple[Dict[int, int], Dict[int, Dict[int, int]]]
-_Parse = Tuple[tuple, Dict[int, int], Dict[int, Dict[int, int]]]
+#: Loop delta: ``{loop_node_id: (max_iterations, total_iterations)}``.
+#: Only :func:`_replay_loop` constructs entries and only
+#: :func:`_merge_loop` combines them — every other replay function passes
+#: the mapping through opaquely.
+_LoopDelta = Dict[int, Tuple[int, int]]
+_Delta = Tuple[_LoopDelta, Dict[int, Dict[int, int]]]
+_Parse = Tuple[tuple, _LoopDelta, Dict[int, Dict[int, int]]]
 
 
-def _merge_loop(a: Dict[int, int], b: Dict[int, int]) -> Dict[int, int]:
+def _merge_loop(a: _LoopDelta, b: _LoopDelta) -> _LoopDelta:
+    """Combine two loop deltas.
+
+    Each value is ``(max_iterations, total_iterations)``. The two
+    aggregates answer different questions and both are needed:
+
+    * the **max** sizes a scenario's loop counter, so the synthesised
+      loop runs at least as many times as the heaviest trace;
+    * the **total** counts executions, which is what a traversal count
+      is. They differ exactly when a loop is entered more than once —
+      i.e. when it is nested inside another loop — where a max would
+      under-count the inner body's real executions.
+
+    Merging happens across sequence siblings, parallel branches and
+    successive iterations of an enclosing loop; in every case the
+    executions add up, so totals sum.
+    """
     if not a:
         return dict(b)
     if not b:
         return dict(a)
     out = dict(a)
-    for k, v in b.items():
-        out[k] = max(out.get(k, 0), v)
+    for k, (b_max, b_total) in b.items():
+        a_max, a_total = out.get(k, (0, 0))
+        out[k] = (max(a_max, b_max), a_total + b_total)
     return out
 
 
@@ -581,13 +619,20 @@ def _replay_parallel(
     merged_loop: Dict[int, int] = {}
     merged_xor: Dict[int, Dict[int, int]] = {}
     for c, proj in zip(children, projections):
-        # Parallel projections are fresh lists — replay them against the
-        # child subtree with their own [0, len(proj)] window. This does
-        # NOT share the outer trace's memo (different list identity), but
-        # parallel projections are rare in practice and typically small.
+        # Each projection is a FRESH list, so its positions live in their
+        # own coordinate space — window [0, 2) on a projection is not the
+        # same window as [0, 2) on the enclosing trace. The memo key is
+        # (id(subtree), start, end) with no list identity in it, so
+        # sharing the caller's memo across that boundary lets a parse of
+        # one window be returned for a completely different one, which
+        # silently yields a wrong parse (observed: a parallel block
+        # reporting one branch taken twice and its sibling never, on a
+        # trace containing one event of each). Each projection therefore
+        # gets its own memo. Projections are typically small, and a
+        # correct parse is not negotiable.
         r = _replay(
             proj, 0, len(proj), c, node_ids, alpha_cache,
-            coarsen_loops, budget, memo,
+            coarsen_loops, budget, {},
         )
         if r is None:
             return None
@@ -658,7 +703,13 @@ def _replay_loop(
             continue
         iter_count, iter_frags, loop_d, xor_d = cont
         out_loop = dict(loop_d)
-        out_loop[nid] = max(out_loop.get(nid, 0), iter_count)
+        # This visit contributes ``iter_count`` executions of the body.
+        # ``loop_d`` may already carry an entry for this node only if the
+        # loop is nested inside itself, which a process tree cannot
+        # express, so a plain merge of one visit is exact here; merges
+        # ACROSS visits happen in the callers via _merge_loop.
+        prev_max, prev_total = out_loop.get(nid, (0, 0))
+        out_loop[nid] = (max(prev_max, iter_count), prev_total + iter_count)
         if coarsen_loops:
             coarse = 0 if iter_count == 0 else (1 if iter_count == 1 else 2)
             return (("LOOP", nid, coarse), out_loop, xor_d)

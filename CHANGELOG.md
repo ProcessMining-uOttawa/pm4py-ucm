@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Concurrency-aware replay could return a wrong parse.** A parallel
+  block replays each child against a *projection* of the window — a
+  fresh list whose positions are their own coordinate space — but the
+  parse memo is keyed on `(subtree, start, end)` with no list identity
+  in it. Sharing the enclosing trace's memo across that boundary let the
+  parse of one window answer for a different one whenever two
+  projections of the same subtree had the same length and different
+  content. Observed on a real log: a choice reporting one branch taken
+  twice and its sibling never, for a trace containing one event of each.
+  Each projection now gets its own memo. This affected anything reading
+  a replay's branch counts — scenario synthesis and, since 0.7.8, the
+  traversal metrics.
+- **Traversal counts are now exact under nested loops.** A loop entered
+  more than once runs a different number of body iterations each time,
+  and the replay recorded only the *maximum* per node — correct for
+  sizing a scenario's loop counter, but an over-count when used as an
+  execution count (an outer loop running twice around an inner one that
+  ran 3 then 1 iterations reported 6 body executions instead of 4).
+  `replay()` gained a `loop_total_counts` output carrying the total over
+  all visits, alongside the existing max, and `traversal_frequency` uses
+  it. With both fixes, every activity's traversal count now equals its
+  observed event count across the fitting cases of both bundled sample
+  logs, at every noise threshold.
+
 ## [0.7.8] — 2026-07-31
 
 Frequency numbers that **conserve**. Counting events and counting
