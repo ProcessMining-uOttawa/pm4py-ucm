@@ -303,6 +303,52 @@ def _log_and_tree(
         return log, tree
 
 
+def _wants_traversal(*metric_groups) -> bool:
+    """Is any replay-based metric selected across these overlay layers?
+
+    Replay is the costliest part of a mine, so it is computed only when
+    something actually displays it.
+    """
+    from pm4py_ucm.algo.performance import TRAVERSAL_METRICS
+    return any(m in TRAVERSAL_METRICS
+               for group in metric_groups for m in (group or ()))
+
+
+def _fit_note(fit: Optional[Dict[str, Any]]) -> None:
+    """Say what the traversal counts cover, and how to widen it.
+
+    A model mined with a noise threshold deliberately drops infrequent
+    behaviour, so it explains only part of its log. Reporting counts
+    without that context is what makes them surprising: the fix is to
+    state the coverage, and to point at the knob that changes it.
+    """
+    if not fit or not fit.get("total_cases"):
+        return
+    total = fit["total_cases"]
+    fitting, repaired = fit["fitting_cases"], fit["repaired_cases"]
+    unexplained = fit["unexplained_cases"]
+    ratio = fit["fitting_ratio"]
+
+    parts = [f"**{fitting:,} of {total:,} cases ({ratio * 100:.0f}%) fit "
+             f"this model exactly.**"]
+    if repaired:
+        parts.append(
+            f"The other {repaired:,} are counted on their closest path "
+            "through the model, so the numbers cover the whole log — for "
+            "an activity the model treats as mandatory that can read "
+            "higher than the events actually observed.")
+    if unexplained:
+        parts.append(
+            f"{unexplained:,} case(s) could not be placed on the model and "
+            "are not counted.")
+    if ratio < 0.7:
+        parts.append(
+            "A lower **noise threshold** keeps more of the behaviour and "
+            "raises this fit (0.0 explains every case, at the cost of a "
+            "busier model).")
+    (st.warning if ratio < 0.7 else st.caption)(" ".join(parts))
+
+
 @st.cache_data(show_spinner=False)
 def _mine(
     log_bytes: bytes,
@@ -363,12 +409,22 @@ def _mine(
         log, parameters=params, decomposition=decomp_arg,
     )
 
+    traversal = None
+    if _wants_traversal(overlay_nodes, overlay_edges):
+        # Replay-based counts. Costed per distinct activity sequence (and,
+        # for non-fitting ones, per alignment), so this is far cheaper than
+        # per case — but it is still the most expensive step of a mine, so
+        # it only runs when a traversal metric is actually selected.
+        _phase("Replaying the log on the model...")
+        traversal = pm4py_ucm.compute_traversal_stats(tree, log)
+
     if overlay_nodes or overlay_edges:
         _phase("Computing performance overlay...")
         pm4py_ucm.annotate_performance(
             ucm, log,
             node_metrics=list(overlay_nodes),
             edge_metrics=list(overlay_edges),
+            traversal=traversal, tree=tree,
         )
 
     _phase("Writing .jucm...")
@@ -394,7 +450,7 @@ def _mine(
                 n_events += 1
         n_activities = len(activities)
 
-    return {
+    out = {
         "jucm": jucm_bytes,
         "n_maps": len(ucm.maps),
         "n_nodes": sum(len(m.nodes) for m in ucm.maps),
@@ -402,6 +458,19 @@ def _mine(
         "n_events": n_events,
         "n_activities": n_activities,
     }
+    if traversal is not None:
+        # Coverage travels with the model so the view can say what the
+        # counts describe — a model mined with a noise threshold explains
+        # only part of its log, and the numbers must not imply otherwise.
+        out["fit"] = {
+            "total_cases": traversal.total_cases,
+            "fitting_cases": traversal.fitting_cases,
+            "repaired_cases": traversal.repaired_cases,
+            "unexplained_cases": traversal.unexplained_cases,
+            "fitting_ratio": traversal.fitting_ratio,
+            "coverage": traversal.coverage,
+        }
+    return out
 
 
 @st.cache_data(show_spinner=False)
@@ -1326,15 +1395,24 @@ def _mine_family(
         # combined/umbrella assemblies re-convert the trees and are
         # not annotated.)
         _phase("Computing performance overlays...")
+        _cell_traversal = _wants_traversal(overlay_nodes, overlay_edges)
         fam_cases = family.log_df["case:concept:name"].astype(str)
         for cell in family.cells:
             cell_df = family.log_df[
                 fam_cases.isin(set(cell.case_ids))
             ]
+            # Each cell has its OWN mined tree, so its traversal counts
+            # come from replaying that cell's sub-log on that cell's
+            # model — the same reason the other metrics are per-cell.
+            cell_traversal = (
+                pm4py_ucm.compute_traversal_stats(cell.tree, cell_df)
+                if _cell_traversal and cell.tree is not None else None
+            )
             pm4py_ucm.annotate_performance(
                 cell.ucm, cell_df,
                 node_metrics=list(overlay_nodes),
                 edge_metrics=list(overlay_edges),
+                traversal=cell_traversal, tree=cell.tree,
             )
 
     summary_rows = family.summary_rows()
@@ -2866,10 +2944,16 @@ with st.sidebar:
         EDGE_METRICS as _EDGE_METRICS,
         NODE_METRICS as _NODE_METRICS,
     )
-    # Pre-select overlay metrics that fit the log: activity frequency plus a
-    # time metric — service time (median_time) when the log has two
-    # timestamps, otherwise the sojourn time, which works on a single one —
-    # and, for edges, an OR-fork branch's share (percentage) plus frequency.
+    # Pre-select overlay metrics that fit the log: a time metric — service
+    # time (median_time) when the log has two timestamps, otherwise the
+    # sojourn time, which works on a single one — plus the replay-based
+    # traversal count, and for edges a branch's share of its fork plus the
+    # same count. The traversal metrics are the defaults because they
+    # CONSERVE: an activity's count equals the count on its own edges, and
+    # a fork's branches sum to its inflow. The event-count and
+    # directly-follows metrics measure different things (executions, and
+    # adjacency in the trace), so on a model with concurrency or silent
+    # skips they disagree with each other — see docs/metrics.md.
     # Seeded per log (keyed on its hash) so a newly loaded log gets the
     # defaults that suit it, while the user's own picks persist within a log.
     _ov_hash = st.session_state.get("log_hash", "nolog")
@@ -2881,11 +2965,13 @@ with st.sidebar:
     _edge_key = f"overlay_edges::{_ov_hash}"
     if _node_key not in st.session_state:
         # Time metric first (so the heat-map emphasises time — red — by
-        # default), frequency second.
+        # default), traversal count second.
         st.session_state[_node_key] = [
-            "median_time" if _interval else "sojourn_median_time", "frequency"]
+            "median_time" if _interval else "sojourn_median_time",
+            "traversal_frequency"]
     if _edge_key not in st.session_state:
-        st.session_state[_edge_key] = ["percentage", "frequency"]
+        st.session_state[_edge_key] = [
+            "traversal_frequency", "traversal_percentage"]
     # The metric multiselects only STAGE a choice; picking a metric
     # re-annotates the model, so changes are batched behind an Apply button
     # (below) instead of re-mining after every single pick.
@@ -2893,7 +2979,12 @@ with st.sidebar:
         "On activities (max 2)",
         options=list(_NODE_METRICS), key=_node_key,
         help=(
-            "frequency = executions; case_coverage = cases containing "
+            "traversal_frequency = how often the log walks this activity "
+            "in the model (replayed on the process tree) — it matches the "
+            "count on the activity's own edges, so the diagram adds up; "
+            "frequency = executions observed in the log, which can differ "
+            "from the traversal count where the model over- or "
+            "under-generalises; case_coverage = cases containing "
             "the activity; relative_frequency = share of all events; "
             "repeat_frequency = repeat executions (rework); the "
             "mean/median/min/max/std/p90/p95/total_time metrics are "
@@ -2909,10 +3000,19 @@ with st.sidebar:
         "On edges (max 2)",
         options=list(_EDGE_METRICS), key=_edge_key,
         help=(
-            "frequency = directly-follows traversals; case_frequency = "
+            "traversal_frequency = how often the log walks this edge, "
+            "replayed on the process tree — prefer it whenever the model "
+            "has parallel branches or silent skips, which break the "
+            "directly-follows counts below; traversal_percentage = the "
+            "branch's share of its fork, shown with the base it divides "
+            "(\"25% of 258\"); frequency = directly-follows traversals, "
+            "i.e. how often the two activities were ADJACENT in a trace — "
+            "a parallel sibling in between, or a silently skipped branch, "
+            "makes this far smaller than the real flow; case_frequency = "
             "distinct cases traversing the handover; relative_frequency "
             "= share of all traversals; percentage = an OR-fork branch's "
-            "share of the fork; the time metrics are waiting times "
+            "share of the fork by directly-follows count; the time "
+            "metrics are waiting times "
             "between the edge's activities. case_frequency, "
             "relative_frequency and the shape aggregates (median/std/"
             "p90/p95) apply to single-pair segments; min/max and mean/"
@@ -3836,6 +3936,10 @@ if _view == "Model":
     m4.metric("Maps", mined["n_maps"])
     m5.metric("Nodes", mined["n_nodes"])
 
+    # What the replay-based counts describe. Shown right under the counts
+    # they qualify, so the coverage is read together with the numbers.
+    _fit_note(mined.get("fit"))
+
     # SVG is the default on-screen render: vector, crisp at any zoom, with
     # selectable text, and cheap (0.1–0.4 s even for a decomposed stack).
     # PNG is no longer rendered proactively — it is a download prepared on
@@ -3875,11 +3979,27 @@ if _view == "Model":
                    else "blue")
                 + ", darker/thicker = higher)."
             )
+        # Name the measure. A number on a diagram is ambiguous until you
+        # say what it counts, and "cases walking this path" reads very
+        # differently from "times these two events were adjacent".
+        _count_caption = ""
+        if _wants_traversal(overlay_nodes, overlay_edges):
+            _count_caption = (
+                " Counts = **cases walking this path**, replayed on the "
+                "model."
+            )
+        elif "frequency" in overlay_edges:
+            _count_caption = (
+                " Edge counts = **directly-follows** pairs (how often the "
+                "two activities were adjacent in a trace), which under "
+                "concurrency is smaller than the flow — switch the edge "
+                "metric to `traversal_frequency` for counts that add up."
+            )
         st.caption(
             f"Mined model ({notation}, "
             f"decomposition={decomposition_preset}) — vector SVG; scroll "
             "to zoom, drag to pan. Download SVG or a raster PNG below."
-            + _heat_caption
+            + _count_caption + _heat_caption
         )
     else:
         # SVG failed for some reason — fall back to a PNG so the model is

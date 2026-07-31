@@ -451,6 +451,14 @@ def _parse_perf_value(text: "Optional[str]") -> "Optional[float]":
             return float(s[:-1])
         except ValueError:
             return None
+    if "% of " in s:
+        # ``traversal_percentage`` carries the base it divides ("25% of
+        # 258"); the share is the part that varies across branches, so
+        # that is what a gradient should follow.
+        try:
+            return float(s.split("%", 1)[0])
+        except ValueError:
+            return None
     unit = _DURATION_UNITS.get(s[-1:])
     if unit is not None:
         try:

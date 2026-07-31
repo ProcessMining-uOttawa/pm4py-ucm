@@ -187,6 +187,19 @@ def resource_params():
     return params
 
 
+def wants_traversal():
+    """Do the chosen overlay metrics need a replay of the log on the model?
+
+    The traversal metrics count how often the model is WALKED, which
+    conserves across the diagram; the other metrics count events and
+    directly-follows pairs. Replaying costs real time, so it only runs
+    when one of them is selected.
+    """
+    from pm4py_ucm.algo.performance import TRAVERSAL_METRICS
+    return any(m in TRAVERSAL_METRICS
+               for m in tuple(OVERLAY_NODES) + tuple(OVERLAY_EDGES))
+
+
 def _heat_metrics():
     nm = OVERLAY_NODES[0] if OVERLAY_NODES else None
     em = OVERLAY_EDGES[0] if OVERLAY_EDGES else None
@@ -414,10 +427,13 @@ def _model_fn() -> str:
         "    params.update(resource_params())\n"
         "    ucm = pm4py_ucm.discover_ucm_inductive(\n"
         "        log, parameters=params, decomposition=DECOMPOSITION)\n"
+        "    traversal = (pm4py_ucm.compute_traversal_stats(tree, log)\n"
+        "                 if wants_traversal() else None)\n"
         "    if OVERLAY_NODES or OVERLAY_EDGES:\n"
         "        pm4py_ucm.annotate_performance(\n"
         "            ucm, log,\n"
-        "            node_metrics=OVERLAY_NODES, edge_metrics=OVERLAY_EDGES)\n"
+        "            node_metrics=OVERLAY_NODES, edge_metrics=OVERLAY_EDGES,\n"
+        "            traversal=traversal, tree=tree)\n"
         '    pm4py_ucm.write_ucm(ucm, str(OUT_DIR / "model.jucm"))\n'
         "    _save_image(pm4py_ucm.save_vis_ucm, ucm,\n"
         '                str(OUT_DIR / "model.png"), style=NOTATION,\n'
@@ -485,10 +501,15 @@ def _family_fn() -> str:
         "        for cell in family.cells:\n"
         "            cell_df = family.log_df[\n"
         "                fam_cases.isin(set(cell.case_ids))]\n"
+        "            cell_traversal = (\n"
+        "                pm4py_ucm.compute_traversal_stats(cell.tree, cell_df)\n"
+        "                if wants_traversal() and cell.tree is not None\n"
+        "                else None)\n"
         "            pm4py_ucm.annotate_performance(\n"
         "                cell.ucm, cell_df,\n"
         "                node_metrics=OVERLAY_NODES,\n"
-        "                edge_metrics=OVERLAY_EDGES)\n"
+        "                edge_metrics=OVERLAY_EDGES,\n"
+        "                traversal=cell_traversal, tree=cell.tree)\n"
         '    pm4py_ucm.write_ucm_family(family, str(OUT_DIR / "family.zip"))\n'
         "    _save_image(pm4py_ucm.save_vis_ucm_family, family,\n"
         '                str(OUT_DIR / "family_grid.png"), style=NOTATION,\n'
