@@ -227,8 +227,10 @@ def model_to_svg(ucm: "UCM", style: str = "ucm", *,
     menus: List[Any] = []
     if navigable:
         map_index = {id(m): i for i, m in enumerate(ucm.maps)}
+        #: plug-in map id → index of the parent map that binds it (via a stub).
+        map_parent: Dict[int, int] = {}
         sid = 0
-        for m in ucm.maps:
+        for parent_i, m in enumerate(ucm.maps):
             for node in m.nodes:
                 if not isinstance(node, UCM.Stub):
                     continue
@@ -242,6 +244,9 @@ def model_to_svg(ucm: "UCM", style: str = "ucm", *,
                         b.plugin.name or f"Map{pi}",
                         _stub_cond_text(getattr(b, "precondition", None)),
                     ))
+                    # Remember the first parent that binds each plug-in, for the
+                    # reverse (back-to-parent) link below.
+                    map_parent.setdefault(id(b.plugin), parent_i)
                 if not entries:
                     continue
                 if len(entries) == 1:
@@ -256,6 +261,19 @@ def model_to_svg(ucm: "UCM", style: str = "ucm", *,
                         f"({len(entries)} plug-ins)",
                     )
                     menus.append((menu_id, node.name or "stub", entries))
+        # Reverse navigation: a plug-in map's end point(s) link UP to the
+        # parent map's panel (the stub can't be its own back-target). The
+        # classic renderer applies the link to any node in ``stub_links``.
+        for m in ucm.maps:
+            parent_i = map_parent.get(id(m))
+            if parent_i is None:
+                continue
+            parent_name = ucm.maps[parent_i].name or f"Map{parent_i}"
+            for node in m.nodes:
+                if isinstance(node, UCM.EndPoint):
+                    stub_links.setdefault(id(node), (
+                        f"#pm-map-{id_prefix}{parent_i}",
+                        f"Back to parent map: {parent_name}"))
 
     panels = []
     for idx, ucm_map in enumerate(ucm.maps):

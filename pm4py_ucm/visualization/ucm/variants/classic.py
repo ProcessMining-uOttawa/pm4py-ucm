@@ -893,18 +893,19 @@ def _emit_map(
                 # UCM, bound to a ComponentRef: the cluster gives the
                 # label space, so we keep it compact inside.
                 attrs["label"] = _html_bold(label)
-            # Hyperlink a stub / sub-process to its plug-in map, so an SVG
-            # render is navigable: graphviz turns ``URL`` into an SVG
-            # ``<a xlink:href>`` around the node. A same-document fragment
-            # (``#pm-map-N``) needs no ``target`` — it navigates within the
-            # SVG when opened standalone, and the embedded viewer
-            # intercepts the click to pan to the panel.
-            link = (stub_links or {}).get(id(node))
-            if link:
-                href, tooltip = link
-                attrs["URL"] = href
-                if tooltip:
-                    attrs["tooltip"] = tooltip
+        # Hyperlink any node registered in ``stub_links`` — a stub / sub-process
+        # DOWN to its plug-in map, or a plug-in map's end point UP to its parent
+        # map — so an SVG render is navigable both ways. graphviz turns ``URL``
+        # into an SVG ``<a xlink:href>`` around the node. A same-document
+        # fragment (``#pm-map-N``) needs no ``target`` — it navigates within the
+        # SVG when opened standalone, and the embedded viewer intercepts the
+        # click to pan to the panel.
+        link = (stub_links or {}).get(id(node))
+        if link:
+            href, tooltip = link
+            attrs["URL"] = href
+            if tooltip:
+                attrs["tooltip"] = tooltip
         g_target.node(node_id(node), **attrs)
 
     # Find root ComponentRefs (no parent), and emit clusters top-down.

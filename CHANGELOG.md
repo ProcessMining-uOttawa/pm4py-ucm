@@ -24,8 +24,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attributes) bundled alongside the two synthetic samples; CSV files are now
   accepted as sample logs.
 
+### Fixed
+
+- **AND-fork edge frequencies.** On a parallel (`+`) fork, every case that
+  reaches the fork runs *every* branch, so a branch's traversal frequency is the
+  fork's inflow — not the interleaving-dependent directly-follows count, which
+  split the inflow across branches (e.g. `8` + `197` = `205`) and contradicted
+  the branch activities' own frequencies. Each AND-fork branch now reads the
+  inflow, consistent with its activity. (An XOR whose alternative is a silent
+  *skip to the end of the process* still can't show the skipped cases — those
+  produce no directly-follows pair — a separate, deeper limitation.)
+
 ### Changed — Web app (V5)
 
+- **Sub-maps are navigable both ways.** A stub / composite activity already links
+  *down* to its plug-in map; now each plug-in map's **end point links back up to
+  its parent map** (UCM and BPMN), so a decomposed model is no longer one-way.
+- **Sample logs carry a one-line description** in the picker.
 - **Useful defaults out of the box.** Decomposition now defaults to **auto**
   (shape-fitted) instead of off; the activity overlay leads with the **time**
   metric (median service/sojourn time) then frequency; and the first time an

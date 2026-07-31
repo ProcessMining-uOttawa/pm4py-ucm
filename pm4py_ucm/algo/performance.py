@@ -606,6 +606,30 @@ def annotate_performance(
                         total += s_entry["frequency"]
                 if total:
                     percentage = entry["frequency"] / total
+            elif isinstance(c.source, UCM.AndFork):
+                # Every case reaching an AND-fork traverses EVERY branch, so a
+                # branch's traversal frequency is the fork's *inflow*, not this
+                # branch's own directly-follows count — which only reflects
+                # which branch happened to interleave first (so the counts split
+                # the inflow, e.g. 8 + 197 = 205, and contradict the branch
+                # activities' frequencies). The inflow is that sum over the
+                # branches; each branch's count of distinct cases likewise sums
+                # (a case appears in exactly one branch's directly-follows pair
+                # — whichever it ran first). Overriding only the counts leaves
+                # the branch's own waiting-time stats intact.
+                inflow_f = inflow_c = 0
+                for sibling in c.source.succ_connections:
+                    s_entry = _aggregate_pair_stats(
+                        stats, prevs, resolver.next_activities(sibling),
+                    )
+                    if s_entry:
+                        inflow_f += s_entry["frequency"]
+                        inflow_c += s_entry.get("case_frequency", 0)
+                if inflow_f:
+                    entry = dict(entry)
+                    entry["frequency"] = inflow_f
+                    if "case_frequency" in entry:
+                        entry["case_frequency"] = inflow_c
             try:
                 branch = c.source.succ_connections.index(c)
             except ValueError:

@@ -130,10 +130,25 @@ class TestDecomposedStaticStubs:
         assert all(h.startswith("#pm-map-") for h in hrefs)
         assert "pm-stub-menu" not in svg
 
+    def test_plugin_maps_get_back_to_parent_links(self):
+        # Every plug-in map's end point links UP to its parent map's panel, so
+        # navigation isn't one-way. Present in both notations.
+        for style in ("ucm", "bpmn"):
+            svg = _svg.model_to_svg(_decomposed_ucm(), style)
+            assert "Back to parent map" in svg, style
+            hrefs = [a.getAttribute("xlink:href")
+                     for a in _wellformed(svg).getElementsByTagName("a")]
+            # both directions present: end-point up-links to the root panel
+            # (#pm-map-0) AND stub down-links to the sub-maps.
+            assert "#pm-map-0" in hrefs, style
+            assert any(h != "#pm-map-0" for h in hrefs), style
+            assert all(h.startswith("#pm-map-") for h in hrefs)
+
     def test_navigable_false_drops_links(self):
         svg = _svg.model_to_svg(_decomposed_ucm(), "ucm", navigable=False)
         doc = _wellformed(svg)
         assert not doc.getElementsByTagName("a")
+        assert "Back to parent map" not in svg
 
 
 class TestDynamicStubPicker:

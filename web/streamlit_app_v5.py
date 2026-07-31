@@ -115,6 +115,13 @@ def _embed_html(html: str, *, height: int, scrolling: bool = False) -> None:
 
 
 _SAMPLES_DIR = Path(__file__).resolve().parent / "samples"
+#: One-line description per bundled sample (keyed by its display label — the
+#: filename without extension), shown in the sample picker.
+_SAMPLE_DESCRIPTIONS = {
+    "ClaimsPaymentLog": "synthetic insurance claims-payment process (XES)",
+    "IssueTrackerSyntheticLog": "synthetic software issue-tracking workflow (XES)",
+    "devlog": "real AI-assisted developer-activity log, rich case attributes (CSV)",
+}
 _LOGO_PATH = Path(__file__).resolve().parent / "assets" / "logo.png"
 _DISPLAY_WIDTH_PX = 1100
 _NONE_OPT = "(none)"
@@ -3067,7 +3074,17 @@ if samples:
 
         label_to_path = {_label(p): p for p in samples}
         labels = list(label_to_path.keys())
-        st.selectbox("Choose a bundled log", options=labels, key="sample_choice")
+
+        def _sample_option(lbl: str) -> str:
+            desc = _SAMPLE_DESCRIPTIONS.get(lbl)
+            return f"{lbl} — {desc}" if desc else lbl
+
+        st.selectbox("Choose a bundled log", options=labels,
+                     key="sample_choice", format_func=_sample_option)
+        _sel_desc = _SAMPLE_DESCRIPTIONS.get(
+            st.session_state.get("sample_choice"))
+        if _sel_desc:
+            st.caption(_sel_desc)
         if st.button("Load sample", type="primary", key="load_sample"):
             chosen = label_to_path[st.session_state["sample_choice"]]
             _accept_log_bytes(chosen.name, chosen.read_bytes())

@@ -257,7 +257,9 @@ Once mining completes, the **Model** view shows a metrics row (activities,
 cases and events — selected/total when filtered — plus maps and nodes) and
 the diagram as a **vector SVG** in a zoom / pan viewer — scroll to zoom, drag to pan, and for a
 decomposed model **click a stub** to jump to its plug-in map (a dynamic
-stub opens a picker of its preconditioned plug-ins). Downloads:
+stub opens a picker of its preconditioned plug-ins), and click a plug-in
+map's **end point to jump back to its parent** — navigation runs both ways.
+Downloads:
 
 - **Download SVG** — the vector render (crisp at any zoom, text
   selectable).
