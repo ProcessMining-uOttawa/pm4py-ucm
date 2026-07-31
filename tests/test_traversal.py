@@ -182,6 +182,61 @@ def test_nested_loop_counts_conserve_against_the_log():
             f"{activity}: counted {counts[activity]}, observed {observed}")
 
 
+def test_three_nested_loops_count_the_innermost_body_exactly():
+    """Three levels deep, where the error compounds.
+
+    Nesting multiplies: a per-visit *maximum* iteration count, scaled by
+    an already-inflated number of visits from the level above, drifts
+    further from the truth at every level. Here the innermost body runs
+    3, then 1, then 2 iterations across its three entries — 6 executions
+    — while the maximum is 3. Counting it as (visits x max) gives 12,
+    and its redo 8 against a true 3.
+
+        L1 = *( ->( A, L2 ), X )
+        L2 = *( ->( B, L3 ), Y )
+        L3 = *( C, Z )
+    """
+    l3 = _loop(_leaf("C"), _leaf("Z"))
+    l2 = _loop(_seq(_leaf("B"), l3), _leaf("Y"))
+    l1 = _loop(_seq(_leaf("A"), l2), _leaf("X"))
+
+    # Outer iteration 1: A, then L2 twice — its L3 running 3 then 1.
+    # Outer iteration 2: A, then L2 once — its L3 running 2.
+    trace = (["A", "B", "C", "Z", "C", "Z", "C", "Y", "B", "C"]
+             + ["X"]
+             + ["A", "B", "C", "Z", "C"])
+    stats = tv.compute_traversal_stats(l1, [trace], repair=False)
+    assert stats.fitting_cases == 1, "the trace must fit for this to mean anything"
+
+    counts = _counts_by_label(l1, stats)
+    # Every count equals the number of events actually in the trace.
+    for activity in ("A", "B", "C", "X", "Y", "Z"):
+        assert counts[activity] == trace.count(activity), (
+            f"{activity}: counted {counts[activity]}, "
+            f"observed {trace.count(activity)}")
+
+    # Spelled out, so a regression reads as a number rather than a diff:
+    assert counts["A"] == 2 and counts["X"] == 1     # outer: 2 bodies, 1 redo
+    assert counts["B"] == 3 and counts["Y"] == 1     # middle: 3 bodies, 1 redo
+    assert counts["C"] == 6 and counts["Z"] == 3     # inner: 6 bodies, 3 redos
+    # The max-based accounting this replaced drifts further at each
+    # level, and the innermost loop is where it breaks down entirely:
+    #   observed   A=2  B=3  C=6   X=1  Y=1  Z=3
+    #   max-based  A=2  B=4  C=12  X=1  Y=2  Z=8
+    # The outer loop is exact (entered once), the middle is off by one
+    # body, and the inner is out by 2x on its body and nearly 3x on its
+    # redo.
+
+    # The maxima are still available and still maxima.
+    ids = cs.assign_node_ids(l1)
+    maxes, totals = {}, {}
+    cs.replay(l1, trace, node_ids=ids,
+              loop_iter_counts=maxes, loop_total_counts=totals)
+    assert maxes[ids[id(l3)]] == 3, "heaviest inner visit ran 3 iterations"
+    assert totals[ids[id(l3)]] == 6, "but the inner body ran 6 times in all"
+    assert maxes[ids[id(l2)]] == 2 and totals[ids[id(l2)]] == 3
+
+
 def test_counts_match_observed_events_on_a_loop_and_parallel_nest():
     """The end-to-end guarantee: on cases that fit, an activity's
     traversal count IS the number of times it was observed. The shape
