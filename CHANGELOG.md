@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.8] — 2026-07-31
+
+Frequency numbers that **conserve**. Counting events and counting
+directly-follows pairs answer two different questions, and on a model
+with concurrency or silent skips they contradict each other — an activity
+with 257 executions could show an outgoing edge of 40, and a branch whose
+alternative was a silent skip reported 100 %. The overlay now counts how
+often the log *walks the model*, and says how much of the log that
+covers.
+
 ### Added
 
 - **Replay-based traversal counts — frequency numbers that conserve.** A
