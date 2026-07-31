@@ -64,6 +64,33 @@ def test_collect_round_trips_through_a_project_file():
         ["exclude_activities", ["Fix Bug"]], ["rename_map", [["A", "B"]]]]
 
 
+def test_decomposition_sizes_round_trip():
+    """A decomposition spec's hand-set sizes + toggles — and the "auto"
+    shape-fit sentinel — survive collect + save/load unchanged, so a resumed
+    project mines with exactly the decomposition it was saved with."""
+    from pm4py_ucm.objects.ucm.conversion.decomposition import AUTO_DIM
+
+    cases = [
+        ([["balance_ratio", 0.35], ["max_leaves_per_map", 12],
+          ["min_leaves_to_decompose", 5], ["on_loop", False],
+          ["on_root_sequence", True]],
+         {"max_leaves_per_map": 12, "min_leaves_to_decompose": 5,
+          "balance_ratio": 0.35, "on_loop": False}),
+        ([["max_leaves_per_map", AUTO_DIM],
+          ["min_leaves_to_decompose", AUTO_DIM], ["balance_ratio", 0.2]],
+         {"max_leaves_per_map": AUTO_DIM,
+          "min_leaves_to_decompose": AUTO_DIM}),
+    ]
+    for dec, expect in cases:
+        cfg = collect({**FULL_VALUES, "decomposition": dec})
+        back = loads(dumps(ProjectDoc(
+            log=LogRef("upload", "l.xes", "xes", "h"), config=cfg)))
+        got = {k: v for k, v in (tuple(p)
+                                 for p in back.config["decomposition"])}
+        for k, v in expect.items():
+            assert got[k] == v, (k, got.get(k), v)
+
+
 def test_collect_rejects_unknown_id():
     with pytest.raises(KeyError):
         collect({**FULL_VALUES, "surprise_setting": 1})
