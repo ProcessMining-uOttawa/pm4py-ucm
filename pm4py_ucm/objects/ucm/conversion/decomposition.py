@@ -736,10 +736,13 @@ def _build_ucm(
             child_plan = _lookup.get(id(t))
             if child_plan is None:
                 return False
-            stub = UCM.Stub(name=child_plan.name)
+            # The stub stands in for the whole subtree, so it carries the
+            # subtree's provenance — that is what gives a collapsed
+            # sub-process the same traversal count as its plug-in map.
+            stub = _ft._tag(UCM.Stub(name=child_plan.name), t)
             _map.add_node(stub)
-            _map.add_connection(entry, stub)
-            _map.add_connection(stub, exit)
+            _ft._connect(_map, entry, stub, t)
+            _ft._connect(_map, stub, exit, t)
             _stubs.append((stub, child_plan))
             return True
 

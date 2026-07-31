@@ -61,7 +61,7 @@ Nearly 1:1 with the public API (`pm4py_ucm.__all__`):
 | `filter_spec` (incl. `rename_map`, `attr_expr`) | pre-mining transform (see §6a) |
 | `noise_threshold`, `min_support`, `notation`, `decomposition` | `discover_ucm_inductive(log, parameters=…, decomposition=…)` |
 | `resource_attribute` | `discover_resources(...)` + `bind_performers(...)` |
-| `overlay_nodes`, `overlay_edges`, `overlay_heatmap*` | `annotate_performance(...)` (+ heat-map render args) |
+| `overlay_nodes`, `overlay_edges`, `overlay_heatmap*` | `annotate_performance(...)` (+ heat-map render args). When a `traversal_*` metric is selected the script first calls `compute_traversal_stats(tree, log)` and passes it — the emitted `wants_traversal()` helper gates that, so a session without those metrics pays nothing. |
 | `family_*` | `discover_ucm_family(...)`, `write_ucm_family`, `assemble_ucm_family`, `write_family_report` |
 | `scenario_*` | `discover_scenarios(...)` + `write_variants_report` / `write_case_variant_map` / `write_condition_mining_report` |
 | `active_view`, `compare_*` | comments / which artifacts the script writes |

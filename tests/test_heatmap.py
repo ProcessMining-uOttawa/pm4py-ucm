@@ -35,6 +35,10 @@ def test_parse_perf_value():
     assert _classic._parse_perf_value("1.5h") == 5400.0
     assert _classic._parse_perf_value("2d") == 172800.0
     assert _classic._parse_perf_value("1y") == pytest.approx(365.25 * 86400)
+    # traversal_percentage keeps the base it divides; the gradient should
+    # follow the share, which is the part that varies across branches.
+    assert _classic._parse_perf_value("25% of 258") == 25.0
+    assert _classic._parse_perf_value("100% of 5600") == 100.0
     for junk in (None, "", "   ", "n/a", "??"):
         assert _classic._parse_perf_value(junk) is None
 

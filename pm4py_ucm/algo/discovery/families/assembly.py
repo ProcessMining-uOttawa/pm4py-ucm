@@ -227,14 +227,25 @@ def _annotate_maps(
     edge_metrics,
 ) -> None:
     """Performance-overlay the given maps from the given cells' sub-log."""
-    from ...performance import annotate_performance
+    from ...performance import TRAVERSAL_METRICS, annotate_performance
     sub_log = _cell_sub_log(family, cells)
     if sub_log is None or not len(sub_log):
         return
+    # Replay-based counts need the tree these maps were converted from.
+    # That is unambiguous only when the maps belong to a single cell —
+    # an umbrella map merged from several cells has no one tree, so the
+    # traversal metrics are simply absent there.
+    traversal = tree = None
+    if (any(m in TRAVERSAL_METRICS
+            for m in tuple(node_metrics) + tuple(edge_metrics))
+            and len(cells) == 1 and cells[0].tree is not None):
+        from ...traversal import compute_traversal_stats
+        tree = cells[0].tree
+        traversal = compute_traversal_stats(tree, sub_log)
     annotate_performance(
         container, sub_log,
         node_metrics=node_metrics, edge_metrics=edge_metrics,
-        maps=maps,
+        maps=maps, traversal=traversal, tree=tree,
     )
 
 

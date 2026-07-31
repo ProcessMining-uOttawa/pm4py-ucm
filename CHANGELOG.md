@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Replay-based traversal counts — frequency numbers that conserve.** A
+  frequency overlay used to read two different things off the log: an
+  activity's number was its *event count*, an edge's number a
+  *directly-follows count*. On a model with concurrency those disagree
+  badly, because a directly-follows pair only exists when two events are
+  **adjacent in the trace** — on a parallel block the event that actually
+  follows an activity usually belongs to a sibling branch, so the
+  traversal is counted nowhere. A silent skip is worse: it produces no
+  event, so a choice whose alternative is "do nothing" reported **100 %**
+  for the branch that happens to be observable. On a 258-case clinical
+  log that meant an activity with 257 executions whose only outgoing edge
+  read `40`, a fork with 197 inflow whose choice split `25`/`4`, and a
+  death branch at `100 %` where the true figure is `25 %`.
+
+  New `pm4py_ucm.compute_traversal_stats(tree, log)` counts how often the
+  log **walks the model** instead, by replaying it on the process tree
+  the model was built from. The counts conserve by construction: an
+  activity's count equals the count on its own edges, every branch of a
+  parallel fork carries the fork's inflow, and the branches of a choice
+  sum to it. New `traversal_frequency` (activities and edges) and
+  `traversal_percentage` (fork branches) overlay metrics, passed to
+  `annotate_performance(..., traversal=..., tree=...)`. The existing
+  event-count and directly-follows metrics are unchanged and still
+  available. See the new §9 of [`docs/metrics.md`](docs/metrics.md).
+
+  Non-fitting cases are aligned to their nearest path through the model
+  so the counts cover the whole log (`repair=False` counts only exact
+  fits). Either way `TraversalStats` reports coverage — a model mined
+  with a noise threshold explains only part of its log, and the numbers
+  say so rather than quietly describing a sub-log.
+
 - **Partition advisor (Family view) — deterministic, no LLM.** A new
   **💡 Suggested attributes** table ranks the log's case attributes by
   *discriminative power* — control-flow divergence (normalised mutual
@@ -37,6 +68,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed — Web app (V5)
 
+- **The performance overlay now leads with the traversal counts, and says
+  what they cover.** The diagram caption names the measure ("Counts =
+  cases walking this path, replayed on the model"), a note under the
+  metrics row reports how much of the log the model explains ("4,990 of
+  5,600 cases (89 %) fit this model exactly") and what happened to the
+  rest, and branch shares carry the base they divide (`25% of 258`) so a
+  percentage can't be read against the wrong denominator. When fit drops
+  below 70 % the note becomes a warning pointing at the noise threshold —
+  the setting that actually changes it. Selecting the directly-follows
+  metric instead is still supported and says so in the caption.
 - **Sub-maps are navigable both ways.** A stub / composite activity already links
   *down* to its plug-in map; now each plug-in map's **end point links back up to
   its parent map** (UCM and BPMN), so a decomposed model is no longer one-way.

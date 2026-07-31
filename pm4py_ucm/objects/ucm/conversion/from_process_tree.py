@@ -75,6 +75,38 @@ def _op_value(operator) -> Optional[str]:
     return getattr(operator, "value", operator)
 
 
+# ---------------------------------------------------------------------------
+# Provenance: which tree node produced which UCM element
+# ---------------------------------------------------------------------------
+#
+# Every node and connection ``_attach`` creates records the ``id()`` of the
+# subtree it came from in ``_tree_python_id``. Two consumers rely on it:
+#
+# * the scenario synthesizer correlates each OR-fork with the tree XOR it
+#   came from (lookup by id, not by cross-map walk position — the latter
+#   happens to work for the flat case but is brittle once decomposition
+#   interleaves root-map and plug-in-map forks);
+# * :mod:`pm4py_ucm.algo.traversal` attributes replay-based traversal
+#   counts to nodes and edges.
+#
+# Both pair it with ``choice_signature.assign_node_ids(tree)`` to get a
+# stable integer id. The attribute is a plain Python attribute, never
+# metadata, so it does not reach the ``.jucm`` export — and being an
+# ``id()`` it is only meaningful while the originating tree is alive.
+
+def _tag(element, tree):
+    """Record ``tree`` as the origin of ``element``."""
+    element._tree_python_id = id(tree)
+    return element
+
+
+def _connect(ucm_map, source, target, tree, condition=None):
+    """``add_connection`` that records which subtree produced the arc."""
+    return _tag(
+        ucm_map.add_connection(source, target, condition=condition), tree,
+    )
+
+
 def apply(tree, parameters: Optional[dict] = None) -> UCM:
     """Convert a process tree into a Use Case Map.
 
@@ -240,19 +272,21 @@ def _attach(tree, entry: UCM.PathNode, exit: UCM.PathNode,
     if op is None:
         # Leaf
         if label is None:
-            # tau / silent — collapse to a direct edge
-            ucm_map.add_connection(entry, exit)
+            # tau / silent — collapse to a direct edge. The edge still
+            # carries the leaf's provenance, which is what lets a silent
+            # skip report how many cases took it.
+            _connect(ucm_map, entry, exit, tree)
         else:
             r = UCM.RespRef(name=str(label))
             r.set_resp_def(ucm_map._owner.get_or_add_responsibility(str(label)))
-            ucm_map.add_node(r)
-            ucm_map.add_connection(entry, r)
-            ucm_map.add_connection(r, exit)
+            ucm_map.add_node(_tag(r, tree))
+            _connect(ucm_map, entry, r, tree)
+            _connect(ucm_map, r, exit, tree)
         return
 
     if op == _SEQUENCE:
         if not children:
-            ucm_map.add_connection(entry, exit)
+            _connect(ucm_map, entry, exit, tree)
             return
         prev = entry
         for i, child in enumerate(children):
@@ -260,7 +294,7 @@ def _attach(tree, entry: UCM.PathNode, exit: UCM.PathNode,
                 _attach(child, prev, exit, ucm_map)
             else:
                 ep = UCM.EmptyPoint()
-                ucm_map.add_node(ep)
+                ucm_map.add_node(_tag(ep, tree))
                 _attach(child, prev, ep, ucm_map)
                 prev = ep
         return
@@ -268,7 +302,7 @@ def _attach(tree, entry: UCM.PathNode, exit: UCM.PathNode,
     if op in _CHOICE_OPS:
         # Empty XOR / OR — treat like an empty sequence
         if not children:
-            ucm_map.add_connection(entry, exit)
+            _connect(ucm_map, entry, exit, tree)
             return
         # Single-child XOR collapses to the child
         if len(children) == 1:
@@ -276,19 +310,10 @@ def _attach(tree, entry: UCM.PathNode, exit: UCM.PathNode,
             return
         of = UCM.OrFork(name="OrFork")
         oj = UCM.OrJoin(name="OrJoin")
-        # Stash the originating XOR tree node's Python id() so the
-        # scenario synthesizer can correlate each UCM OR-fork with the
-        # tree XOR it came from (lookup by id, not by cross-map walk
-        # position — the latter happens to work for the flat case but
-        # is brittle once decomposition interleaves root-map and
-        # plug-in-map forks). The synthesizer pairs this with
-        # ``_cs.assign_node_ids(tree)`` to get a stable integer id.
-        of._tree_python_id = id(tree)
-        oj._tree_python_id = id(tree)
-        ucm_map.add_node(of)
-        ucm_map.add_node(oj)
-        ucm_map.add_connection(entry, of)
-        ucm_map.add_connection(oj, exit)
+        ucm_map.add_node(_tag(of, tree))
+        ucm_map.add_node(_tag(oj, tree))
+        _connect(ucm_map, entry, of, tree)
+        _connect(ucm_map, oj, exit, tree)
         for k, child in enumerate(children):
             label = f"branch{k}"  # default branch label; user can edit
             _attach_with_initial_label(child, of, oj, ucm_map, label)
@@ -296,17 +321,17 @@ def _attach(tree, entry: UCM.PathNode, exit: UCM.PathNode,
 
     if op in _PARALLEL_OPS:
         if not children:
-            ucm_map.add_connection(entry, exit)
+            _connect(ucm_map, entry, exit, tree)
             return
         if len(children) == 1:
             _attach(children[0], entry, exit, ucm_map)
             return
         af = UCM.AndFork(name="AndFork")
         aj = UCM.AndJoin(name="AndJoin")
-        ucm_map.add_node(af)
-        ucm_map.add_node(aj)
-        ucm_map.add_connection(entry, af)
-        ucm_map.add_connection(aj, exit)
+        ucm_map.add_node(_tag(af, tree))
+        ucm_map.add_node(_tag(aj, tree))
+        _connect(ucm_map, entry, af, tree)
+        _connect(ucm_map, aj, exit, tree)
         for child in children:
             _attach(child, af, aj, ucm_map)
         return
@@ -323,32 +348,28 @@ def _attach(tree, entry: UCM.PathNode, exit: UCM.PathNode,
             if children:
                 _attach(children[0], entry, exit, ucm_map)
             else:
-                ucm_map.add_connection(entry, exit)
+                _connect(ucm_map, entry, exit, tree)
             return
         do_tree, redo_tree = children[0], children[1]
         oj_in = UCM.OrJoin(name="LoopJoin")
         of_out = UCM.OrFork(name="LoopFork")
-        # Same id stash as the XOR branch above — synthesizer pairs
-        # each LoopJoin/LoopFork with the LOOP tree node it came from.
-        oj_in._tree_python_id = id(tree)
-        of_out._tree_python_id = id(tree)
-        ucm_map.add_node(oj_in)
-        ucm_map.add_node(of_out)
-        ucm_map.add_connection(entry, oj_in)
+        ucm_map.add_node(_tag(oj_in, tree))
+        ucm_map.add_node(_tag(of_out, tree))
+        _connect(ucm_map, entry, oj_in, tree)
         _attach(do_tree, oj_in, of_out, ucm_map)
         # Branch out of the loop
-        ucm_map.add_connection(of_out, exit, condition="exit")
+        _connect(ucm_map, of_out, exit, tree, condition="exit")
         # Redo branch: of_out -> redo -> oj_in
         _attach_with_initial_label(redo_tree, of_out, oj_in, ucm_map, "redo")
         return
 
     # Unknown operator — fall back to sequence semantics
-    _attach_sequence_fallback(children, entry, exit, ucm_map)
+    _attach_sequence_fallback(children, entry, exit, ucm_map, tree)
 
 
-def _attach_sequence_fallback(children, entry, exit, ucm_map):
+def _attach_sequence_fallback(children, entry, exit, ucm_map, tree=None):
     if not children:
-        ucm_map.add_connection(entry, exit)
+        _connect(ucm_map, entry, exit, tree)
         return
     prev = entry
     for i, child in enumerate(children):
@@ -356,7 +377,7 @@ def _attach_sequence_fallback(children, entry, exit, ucm_map):
             _attach(child, prev, exit, ucm_map)
         else:
             ep = UCM.EmptyPoint()
-            ucm_map.add_node(ep)
+            ucm_map.add_node(_tag(ep, tree))
             _attach(child, prev, ep, ucm_map)
             prev = ep
 
@@ -432,6 +453,12 @@ def _simplify_map(ucm: UCM, ucm_map: "UCM.UCMmap") -> None:
         except ValueError: pass
         new_arc = UCM.NodeConnection(src, dst, condition=cond)
         new_arc._owner = ucm
+        # Contracting a pass-through must not lose the arc's provenance —
+        # the two halves came from the same block, so either tag serves.
+        origin = (getattr(in_arc, "_tree_python_id", None)
+                  or getattr(out_arc, "_tree_python_id", None))
+        if origin is not None:
+            new_arc._tree_python_id = origin
         new_conns.append(new_arc)
 
     if not removed_nodes and not new_conns:
@@ -522,6 +549,7 @@ def _split_arc_with_empty(
     condition on the original arc on the *outbound* half."""
     src, tgt = arc.source, arc.target
     cond = arc.condition
+    origin = getattr(arc, "_tree_python_id", None)
 
     # Drop the old arc, both from the map and from src/tgt's adjacency.
     m.remove_connection(arc)
@@ -532,6 +560,11 @@ def _split_arc_with_empty(
 
     # New arcs. The condition (e.g. a fork-branch label) belongs on the
     # second half so the label still attaches to the arc *leaving* the
-    # fork — that's what users expect to see in the diagram.
-    m.add_connection(src, bend)
-    m.add_connection(bend, tgt, condition=cond)
+    # fork — that's what users expect to see in the diagram. Both halves
+    # inherit the split arc's provenance so traversal counts survive.
+    first = m.add_connection(src, bend)
+    second = m.add_connection(bend, tgt, condition=cond)
+    if origin is not None:
+        first._tree_python_id = origin
+        second._tree_python_id = origin
+        bend._tree_python_id = origin
