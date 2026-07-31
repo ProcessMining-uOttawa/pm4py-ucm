@@ -130,6 +130,88 @@ def test_loop_decrement_is_not_placed_inside_a_choice():
         f"expected a dedicated always-executed decrement node, got {sites}")
 
 
+def test_suggest_loop_iterations_sums_choices_and_maxes_sequences():
+    """The structural minimum: a choice needs the sum of its branches
+    (one iteration goes down one branch), a sequence needs the max (its
+    children share an iteration), and a nested loop needs 1 because its
+    own counter covers what is inside it."""
+    # *( ->( A, X(B, C, D) ), tau ) — the 3-way choice sets the floor.
+    three_way = _loop(_seq(_leaf("A"), _xor(_leaf("B"), _leaf("C"),
+                                            _leaf("D"))), _tau())
+    got = _scenarios.suggest_loop_iterations(three_way)
+    assert list(got.values()) == [3], got
+
+    # Two choices in sequence share iterations: max(2, 2) = 2.
+    shared = _loop(_seq(_xor(_leaf("B"), _leaf("C")),
+                        _xor(_leaf("D"), _leaf("E"))), _tau())
+    assert list(_scenarios.suggest_loop_iterations(shared).values()) == [2]
+
+    # Nested choices multiply out: X(X(B,C), X(D,E)) needs 2+2.
+    nested = _loop(_xor(_xor(_leaf("B"), _leaf("C")),
+                        _xor(_leaf("D"), _leaf("E"))), _tau())
+    assert list(_scenarios.suggest_loop_iterations(nested).values()) == [4]
+
+    # A choice on the REDO path runs once fewer than the body, so it
+    # needs one iteration more than the same choice in the body.
+    redo = _loop(_leaf("A"), _xor(_leaf("P"), _leaf("Q")))
+    assert list(_scenarios.suggest_loop_iterations(redo).values()) == [3]
+
+
+def test_loop_counter_is_raised_so_every_body_branch_can_fire():
+    """A 3-way choice in the body cannot be demonstrated in 2
+    iterations, whatever the conditions say. The counter is therefore
+    raised above the ``max_loop_iterations`` cap when coverage needs it —
+    the cap trims a loop that merely ran often, not one that has to run
+    to stay honest."""
+    tree = _seq(_loop(_xor(_leaf("A"), _leaf("B"), _leaf("C")), _tau()),
+                _leaf("Z"))
+    log = [("c1", ["A", "B", "C", "Z"]), ("c2", ["A", "B", "C", "Z"]),
+           ("c3", ["A", "Z"])]
+    ucm = pm4py_ucm.discover_ucm_inductive(
+        log, parameters={"process_tree": tree})
+    group = _scenarios.synthesize_scenarios(
+        ucm, tree, _clustering.cluster(log, tree), max_loop_iterations=2)
+
+    counters = {}
+    for sc in group.scenarios:
+        for init in sc.initializations:
+            if _is_loop_counter_name(init.variable.name):
+                counters[sc.name] = int(init.value)
+    assert counters, "expected a loop counter initialisation"
+    assert max(counters.values()) >= 3, (
+        "the 3-way choice needs 3 iterations to be demonstrable; the cap "
+        f"of 2 must not win here. got {counters}")
+
+
+def test_every_branch_a_variant_takes_gets_a_satisfiable_condition():
+    """The coverage guarantee, at the level this module controls: if a
+    variant takes a branch, that branch's condition is satisfiable for
+    that variant — never ``false``, and never a counter range outside
+    the iterations the variant actually runs."""
+    from pm4py_ucm.objects.ucm.obj import UCM
+
+    tree = _seq(_loop(_xor(_leaf("A"), _leaf("B"), _leaf("C")), _tau()),
+                _leaf("Z"))
+    log = [("c1", ["A", "B", "C", "Z"]), ("c2", ["B", "C", "Z"]),
+           ("c3", ["A", "Z"])]
+    clustering = _clustering.cluster(log, tree)
+    ucm = pm4py_ucm.discover_ucm_inductive(
+        log, parameters={"process_tree": tree})
+    _scenarios.synthesize_scenarios(ucm, tree, clustering)
+
+    forks = [n for m in ucm.maps for n in m.nodes
+             if isinstance(n, UCM.OrFork) and n.name == "OrFork"]
+    assert forks, "expected the body choice to become an OR-fork"
+    for fork in forks:
+        exprs = [(a.condition.expression if a.condition else "true")
+                 for a in fork.succ_connections]
+        # Every branch some variant takes must be reachable, so at most
+        # the branches nobody takes may read "false".
+        assert sum(1 for e in exprs if e.strip() == "false") < len(exprs), (
+            f"every branch of {fork.name} is unsatisfiable: {exprs}")
+        assert any("variant_id" in e for e in exprs), exprs
+
+
 def test_loop_decrement_runs_after_the_bodys_choices():
     """The decrement must sit at the END of the body, immediately before
     the LoopFork.

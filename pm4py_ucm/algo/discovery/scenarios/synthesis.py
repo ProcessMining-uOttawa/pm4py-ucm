@@ -29,6 +29,7 @@ Public entry point: :func:`synthesize_scenarios`.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from ....objects.ucm.obj import UCM
@@ -217,6 +218,17 @@ def synthesize_scenarios(
     if emit_conditions:
         loop_counters = _wire_loop_counters(ucm, tree)
 
+    # Decide, before anything is written, how many iterations each loop
+    # runs per variant and which iterations take which branch. Both the
+    # counter initialisations below and the branch conditions further
+    # down read from this one plan, so they cannot disagree — which is
+    # exactly how a branch used to end up with a range its scenario
+    # never visited.
+    loop_plan = _plan_loop_coverage(
+        tree, list(clustering.variants), _cs.assign_node_ids(tree),
+        max_loop_iterations,
+    )
+
     # Build the ScenarioGroup with one ScenarioDef per variant.
     # Each scenario is named ``<variant_id>_<short_suffix>`` so the
     # jUCMNav scenarios panel shows a discriminator alongside the
@@ -256,15 +268,14 @@ def synthesize_scenarios(
                 if value is None:
                     continue
                 sc.add_initialization(var, value)
-        # Per-loop integer counter initialisation. Use the variant's
-        # max observed iteration count, optionally capped at
-        # ``max_loop_iterations`` so scenarios remain tractable to
-        # step through in jUCMNav (and so nested loops don't blow up
-        # multiplicatively).
+        # Per-loop integer counter initialisation, from the coverage
+        # plan: the variant's observed iteration count capped at
+        # ``max_loop_iterations`` so scenarios remain tractable to step
+        # through in jUCMNav, but never below the number of iterations
+        # the body's choices need to all be demonstrable.
         for tree_loop_id, counter_var in loop_counters.items():
-            max_iter = variant.loop_iteration_max.get(tree_loop_id, 0)
-            if max_loop_iterations is not None:
-                max_iter = min(max_iter, max_loop_iterations)
+            max_iter = loop_plan.iterations.get(
+                (tree_loop_id, variant.variant_id), 0)
             sc.add_initialization(counter_var, str(max_iter))
         for sp in starts:
             sc.add_start_point(sp, enabled=True)
@@ -283,6 +294,7 @@ def synthesize_scenarios(
             _emit_orfork_conditions(
                 ucm, tree, clustering.variants, loop_counters,
                 max_loop_iterations=max_loop_iterations,
+                plan=loop_plan,
             )
         elif condition_strategy == "data-driven" and attribute_vars:
             or_fork_mining_results = _emit_orfork_conditions_data_driven(
@@ -291,6 +303,7 @@ def synthesize_scenarios(
                 loop_counters,
                 max_loop_iterations=max_loop_iterations,
                 max_depth=decision_tree_max_depth,
+                plan=loop_plan,
             )
         # else: data-driven but no attributes — leave at default true
         # and rely on the warning already emitted by extract_case_features.
@@ -529,6 +542,10 @@ def _op_value(node) -> Optional[str]:
     return getattr(op, "value", op)
 
 
+def _children(node) -> List[Any]:
+    return list(getattr(node, "children", None) or [])
+
+
 def _index_ucm_forks_by_tree_id(
     ucm: UCM, node_ids: Dict[int, int],
 ) -> Dict[int, "UCM.PathNode"]:
@@ -626,6 +643,248 @@ def _collect_multi_child_xors(
 
     _walk(tree, None)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Loop iteration budgeting and branch scheduling
+# ---------------------------------------------------------------------------
+#
+# A scenario demonstrates a variant by walking the model once. Inside a
+# loop, the only lever for "this iteration goes left, the next goes
+# right" is the loop counter, so every choice in the body is expressed as
+# a predicate over it. Two things then decide whether the generated
+# scenarios collectively exercise **every** branch of the model:
+#
+#   1. the loop must run often enough. A body containing a 4-way choice
+#      cannot show all four branches in 2 iterations, whatever the
+#      conditions say;
+#   2. the branch-to-iteration assignment must be exact. Distributing
+#      branches by rounded proportions can round a branch down to an
+#      empty range, and a nested choice — evaluated only on the
+#      iterations where its parent branch is taken — needs its ranges
+#      carved out of *those* iterations, not out of the whole run.
+#
+# The planner below settles both before any condition is written: it
+# sizes each loop from the tree's own structure and then hands every
+# (choice, branch, variant) an explicit, contiguous slice of iterations.
+
+
+def _branches_to_cover(node, variant: "Variant",
+                       node_ids: Dict[int, int]) -> List[int]:
+    """Branch indices of ``node`` this variant actually takes."""
+    counts = variant.xor_branch_totals.get(node_ids[id(node)], {})
+    return sorted(k for k, n in counts.items() if n > 0)
+
+
+def _iterations_to_cover(node, variant: Optional["Variant"],
+                         node_ids: Dict[int, int]) -> int:
+    """Body iterations needed to exercise every branch inside ``node``.
+
+    The recursion is the whole idea:
+
+    * a **choice** needs the *sum* of its branches' requirements — one
+      iteration can only go down one branch, so they cannot share;
+    * a **sequence** or **parallel** block needs the *max* — its children
+      all run in the same iteration, so their requirements overlap;
+    * a **nested loop** needs 1: it has its own counter, and covering
+      what is inside it is that counter's job;
+    * a leaf needs 1.
+
+    With ``variant`` given, only the branches that variant takes count —
+    a scenario has no reason to demonstrate behaviour its own cases never
+    exhibited, and the other variants cover those branches.
+    """
+    op = _op_value(node)
+    children = _children(node)
+    if op in (_XOR, _OR) and children:
+        wanted = (_branches_to_cover(node, variant, node_ids)
+                  if variant is not None else list(range(len(children))))
+        if not wanted:
+            return 1
+        return sum(_iterations_to_cover(children[k], variant, node_ids)
+                   for k in wanted)
+    if op == _LOOP:
+        return 1
+    if children:
+        return max(_iterations_to_cover(c, variant, node_ids)
+                   for c in children)
+    return 1
+
+
+def suggest_loop_iterations(tree) -> Dict[int, int]:
+    """``{loop_node_id: iterations}`` — how many times each LOOP in
+    ``tree`` must run for a scenario to be able to exercise every branch
+    inside its body.
+
+    Derived from the tree's shape alone (see
+    :func:`_iterations_to_cover`), so it answers "how big does this loop
+    have to be?" before any log is replayed. The synthesizer uses it as a
+    floor on each scenario's loop counter; a caller can use it to predict
+    how long the generated scenarios will be to step through.
+    """
+    node_ids = _cs.assign_node_ids(tree)
+    out: Dict[int, int] = {}
+
+    def walk(node) -> None:
+        if _op_value(node) == _LOOP:
+            children = _children(node)
+            if children:
+                need = _iterations_to_cover(children[0], None, node_ids)
+                if len(children) > 1:
+                    # The redo path runs once between iterations, so it
+                    # gets one evaluation fewer than the body.
+                    need = max(need, 1 + _iterations_to_cover(
+                        children[1], None, node_ids))
+                out[node_ids[id(node)]] = need
+        for child in _children(node):
+            walk(child)
+
+    walk(tree)
+    return out
+
+
+@dataclass
+class _LoopPlan:
+    """Per-variant loop sizes and the branch schedule that fills them."""
+
+    #: ``{(loop_node_id, variant_id): iterations}``
+    iterations: Dict[Tuple[int, str], int] = field(default_factory=dict)
+    #: ``{(xor_node_id, branch, variant_id): (lower, upper)}`` — the
+    #: branch fires while ``lower < counter <= upper``.
+    ranges: Dict[Tuple[int, int, str], Tuple[int, int]] = field(
+        default_factory=dict)
+
+
+def _schedule_branches(node, iters: List[int], variant: "Variant",
+                       node_ids: Dict[int, int], total: int,
+                       plan: "_LoopPlan") -> None:
+    """Hand each choice under ``node`` a slice of ``iters``.
+
+    ``iters`` are the 1-based iteration numbers on which ``node`` is
+    evaluated; a choice splits them among the branches this variant
+    takes, and each branch's subtree is then scheduled over its own
+    slice. Slices are contiguous so the resulting predicate is a range
+    on the counter rather than an enumeration of values.
+
+    The counter runs *down*: it is initialised to ``total`` and
+    decremented at the end of each iteration, so iteration ``j`` sees
+    ``total - j + 1``.
+    """
+    op = _op_value(node)
+    children = _children(node)
+    if not children or not iters:
+        return
+    if op == _LOOP:
+        return                      # its own counter; planned separately
+    if op not in (_XOR, _OR):
+        for child in children:      # sequence / parallel: same iterations
+            _schedule_branches(child, iters, variant, node_ids, total, plan)
+        return
+
+    wanted = _branches_to_cover(node, variant, node_ids)
+    if not wanted:
+        return                      # this variant never reaches the choice
+    xor_id = node_ids[id(node)]
+    counts = variant.xor_branch_totals.get(xor_id, {})
+
+    # Every branch gets at least what its own subtree needs; whatever is
+    # left over is shared out in proportion to how often the variant
+    # actually took each branch, so the busiest branch also looks busiest.
+    sizes = [_iterations_to_cover(children[k], variant, node_ids)
+             for k in wanted]
+    if sum(sizes) > len(iters):
+        # Not enough iterations for every branch's full subtree. The
+        # planner sizes loops to prevent this, so reaching here means an
+        # externally imposed budget; spend what there is one iteration
+        # per branch, widest coverage first, rather than letting the
+        # trailing branches fall off the end with nothing.
+        sizes = [1] * len(wanted)
+        while sum(sizes) > len(iters) and len(sizes) > 1:
+            sizes.pop()
+            wanted = wanted[:len(sizes)]
+    spare = len(iters) - sum(sizes)
+    if spare > 0:
+        weights = [counts.get(k, 0) for k in wanted]
+        weight_total = sum(weights) or len(wanted)
+        for i, w in enumerate(weights):
+            sizes[i] += spare * (w or 0) // weight_total
+        # Hand any rounding remainder to the heaviest branches.
+        for i in sorted(range(len(wanted)), key=lambda j: -weights[j]):
+            if sum(sizes) >= len(iters):
+                break
+            sizes[i] += 1
+
+    pos = 0
+    for i, branch in enumerate(wanted):
+        chunk = iters[pos:pos + sizes[i]]
+        pos += sizes[i]
+        if not chunk:
+            continue
+        # Iterations chunk[0]..chunk[-1] map to counter values
+        # total-chunk[-1]+1 .. total-chunk[0]+1, i.e. the half-open
+        # range (total-chunk[-1], total-chunk[0]+1].
+        plan.ranges[(xor_id, branch, variant.variant_id)] = (
+            total - chunk[-1], total - chunk[0] + 1,
+        )
+        _schedule_branches(children[branch], chunk, variant, node_ids,
+                           total, plan)
+
+
+def _plan_loop_coverage(
+    tree, variants: List["Variant"], node_ids: Dict[int, int],
+    max_loop_iterations: Optional[int],
+) -> "_LoopPlan":
+    """Size every loop per variant and schedule its body's choices.
+
+    A loop's size is the largest of what the variant *observed* (capped
+    by ``max_loop_iterations`` to keep scenarios steppable) and what
+    covering that variant's own branches *requires*. The cap therefore
+    trims a loop that merely ran many times, but never below the point
+    where a branch would become undemonstrable — otherwise a scenario
+    would silently omit part of the model it claims to describe.
+    """
+    plan = _LoopPlan()
+    loop_nodes: List[Tuple[int, Any]] = []
+
+    def collect(node) -> None:
+        if _op_value(node) == _LOOP and _children(node):
+            loop_nodes.append((node_ids[id(node)], node))
+        for child in _children(node):
+            collect(child)
+
+    collect(tree)
+
+    for loop_id, loop_node in loop_nodes:
+        children = _children(loop_node)
+        body = children[0]
+        for variant in variants:
+            raw_observed = variant.loop_iteration_max.get(loop_id, 0)
+            if raw_observed <= 0:
+                continue            # this variant never entered the loop
+            observed = raw_observed
+            if max_loop_iterations is not None:
+                observed = min(observed, max_loop_iterations)
+            needed = _iterations_to_cover(body, variant, node_ids)
+            if len(children) > 1 and raw_observed >= 2:
+                # The redo path runs once BETWEEN iterations, so it gets
+                # total-1 evaluations. A choice there needs one more
+                # iteration than it would in the body. Only variants that
+                # actually loop back reach it.
+                needed = max(needed, 1 + _iterations_to_cover(
+                    children[1], variant, node_ids))
+            total = max(observed, needed, 1)
+            plan.iterations[(loop_id, variant.variant_id)] = total
+            _schedule_branches(body, list(range(1, total + 1)), variant,
+                               node_ids, total, plan)
+            # The redo child is inside the loop too, but it runs BETWEEN
+            # body iterations — once after each iteration that loops
+            # back, so M-1 times. After iteration j the counter reads
+            # M-j, which is what iteration index j+1 maps to, so the redo
+            # schedules over indices 2..M under the same mapping.
+            if len(children) > 1 and total > 1:
+                _schedule_branches(children[1], list(range(2, total + 1)),
+                                   variant, node_ids, total, plan)
+    return plan
 
 
 # ---------------------------------------------------------------------------
@@ -1216,6 +1475,7 @@ def _emit_orfork_conditions_data_driven(
     loop_counters: Dict[int, UCM.Variable],
     max_loop_iterations: Optional[int],
     max_depth: int = 3,
+    plan: Optional["_LoopPlan"] = None,
 ) -> List["_dm.OrForkMiningResult"]:
     """Replace outside-loop OR-fork conditions with decision-mined
     expressions trained on per-case attributes; keep inside-loop and
@@ -1309,6 +1569,76 @@ def _emit_orfork_conditions_data_driven(
     return mining_results
 
 
+def _set_inside_loop_xor_conditions_proportional(
+    of: UCM.OrFork,
+    tree_xor_id: int,
+    n_branches: int,
+    enclosing_loop_id: int,
+    variants: List[Variant],
+    counter_name: str,
+    max_loop_iterations: Optional[int],
+    variant_var_name: str,
+) -> None:
+    """Legacy split: treat each variant's branch counts as proportions
+    of its iteration budget and hand out counter ranges from high to low.
+
+    Superseded by the planner for the single-model path — proportional
+    rounding can collapse a branch to an empty range, and it has no way
+    to place a nested choice inside its parent's iterations. It remains
+    the fallback for the model-family synthesizer, which drives the
+    caller with re-keyed shim variants and no single tree to plan
+    against, and where two-way XORs are the only case in play."""
+    if n_branches > 2:
+        _set_deterministic_true_false_split(of)
+        return
+    per_variant_clauses: List[List[str]] = [[] for _ in range(n_branches)]
+    for v in variants:
+        branch_counts = v.xor_branch_totals.get(tree_xor_id, {})
+        total = sum(branch_counts.values())
+        if total == 0:
+            continue
+        m_v = v.loop_iteration_max.get(enclosing_loop_id, 0)
+        if max_loop_iterations is not None:
+            m_v = min(m_v, max_loop_iterations)
+        if m_v <= 0:
+            continue
+        upper = m_v
+        for k in range(n_branches):
+            piece = round(branch_counts.get(k, 0) / total * m_v)
+            lower = 0 if k == n_branches - 1 else upper - piece
+            if upper > lower:
+                if upper >= m_v and lower <= 0:
+                    clause = f"{variant_var_name} == {v.variant_id}"
+                elif upper >= m_v:
+                    clause = (f"{variant_var_name} == {v.variant_id} "
+                              f"&& {counter_name} > {lower}")
+                elif lower <= 0:
+                    clause = (f"{variant_var_name} == {v.variant_id} "
+                              f"&& {counter_name} <= {upper}")
+                else:
+                    clause = (f"{variant_var_name} == {v.variant_id} "
+                              f"&& {counter_name} > {lower} "
+                              f"&& {counter_name} <= {upper}")
+                per_variant_clauses[k].append(clause)
+            upper = lower
+
+    for k, arc in enumerate(of.succ_connections):
+        arc = _pull_condition_onto_direct_arc(arc)
+        clauses = per_variant_clauses[k] if k < len(per_variant_clauses) else []
+        if not clauses:
+            expr = "false"
+        elif len(clauses) == 1:
+            expr = clauses[0]
+        else:
+            expr = " || ".join(f"({c})" for c in clauses)
+        if arc.condition is None:
+            arc.set_condition(UCM.Condition(
+                label=f"branch{k}", expression=expr,
+            ))
+        else:
+            arc.condition.expression = expr
+
+
 def _set_inside_loop_xor_conditions(
     of: UCM.OrFork,
     tree_xor_id: int,
@@ -1318,40 +1648,43 @@ def _set_inside_loop_xor_conditions(
     loop_counters: Dict[int, UCM.Variable],
     max_loop_iterations: Optional[int] = None,
     variant_var_name: str = None,
+    plan: Optional["_LoopPlan"] = None,
 ) -> None:
     """Wire an inside-loop XOR's outgoing arcs with combined
     ``variant_id`` + ``loop_counter`` conditions so each branch
     fires for a specific range of loop-counter values per variant.
 
-    For each variant V that traversed this XOR, we know:
+    The ranges come from ``plan`` (see :func:`_plan_loop_coverage`),
+    which has already decided — for every variant, and for every choice
+    inside the loop including nested ones — which iterations take which
+    branch. Each branch a variant takes owns a contiguous, non-empty
+    slice of that variant's iterations, so the condition here is simply
+    that slice expressed on the counter, guarded by ``variant_id == V``
+    and joined with ``||`` across variants.
 
-    * ``M_V`` — the variant's max loop iteration count
-      (``variant.loop_iteration_max[enclosing_loop_id]``);
-    * ``n_k_V`` — the total number of times branch ``k`` was taken
-      across the variant's traces
-      (``variant.xor_branch_totals[tree_xor_id][k]``).
+    Two properties follow, and both are the point of routing this
+    through a plan rather than computing proportions locally:
 
-    We treat the per-V counts as proportions of ``M_V`` evaluations
-    and assign branches to counter ranges from high to low:
+    * **no branch is rounded away.** Sizing each branch from its own
+      subtree's needs first, and only then sharing out the surplus by
+      observed frequency, means a rarely-taken branch still gets an
+      iteration — under proportional rounding it could collapse to an
+      empty range and become undemonstrable;
+    * **nested choices line up.** A choice inside a branch is only
+      evaluated on the iterations where that branch is taken, so its
+      own ranges are carved out of *those* iterations. Computing them
+      against the whole run would place them where the choice is never
+      reached.
 
-    * branch 0 fires while ``counter > M_V - n_0_V / sum * M_V``,
-    * branch 1 fires while ``counter > M_V - (n_0_V + n_1_V) / sum * M_V``
-      AND ``counter <= M_V - n_0_V / sum * M_V``,
-    * and so on, with the last branch picking up everything ``<= 0``.
+    For variants that never traversed the XOR (because they didn't
+    enter the loop, or the loop ran only once with the XOR in the redo
+    path), no per-V clause is added — that variant contributes nothing
+    to this OR-fork's expression.
 
-    The thresholds are integer-rounded so the partition is exact for
-    the variant's specific counter trajectory. The per-V conditions
-    are guarded by ``variant_id == V`` and joined with ``||`` across
-    variants. For variants that never traversed the XOR (because
-    they didn't enter the loop, or the loop ran only once with the
-    XOR in the redo path), no per-V clause is added — that variant
-    contributes nothing to this OR-fork's expression.
-
-    Falls back to a deterministic ``true`` / ``false`` split if the
-    enclosing loop's counter variable wasn't created (which can
-    happen for tau-body loops the wiring step skipped) or if the
-    XOR has more than two branches (range conditions on multi-way
-    XORs are a follow-up).
+    Falls back to a deterministic ``true`` / ``false`` split only if the
+    enclosing loop's counter variable wasn't created (which can happen
+    for tau-body loops the wiring step skipped). Multi-way XORs are
+    handled like any other: the plan gives each branch its own slice.
 
     ``variant_var_name`` overrides the variable the guards test —
     used by the model-family synthesizer, whose variants live in the
@@ -1362,39 +1695,38 @@ def _set_inside_loop_xor_conditions(
     if variant_var_name is None:
         variant_var_name = _VARIANT_VAR_NAME
     counter = loop_counters.get(enclosing_loop_id)
-    if counter is None or n_branches > 2:
-        # No counter to combine with, or multi-way XOR — fall back
-        # to the simpler deterministic split.
+    if counter is None:
+        # No counter to combine with (e.g. a tau-body loop the wiring
+        # step skipped) — fall back to the deterministic split.
         _set_deterministic_true_false_split(of)
+        return
+    if plan is None:
+        # No schedule available — the model-family synthesizer drives
+        # this function with canonically re-keyed shim variants and no
+        # single tree to plan against. Fall back to the proportional
+        # split, which is what that path has always used.
+        _set_inside_loop_xor_conditions_proportional(
+            of, tree_xor_id, n_branches, enclosing_loop_id, variants,
+            counter.name, max_loop_iterations, variant_var_name,
+        )
         return
 
     counter_name = counter.name
-    # Per-branch (variant_id, threshold-on-counter) clauses.
+    # Per-branch (variant_id, threshold-on-counter) clauses, read off the
+    # schedule the planner computed. Every branch a variant takes has a
+    # non-empty slice of that variant's iterations, so no branch can be
+    # rounded out of existence, and a nested choice's slices are carved
+    # from its parent branch's iterations rather than the whole run.
     per_variant_clauses: List[List[str]] = [[] for _ in range(n_branches)]
     for v in variants:
-        branch_counts = v.xor_branch_totals.get(tree_xor_id, {})
-        total = sum(branch_counts.values())
-        if total == 0:
-            continue
-        m_v = v.loop_iteration_max.get(enclosing_loop_id, 0)
-        # Cap M_V to match the counter initialisation cap so the
-        # threshold arithmetic stays consistent with what jUCMNav
-        # will actually see in the running scenario.
-        if max_loop_iterations is not None:
-            m_v = min(m_v, max_loop_iterations)
+        m_v = plan.iterations.get((enclosing_loop_id, v.variant_id), 0)
         if m_v <= 0:
             continue
-        # Cumulative branch sums => integer thresholds on the counter.
-        # branch i fires for counter in (lower_i, upper_i].
-        upper = m_v
         for k in range(n_branches):
-            n_k = branch_counts.get(k, 0)
-            # Proportional split, integer-rounded so the partition
-            # of [0, M_V] across branches sums to M_V exactly.
-            piece = round(n_k / total * m_v)
-            lower = upper - piece
-            if k == n_branches - 1:
-                lower = 0  # last branch picks up the remainder
+            window = plan.ranges.get((tree_xor_id, k, v.variant_id))
+            if window is None:
+                continue
+            lower, upper = window
             if upper > lower:
                 # Build the per-V clause for this branch.
                 if upper >= m_v and lower <= 0:
@@ -1418,7 +1750,15 @@ def _set_inside_loop_xor_conditions(
                         f"&& {counter_name} <= {upper}"
                     )
                 per_variant_clauses[k].append(clause)
-            upper = lower
+
+    if not any(per_variant_clauses):
+        # No variant reaches this choice under the plan (e.g. it sits on
+        # a redo path no variant loops back through). Leaving every
+        # branch "false" would block the traversal outright if it ever
+        # were reached, so fall back to a split that at least admits a
+        # path.
+        _set_deterministic_true_false_split(of)
+        return
 
     succs = of.succ_connections
     for k, arc in enumerate(succs):
@@ -1459,6 +1799,7 @@ def _emit_orfork_conditions(
     variants: List[Variant],
     loop_counters: Optional[Dict[int, UCM.Variable]] = None,
     max_loop_iterations: Optional[int] = None,
+    plan: Optional["_LoopPlan"] = None,
 ) -> None:
     """Set ``variant_id``-disjunction conditions on outgoing OR-fork
     connections that correspond to non-loop XORs in the process tree.
@@ -1494,6 +1835,7 @@ def _emit_orfork_conditions(
                 of, tree_xor_id, n_branches, enclosing_loop_id,
                 variants, loop_counters or {},
                 max_loop_iterations=max_loop_iterations,
+                plan=plan,
             )
             continue
         branch_to_variants: Dict[int, List[str]] = {}

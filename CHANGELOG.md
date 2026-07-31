@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Scenarios are now planned for path coverage.** The goal: if the
+  mined variants cover the log's cases, the generated scenario
+  definitions should collectively walk every path of the UCM. Two things
+  stood in the way, and both are now decided up front by a planner
+  rather than improvised per fork:
+  - **loops are sized from the tree's structure, not just the log.** A
+    body containing a 4-way choice cannot demonstrate all four branches
+    in 2 iterations, whatever the conditions say. New
+    `suggest_loop_iterations(tree)` computes the minimum from the shape
+    alone — a choice needs the *sum* of its branches (one iteration goes
+    down one branch), a sequence needs the *max* (its children share an
+    iteration), a nested loop needs 1 (its own counter covers what is
+    inside it), and a choice on the *redo* path needs one more than in
+    the body (redo runs once fewer than the body). Each scenario's
+    counter is the larger of what its variant observed — still capped by
+    `max_loop_iterations` — and what coverage requires, so the cap trims
+    a loop that merely ran often but never one that has to run to stay
+    honest;
+  - **branches get an explicit schedule.** Each choice hands every
+    branch a contiguous, non-empty slice of its variant's iterations,
+    sized from that branch's own subtree first and only then shared out
+    by observed frequency. Proportional rounding could collapse a rare
+    branch to an empty range; and a nested choice — evaluated only on
+    the iterations where its parent branch is taken — now has its ranges
+    carved out of *those* iterations rather than the whole run.
+  Multi-way choices inside loops are handled like any other, removing
+  the old `true / false / false / …` fallback that made every branch but
+  the first unreachable.
+
+  Measured over the bundled samples plus a real clinical log, scenarios
+  now reach **every activity** of the mined model on the clinical log
+  (was 6 of 10), on `ClaimsPaymentLog` (was 24 of 25) and on
+  `IssueTrackerSyntheticLog`, with every scenario still running to
+  completion. The remaining unreached arcs on those three are
+  loop-*bypass* paths — the 0-iteration case — which no case in those
+  logs exhibits. `devlog`, whose tree has 17 loops nested 15 deep, still
+  has gaps.
+
 ### Fixed
 
 - **Synthesised scenarios deadlocked in jUCMNav when the model had a
