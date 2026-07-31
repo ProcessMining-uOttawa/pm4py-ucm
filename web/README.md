@@ -186,11 +186,15 @@ practical starting point**; useful range is roughly 0.1 – 0.4.
   not-too-many maps — no magic numbers.
 - **Pre-set: Max=8/Min=4** and **Pre-set: Max=6/Min=3** — pin those fixed
   dimensions instead of fitting them, for when you want a specific granularity.
+- **Custom** — set `max_leaves_per_map`, `min_leaves_to_decompose` and
+  `balance_ratio` by hand.
 
 All modes decompose on **every** operator kind. Switching to any non-off mode
-reveals an **Advanced — boundary rules** expander with the four toggles
+reveals an **Advanced — boundary rules & sizes** expander with the four toggles
 (`on_root_sequence`, `on_parallel`, `on_alternative`, `on_loop`) — all on by
-default — if you ever want to exclude one. Click **Apply changes** to remine.
+default — if you ever want to exclude one; under **Custom** the size inputs are
+editable there, and `auto` / the pre-sets show their values as a caption. Click
+**Apply changes** to remine.
 See the main `README.md`
 [Hierarchical decomposition](../README.md#hierarchical-decomposition)
 section for what each key does.
