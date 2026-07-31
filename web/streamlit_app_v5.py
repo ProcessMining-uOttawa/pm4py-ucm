@@ -1157,6 +1157,21 @@ def _detect_family_attributes(
     return rows
 
 
+@st.cache_data(show_spinner="Ranking attributes by discriminative power...")
+def _partition_advisor(
+    log_bytes: bytes, log_kind: str, csv_columns, filter_spec: Tuple,
+    _file_hash: str,
+) -> List[Dict[str, Any]]:
+    """Rank case attributes by discriminative power (deterministic — no LLM;
+    see docs/ai_insights.md §4.1b), best first, as flat rows for a table.
+    Computed on the filtered log so the advice matches what the family mines."""
+    from pm4py_ucm.algo.discovery.families import rank_partition_attributes
+
+    df = _filtered_log_df(log_bytes, log_kind, csv_columns, filter_spec,
+                          _file_hash)
+    return [s.to_row() for s in rank_partition_attributes(df)]
+
+
 @st.cache_data(show_spinner="Computing partition coverage...")
 def _family_preview(
     log_bytes: bytes, log_kind: str, csv_columns,
@@ -4246,6 +4261,35 @@ if _view == "Family":
             "age, or admission channel.)"
         )
     else:
+        # Deterministic partition advisor (docs/ai_insights.md §4.1b): rank the
+        # attributes by how much the process actually changes across their
+        # values, so the picker below isn't a blind guess.
+        try:
+            _advice = _partition_advisor(
+                log_bytes, log_kind, csv_columns, filter_spec, file_hash)
+        except Exception:
+            _advice = []
+        if _advice:
+            with st.expander("💡 Suggested attributes to partition on",
+                             expanded=True):
+                st.caption(
+                    "Ranked by discriminative power — control-flow divergence "
+                    "(how much the trace variant depends on the attribute) plus "
+                    "case-duration effect, discounting identifiers and "
+                    "near-constant fields. A deterministic hint, not a rule.")
+                st.dataframe(pd.DataFrame(_advice), width="stretch",
+                             hide_index=True)
+                if _advice[0]["score"] >= 0.1:
+                    st.caption(
+                        f"Top suggestion: **{_advice[0]['attribute']}** — "
+                        f"{_advice[0]['note']}.")
+                else:
+                    st.caption(
+                        "No attribute strongly discriminates the process in "
+                        "this log — the scores are low, so partitioning may "
+                        "just reproduce similar models. (The ranking is "
+                        "relative.)")
+
         with st.expander("Detected case attributes", expanded=False):
             st.dataframe(
                 pd.DataFrame(attr_rows), width="stretch",

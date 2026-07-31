@@ -31,6 +31,7 @@ from .api import (
     write_case_variant_map,
     write_condition_mining_report,
     discover_ucm_family,
+    rank_partition_attributes,
     write_ucm_family,
     assemble_ucm_family,
     save_vis_ucm_family,
@@ -66,6 +67,7 @@ __all__ = [
     "write_family_report",
     "annotate_performance",
     "suggest_decomposition",
+    "rank_partition_attributes",
 ]
 
 __version__ = "0.7.7"

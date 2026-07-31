@@ -58,6 +58,7 @@ AREAS: dict[str, list[str]] = {
     "Model families": [
         "test_family.py",
         "test_family_stats.py",
+        "test_partition_advisor.py",
     ],
     "Performance & metrics": [
         "test_performance.py",

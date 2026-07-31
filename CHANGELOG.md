@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Partition advisor (Family view) — deterministic, no LLM.** A new
+  **💡 Suggested attributes** table ranks the log's case attributes by
+  *discriminative power* — control-flow divergence (normalised mutual
+  information between the attribute and the trace variant) plus case-duration
+  effect size, discounting identifiers and near-constant fields — so choosing
+  *which* attribute to build a family on is a guided recommendation rather than a
+  guess. When nothing scores high it says so. New public
+  `pm4py_ucm.rank_partition_attributes(log)` returning ranked `AttributeScore`s.
+  (This is the deterministic half of the AI-insights §4.1 "partition &
+  decomposition advisor"; the optional LLM sense-check is a separate later
+  layer. See `docs/ai_insights.md`.)
+
 ## [0.7.7] — 2026-07-31
 
 Shape-fitted decomposition: `"auto"` now scales its map-size parameters to the

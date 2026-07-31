@@ -308,6 +308,13 @@ decomposed models alike.
 
 ### 6 · Family
 
+A **💡 Suggested attributes** table ranks the case attributes by
+**discriminative power** — how much the process actually changes across each
+attribute's values (control-flow divergence + case-duration effect, discounting
+identifiers and near-constant fields) — so the picker isn't a blind guess. It is
+fully **deterministic** (no LLM; `pm4py_ucm.rank_partition_attributes`); when
+nothing scores high it says so, rather than pretend.
+
 Pick **1–2 case attributes**; a **coverage heatmap** previews the cell
 sizes *before* mining, with per-value filters, a `min_cases` floor, and
 quantile `bins` for numeric attributes. Mine to get one model per

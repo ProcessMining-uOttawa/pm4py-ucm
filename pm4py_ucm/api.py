@@ -467,6 +467,26 @@ def annotate_performance(
 # Model families (attribute-partitioned discovery)
 # ---------------------------------------------------------------------------
 
+def rank_partition_attributes(log, **kwargs):
+    """Rank a log's case attributes by **discriminative power** — how much the
+    process changes across each attribute's values — to advise *which* attribute
+    to build a :func:`discover_ucm_family` on.
+
+    Deterministic (no LLM). Returns a list of
+    :class:`~pm4py_ucm.algo.discovery.families.advisor.AttributeScore`, best
+    first. See that module for the scoring (control-flow divergence + duration
+    effect size + cardinality/coverage sanity). ``log`` is a pandas DataFrame;
+    ``kwargs`` forward the ``*_col`` names.
+    """
+    try:
+        import pm4py
+    except ImportError:  # pragma: no cover
+        pm4py = None
+    if pm4py is not None and not hasattr(log, "columns"):
+        log = pm4py.convert_to_dataframe(log)
+    return _families.rank_partition_attributes(log, **kwargs)
+
+
 def discover_ucm_family(
     log,
     attributes,
