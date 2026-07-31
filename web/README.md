@@ -178,16 +178,24 @@ practical starting point**; useful range is roughly 0.1 – 0.4.
 #### Decomposition
 
 - **off** (default) — single flat map.
-- **auto** — split into a root map plus plug-in maps when the model is large
-  enough to benefit.
-- **aggressive** — same boundary rules with a tighter cap, producing more /
-  smaller plug-ins.
+- **auto** — split into a root map plus plug-in maps, with the map size
+  **fitted to the mined tree's shape** (`suggest_decomposition`): the
+  `max_leaves_per_map` cap scales sub-linearly (≈ 1.5·√N in the tree's
+  activity-leaf count N) and the `min_leaves_to_decompose` floor scales with N,
+  so a small model stays flat while a large one splits into readable,
+  not-too-many maps — no magic numbers.
+- **Pre-set: Max=8/Min=4** and **Pre-set: Max=6/Min=3** — pin those fixed
+  dimensions instead of fitting them, for when you want a specific granularity.
+- **Custom** — set `max_leaves_per_map`, `min_leaves_to_decompose` and
+  `balance_ratio` by hand.
 
-Switching the preset reveals an **Advanced** expander with six override
-knobs (`on_root_sequence`, `on_parallel`, `on_loop`, `max_leaves_per_map`,
-`min_leaves_to_decompose`, `balance_ratio`). The widget values are seeded
-from the preset; tweak as many as you like and click **Apply changes** to
-remine — single click, single remine. See the main `README.md`
+All modes decompose on **every** operator kind. Switching to any non-off mode
+reveals an **Advanced — boundary rules & sizes** expander with the four toggles
+(`on_root_sequence`, `on_parallel`, `on_alternative`, `on_loop`) — all on by
+default — if you ever want to exclude one; under **Custom** the size inputs are
+editable there, and `auto` / the pre-sets show their values as a caption. Click
+**Apply changes** to remine.
+See the main `README.md`
 [Hierarchical decomposition](../README.md#hierarchical-decomposition)
 section for what each key does.
 

@@ -413,9 +413,11 @@ The `decomposition` argument accepts:
 | Value          | Effect                                                                                 |
 |----------------|----------------------------------------------------------------------------------------|
 | `None` / `"off"` | No decomposition. Output byte-stable with pre-decomposition exports.                |
-| `"auto"`       | All three boundary rules on, `max_leaves_per_map=20`, `min_leaves_to_decompose=4`.     |
-| `"aggressive"` | Same boundary rules, `max_leaves_per_map=10`.                                          |
-| `dict`         | Any subset of the six keys below; unspecified keys take the `"auto"` defaults.         |
+| `"auto"`       | All four boundary rules on; `max_leaves_per_map` and `min_leaves_to_decompose` **fitted to the tree shape** at conversion time — see `suggest_decomposition` (cap ≈ 1.5·√N, floor ≈ 0.15·N in the leaf count N). |
+| `"aggressive"` | Fixed preset: same boundary rules, `max_leaves_per_map=10`.                            |
+| `dict`         | Any subset of the keys below; unspecified keys take the `"auto"` defaults. A size dimension may be the string `"auto"` to fit just that one to the shape. |
+
+`pm4py_ucm.suggest_decomposition(process_tree)` returns the shape-fitted dict directly if you want to inspect or tweak it.
 
 Configurable keys:
 

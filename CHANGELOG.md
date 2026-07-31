@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.7] — 2026-07-31
+
+Shape-fitted decomposition: `"auto"` now scales its map-size parameters to the
+process-tree shape instead of fixed magic numbers, and the Model-view control is
+reworked (off / auto / two pre-sets / Custom).
+
+### Changed
+
+- **Decomposition `"auto"` now fits its parameters to the process-tree shape**
+  instead of fixed magic numbers. New `pm4py_ucm.suggest_decomposition(tree)`
+  scales `max_leaves_per_map` (≈ 1.5·√N) and `min_leaves_to_decompose` (≈ 0.15·N)
+  with the tree's activity-leaf count N, so a small model stays flat and a large
+  one splits into readable, not-too-many maps. A decomposition dict may carry the
+  `"auto"` sentinel for either size dimension; it is resolved against the tree in
+  `apply()`, so the app, the exported pipeline, and every family cell decompose
+  identically.
+
+### Changed — Web app (V5)
+
+- **Decomposition control reworked.** The dropdown is now **off / auto /
+  Pre-set: Max=8/Min=4 / Pre-set: Max=6/Min=3 / Custom** — `auto` fits the map
+  size to the tree shape, the pre-sets pin fixed dimensions, and **Custom** sets
+  `max_leaves_per_map` / `min_leaves_to_decompose` / `balance_ratio` by hand. All
+  modes decompose on every operator kind; the four `on_*` toggles (all on) live
+  under **Advanced — boundary rules & sizes**, where the size inputs are editable
+  under Custom and shown as a caption for `auto` / the pre-sets. All of these —
+  sizes and toggles — round-trip through save/resume and the exported pipeline.
+
 ## [0.7.6] — 2026-07-30
 
 An attribute-based log filter written in the ƒ metric language (which gained
