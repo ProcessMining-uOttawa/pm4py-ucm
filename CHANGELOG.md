@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Synthesised scenarios deadlocked in jUCMNav when the model had a
+  loop.** Two independent defects, both reported on a real clinical log
+  where all four scenarios failed — as an infinite loop, a blocked
+  AND-join, or a scenario that never reached its end point:
+  - the **loop counter was decremented by a responsibility inside a
+    choice**. The synthesizer attached the `counter = counter - 1`
+    expression to the first responsibility reachable from the LoopJoin,
+    assuming it "runs once per body iteration" — true only when nothing
+    can bypass it. With a body like `X(A, →(…))` that responsibility sits
+    in one branch, so iterations taking the other left the counter
+    untouched, the redo condition stayed true, and the traversal spun
+    forever. The site is now required to **dominate** the loop body;
+    otherwise a dedicated decrement node is spliced directly after the
+    LoopJoin, where nothing can bypass it (that fallback already
+    existed for tau-only bodies).
+  - the **loop-entry guard raised an AND-join's arity**. Its bypass arc
+    was wired straight to the post-loop node; when that node is an
+    AND-join — which fires only once *every* incoming arc has delivered
+    — a 2-branch parallel suddenly needed 3 tokens and could never
+    complete. The bypass and the loop exit are alternatives, so they now
+    merge through an OrJoin, leaving the join's arity unchanged. (Only
+    the loop's own incoming arc is re-routed; folding in the other
+    predecessors would collapse the parallelism itself. The equivalent
+    problem for a Stub target was already handled.)
 - **Concurrency-aware replay could return a wrong parse.** A parallel
   block replays each child against a *projection* of the window — a
   fresh list whose positions are their own coordinate space — but the

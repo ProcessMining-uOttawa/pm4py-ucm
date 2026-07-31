@@ -777,19 +777,51 @@ def _label(node):
     return getattr(node, "label", None)
 
 
+def _body_exit_reachable_avoiding(
+    loop_join: UCM.PathNode, loop_fork: UCM.PathNode,
+    avoid: UCM.PathNode,
+) -> bool:
+    """Can the body run from ``loop_join`` to ``loop_fork`` **without**
+    passing through ``avoid``?
+
+    Walking forward from LoopJoin and stopping at LoopFork enumerates
+    exactly the body: the redo back-edge runs the other way (LoopFork ->
+    redo -> LoopJoin) so it is never traversed."""
+    seen = {id(loop_join), id(avoid)}
+    stack: List[UCM.PathNode] = [
+        arc.target for arc in loop_join.succ_connections
+    ]
+    while stack:
+        node = stack.pop()
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        if node is loop_fork:
+            return True          # reached the exit while avoiding ``avoid``
+        stack.extend(arc.target for arc in node.succ_connections)
+    return False
+
+
 def _find_loop_body_resp_ref(
     loop_join: UCM.PathNode, loop_fork: UCM.PathNode,
 ) -> Optional[UCM.RespRef]:
-    """BFS forward from ``loop_join`` and return the first
-    :class:`UCM.RespRef` found on the path to ``loop_fork``.
+    """Return a body :class:`UCM.RespRef` that runs on **every**
+    iteration, or ``None`` if the body has no such responsibility.
 
-    The body is the sub-graph between LoopJoin and LoopFork. Walking
-    forward from LoopJoin without traversing past LoopFork enumerates
-    exactly the body nodes — the redo back-edge runs the other way
-    (LoopFork -> redo subtree -> LoopJoin) and is never reached. The
-    first RespRef encountered is the natural site for the loop-counter
-    decrement expression: it runs once per body iteration, so the
-    counter steps down predictably."""
+    The decrement expression rides on this node, so it must be one the
+    traversal cannot miss. Taking simply the *first* responsibility
+    reachable from LoopJoin is not enough: when the body starts with a
+    choice, that responsibility sits inside one branch, and an iteration
+    taking any other branch leaves the counter untouched — the redo
+    condition stays true and the scenario spins forever. (Seen on a real
+    log whose loop body was ``X(A, ->(…))``: every synthesised scenario
+    deadlocked in jUCMNav, reported variously as an infinite loop, a
+    blocked AND-join, or a scenario that never reached its end point.)
+
+    So each candidate is checked for **domination** — remove it and see
+    whether the body can still reach LoopFork. Callers fall back to
+    :func:`_synthesize_decrement_resp_ref`, which splices a dedicated
+    node directly after LoopJoin where nothing can bypass it."""
     visited = {id(loop_join)}
     queue: List[UCM.PathNode] = [
         arc.target for arc in loop_join.succ_connections
@@ -801,7 +833,9 @@ def _find_loop_body_resp_ref(
         visited.add(id(node))
         if node is loop_fork:
             continue
-        if isinstance(node, UCM.RespRef) and node.resp_def is not None:
+        if (isinstance(node, UCM.RespRef) and node.resp_def is not None
+                and not _body_exit_reachable_avoiding(
+                    loop_join, loop_fork, node)):
             return node
         for arc in node.succ_connections:
             queue.append(arc.target)
@@ -1048,6 +1082,53 @@ def _splice_orjoin_before_stub(
     return orjoin
 
 
+def _splice_orjoin_before_join(
+    target_map: UCM.UCMmap,
+    and_join: "UCM.AndJoin",
+    loop_join: "UCM.PathNode",
+) -> "UCM.PathNode":
+    """Insert an OrJoin on the arc by which the loop reaches
+    ``and_join``, and return it for the bypass arc to land on.
+
+    Only the ONE incoming arc that carries the loop's exit is
+    re-routed: the AND-join's other predecessors are the concurrent
+    branches it exists to synchronise, and folding them into an OrJoin
+    would turn the parallel block into a choice.
+
+    The loop's arc is the one reachable backwards from ``and_join``
+    without passing through the loop's own join — i.e. the one fed by
+    the loop body. Idempotent: an OrJoin already sitting there is
+    reused."""
+    loop_arc = None
+    for arc in and_join.pred_connections:
+        if isinstance(arc.source, UCM.OrJoin):
+            return arc.source          # already merged here
+        seen = {id(and_join)}
+        stack = [arc.source]
+        while stack:
+            node = stack.pop()
+            if id(node) in seen:
+                continue
+            seen.add(id(node))
+            if node is loop_join:
+                break              # this arc is fed by the loop body
+            stack.extend(p.source for p in node.pred_connections)
+        else:
+            continue
+        loop_arc = arc
+        break
+    if loop_arc is None:
+        return and_join                # not reachable from the loop; leave as is
+
+    src, cond = loop_arc.source, loop_arc.condition
+    target_map.remove_connection(loop_arc)
+    orjoin = UCM.OrJoin(name="OrJoin")
+    target_map.add_node(orjoin)
+    target_map.add_connection(src, orjoin, condition=cond)
+    target_map.add_connection(orjoin, and_join)
+    return orjoin
+
+
 def _insert_loop_entry_guard(
     target_map: UCM.UCMmap,
     loop_join: "UCM.OrJoin",
@@ -1103,6 +1184,19 @@ def _insert_loop_entry_guard(
     if isinstance(exit_target, UCM.Stub) and ucm is not None:
         bypass_target = _splice_orjoin_before_stub(
             ucm, target_map, exit_target,
+        )
+    elif isinstance(exit_target, UCM.AndJoin):
+        # An AND-join waits for EVERY incoming arc, so landing the
+        # bypass on one directly raises its arity: a 2-branch parallel
+        # whose join now needs 3 tokens can never fire, and the whole
+        # scenario deadlocks there. (Reported from jUCMNav as "Traversal
+        # blocked on AndJoin" / "Infinite loop detected on AndJoin".)
+        # The bypass and the loop's exit are ALTERNATIVES, so merge just
+        # those two through an OrJoin — merging all of the join's
+        # predecessors, as the Stub case does, would instead collapse
+        # the parallelism itself.
+        bypass_target = _splice_orjoin_before_join(
+            target_map, exit_target, loop_join,
         )
     target_map.add_connection(
         guard, bypass_target,

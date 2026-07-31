@@ -40,6 +40,7 @@ class T:
 def _seq(*c): return T(operator="->", children=list(c))
 def _xor(*c): return T(operator="X", children=list(c))
 def _par(*c): return T(operator="+", children=list(c))
+def _loop(do, redo): return T(operator="*", children=[do, redo])
 def _leaf(l): return T(label=l)
 def _tau(): return T()
 
@@ -92,6 +93,70 @@ def test_cluster_collapses_parallel_interleavings_into_one_variant():
     assert result.total_cases == 100
     assert len(result.noise_case_ids) == 0
     assert result.fitness_percentage == 1.0
+
+
+def _loop_body_decrement_sites(ucm):
+    """``[(responsibility_name, expression)]`` for every responsibility
+    carrying a loop-counter decrement."""
+    return [(r.name, r.expression) for r in ucm.responsibilities
+            if r.expression and "- 1" in r.expression]
+
+
+def test_loop_decrement_is_not_placed_inside_a_choice():
+    """The loop counter must be decremented on EVERY iteration.
+
+    When the loop body starts with a choice, the first responsibility
+    reachable from the LoopJoin sits inside one branch only. Attaching
+    the decrement there means an iteration taking any other branch
+    leaves the counter untouched, the redo condition stays true, and
+    the scenario spins forever — jUCMNav reports an infinite loop, a
+    blocked AND-join, or a scenario that never reaches its end point.
+    """
+    # *( X( A, B ), tau ) — a body that is a choice, so neither A nor B
+    # is guaranteed to run on a given iteration.
+    tree = _seq(_loop(_xor(_leaf("A"), _leaf("B")), _tau()), _leaf("C"))
+    log = [("c1", ["A", "C"]), ("c2", ["B", "C"]), ("c3", ["A", "B", "C"])]
+    ucm = pm4py_ucm.discover_ucm_inductive(
+        log, parameters={"process_tree": tree})
+    clustering = _clustering.cluster(log, tree)
+    _scenarios.synthesize_scenarios(ucm, tree, clustering)
+
+    sites = _loop_body_decrement_sites(ucm)
+    assert sites, "the loop must decrement its counter somewhere"
+    names = {n for n, _ in sites}
+    assert not (names & {"A", "B"}), (
+        f"decrement landed on a conditional activity: {sites}")
+    assert any(n.startswith("decrement_") for n in names), (
+        f"expected a dedicated always-executed decrement node, got {sites}")
+
+
+def test_loop_entry_guard_does_not_raise_an_and_joins_arity():
+    """An AND-join fires only when EVERY incoming arc has delivered, so
+    the loop-entry guard's bypass arc must not land on one directly: a
+    2-branch parallel whose join suddenly needs 3 tokens can never fire.
+    The bypass and the loop exit are alternatives and belong behind an
+    OrJoin."""
+    from pm4py_ucm.objects.ucm.obj import UCM
+
+    # +( P, *( Q, tau ) ) — the loop's exit lands on the AND-join.
+    tree = _par(_leaf("P"), _loop(_leaf("Q"), _tau()))
+    log = [("c1", ["P", "Q"]), ("c2", ["Q", "P"]), ("c3", ["P", "Q", "Q"])]
+    ucm = pm4py_ucm.discover_ucm_inductive(
+        log, parameters={"process_tree": tree})
+    and_joins = [n for m in ucm.maps for n in m.nodes
+                 if isinstance(n, UCM.AndJoin)]
+    assert and_joins, "this tree must produce an AND-join to test against"
+    before = {id(n): len(n.pred_connections) for n in and_joins}
+    assert all(v >= 2 for v in before.values())
+
+    _scenarios.synthesize_scenarios(ucm, tree, _clustering.cluster(log, tree))
+
+    for m in ucm.maps:
+        for n in m.nodes:
+            if isinstance(n, UCM.AndJoin) and id(n) in before:
+                assert len(n.pred_connections) == before[id(n)], (
+                    "the guard changed an AND-join's arity from "
+                    f"{before[id(n)]} to {len(n.pred_connections)}")
 
 
 def test_cluster_replays_once_per_distinct_sequence(monkeypatch):
