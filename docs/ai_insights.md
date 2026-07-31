@@ -1,11 +1,26 @@
 # AI insights — analysis & recommendations — design proposal
 
-> **Status: design proposal — not yet implemented.** The agreed shape for the
-> LLM-powered *analysis and recommendation* capabilities of Feature 1. Its
-> deterministic companion — synthesising a **GRL goal model** from the metrics —
-> is specified in [`goal_insights.md`](goal_insights.md); this document is the
-> **single home** for the LLM grounding contract and the provider seam, which
-> that feature references.
+> **Status: partly implemented.** The agreed shape for the LLM-powered *analysis
+> and recommendation* capabilities of Feature 1. Its deterministic companion —
+> synthesising a **GRL goal model** from the metrics — is specified in
+> [`goal_insights.md`](goal_insights.md); this document is the **single home**
+> for the LLM grounding contract and the provider seam, which that feature
+> references.
+>
+> **What the old §4.1 became.** "Partition & decomposition advisor" was really
+> two unrelated *setup* decisions at two different views, only one of which is
+> AI-shaped:
+> - **4.1a — decomposition auto-tuner** (Model view): pure tree geometry, **no
+>   LLM**. **Shipped in v0.7.7** as `pm4py_ucm.suggest_decomposition` +
+>   the reworked Model-view control; it is *not* an AI feature and no longer
+>   lives here except as this pointer.
+> - **4.1b — partition advisor** (Family view): rank case attributes by
+>   discriminative power. **Deterministic-first** — the ranking ships with no
+>   provider; the LLM is an optional sense-check. This is the genuine §4.1.
+>
+> **Guiding principle (applies to every capability below): the deterministic
+> layer is the product; the LLM is an optional naming/explanation layer, OFF by
+> default.** Every feature ships and is useful with *zero* LLM configured.
 
 ## 1. Scope & thesis
 
@@ -16,12 +31,15 @@ recommends, always citing the deterministic layer.
 
 The four capabilities span the analysis lifecycle:
 
-| Stage | Capability | § |
-|---|---|---|
-| **Before mining** (setup) | Partition & decomposition advisor | 4.1 |
-| **Per model** (annotation) | Variation-point & stub naming | 4.2 |
-| **Per model** (critique) | Decision-rule critique & naming | 4.3 |
-| **Across a family** (analysis) | Cohort-divergence explanation | 4.4 |
+| Stage | Capability | § | LLM |
+|---|---|---|---|
+| **Before a family** (setup) | Partition advisor | 4.1b | optional sense-check |
+| **Per model** (annotation) | Variation-point & stub naming | 4.2 | core |
+| **Per model** (critique) | Decision-rule critique & naming | 4.3 | core |
+| **Across a family** (analysis) | Cohort-divergence explanation | 4.4 | core |
+
+(The decomposition auto-tuner, old §4.1a, is deterministic and already shipped —
+see the banner; it is not an AI capability.)
 
 What makes these different from the me-too "narrate the KPIs" of other tools:
 pm4py-ucm's outputs are **structured** (aligned family stats, per-fork mined
@@ -53,41 +71,85 @@ Applies to every capability here **and** to the LLM naming in
 - A **provider-agnostic interface** with **no default wired in**. The user
   supplies provider + endpoint + key, or points at a **local model** (Ollama /
   llama.cpp / any OpenAI-compatible endpoint).
+- **One transport covers local *and* commercial, cheap *and* expensive.** The
+  OpenAI `/v1/chat/completions` schema is the de-facto standard: local runners
+  (**Ollama** `:11434/v1`, **LM Studio**, **llama.cpp server**, **vLLM**) and
+  commercial providers (**OpenAI**, **Azure OpenAI**, **Google** Gemini's
+  OpenAI-compat endpoint, **Anthropic** via a thin adapter) all speak it. So a
+  single `OpenAICompatibleProvider(base_url, model, api_key_env)` is the whole
+  seam; a `NullProvider` is the default. The interface is one method:
+
+  ```python
+  class LLMProvider(Protocol):
+      def complete(self, system: str, user: str, *,
+                   response_schema: dict | None = None) -> str: ...
+  ```
+
+- **Cheap vs expensive is just configuration** — the user picks the model + endpoint:
+  local `llama3.1:8b` (free) → `gpt-4o-mini` / `gemini-flash` (cheap) →
+  `gpt-4o` / `claude-opus` (expensive). The seam is indifferent to which.
+- **Config surface:** a small *AI (optional)* expander — `base_url`, `model`,
+  `api_key` (read from an **env var, never persisted in the `.ucmproj`**),
+  `temperature`, `timeout`. Default off → AI toggles are greyed with "configure a
+  provider to enable". Per-invocation opt-in (a button), with results cached on
+  the input-context hash to bound cost.
 - The **pure library stays offline and zero-dependency**; AI is an **opt-in**
   layer (a web-app panel or an optional `pm4py_ucm.ai` extra), gated behind a
   configured provider. With none configured, every deterministic output still
   ships; the AI annotations are simply absent — never a hard dependency.
 - **Local matters because it widens the audience.** The family / divergence use
   cases are healthcare, insurance, public sector — **confidential logs often
-  barred from a cloud API**. Local models make these capabilities usable on
-  exactly the logs where the analysis is most valuable, and they fit the
-  project's offline / self-contained-report identity.
+  barred from a cloud API**. The app never sends raw event logs — only the
+  already-computed structured context (rankings, aligned stats) a capability
+  needs — and local models keep even that on-prem. Fits the project's offline /
+  self-contained-report identity.
 - **Degradation:** provider error/timeout → fall back to deterministic
   names/labels and omit the commentary.
 
 ## 4. Capabilities
 
-### 4.1 Partition & decomposition advisor (pre-mining setup)
+### 4.1b Partition advisor (Family view) — deterministic-first
 
-**What:** before mining a family, recommend *which* case attributes are worth
-partitioning on — and suggest sensible decomposition boundaries.
+**What:** before mining a family, rank *which* case attributes are worth
+partitioning on, so the analyst doesn't guess.
 
 **Why it's needed:** the hardest part of the family feature is knowing which
 attribute yields genuinely different processes rather than noise. That expertise
 barrier gates adoption.
 
-**Deterministic core + LLM judgment (hybrid):**
-- *Deterministic:* rank candidate attributes by **discriminative power** — how
-  much the mined process (or its key metrics) actually changes across the
-  attribute's values (cross-value variance / effect size), plus cardinality and
-  coverage sanity (the coverage heatmap already exists pre-mining).
-- *LLM:* a **domain sense-check** on the ranked shortlist — "`Broker` looks like
-  a routing determinant; `case_id_prefix` is probably an artifact" — and a
-  plain-language rationale. The ranking is computed; the LLM adds judgment.
+**Deterministic ranking (the whole feature ships without an LLM).** One row per
+candidate case attribute (from `detect_case_attributes`), scored on three
+signals, all from material the Family view already has:
+
+1. **Control-flow divergence** — split the log by the attribute's values and
+   measure how different the per-value **trace-variant distributions** are
+   (Jensen–Shannon divergence from the pooled distribution), or equivalently the
+   information gain of the attribute for predicting the variant (reuse
+   `decision_mining.extract_case_features` + its classifier). High ⇒ it *routes
+   behaviour*.
+2. **Metric effect size** — does a key per-case metric (duration, rework,
+   event-count — from the fact table) differ across the attribute's values?
+   (η² / Kruskal–Wallis.) High ⇒ it *segments performance*.
+3. **Sanity flags** — cardinality (near-unique ⇒ likely an ID/artifact such as
+   `case_id_prefix`), coverage balance, and missingness. Reuses the pre-mining
+   coverage heatmap (`_family_preview`).
+
+Output: a ranked table feeding the *First / Second attribute* pickers, each with
+a one-line rationale (*"Channel — high control-flow divergence, 3 balanced
+values"* vs *"Broker — low divergence, likely not a determinant"*). No provider
+required; fully unit-testable on a synthetic log with a known determinant.
+
+**Optional LLM sense-check** (only when a provider is configured): a domain
+judgment over the *ranked shortlist* — "`Broker` looks like a routing
+determinant; `case_id_prefix` is probably an artifact" — grounded in the computed
+scores (per §2). The ranking is the product; the LLM adds a labelled opinion.
+
+**Build order:** ship the deterministic ranking **before** any provider work
+(it's independent of §3). See §5.
 
 **Business value:** onboarding — turns "which attribute?" from expert intuition
-into a guided recommendation. **Originality:** ties AI to a *setup* decision,
-not post-hoc narration.
+into a guided recommendation. **Originality:** ties the recommendation to a
+*setup* decision on a verifiable, aligned substrate, not post-hoc narration.
 
 ### 4.2 Variation-point & stub naming (per-model annotation)
 
@@ -156,16 +218,19 @@ makes the comparison verifiable; the hypotheses are tied to specific figures.
 
 ## 5. Phasing
 
-| Phase | Deliverable |
-|---|---|
-| **B0** | Provider seam (agnostic + local), grounding contract enforced in code, opt-in gating. **Variation-point & stub naming (4.2)** — lowest risk, writes into `.jucm`. |
-| **B1** | **Decision-rule critique (4.3)** over `condition_mining.csv`. |
-| **B2** | **Cohort-divergence explanation (4.4)** over the aligned family stats (and, once available, the GRL strategy profiles). |
-| **B3** | **Partition & decomposition advisor (4.1)** — deterministic ranking + LLM sense-check. |
+| Phase | Deliverable | Needs a provider? |
+|---|---|---|
+| **A0** *(done, v0.7.7)* | Decomposition auto-tuner (old 4.1a) — `suggest_decomposition`. | no |
+| **A1** *(next)* | **Partition advisor (4.1b) — deterministic ranking.** No provider seam; ships standalone in the Family view. | **no** |
+| **B0** | Provider seam (agnostic + local, one OpenAI-compatible client), grounding contract enforced in code, opt-in gating. **Variation-point & stub naming (4.2)** — lowest LLM risk, writes into `.jucm`. | yes |
+| **B0+** | The optional **LLM sense-check on 4.1b** (rides on B0). | yes |
+| **B1** | **Decision-rule critique (4.3)** over `condition_mining.csv`. | yes |
+| **B2** | **Cohort-divergence explanation (4.4)** over the aligned family stats (and, once available, the GRL strategy profiles). | yes |
 
-(The `Bn` phases are independent of and can interleave with the `Pn` phases in
-`goal_insights.md`; 4.2 depends only on an existing umbrella, 4.3 on data-driven
-scenarios, 4.4 on a mined family.)
+The `A*` phases are pure deterministic and independent of the provider seam; the
+`B*` phases add the LLM and can interleave with the `Pn` phases in
+`goal_insights.md` (4.2 depends only on an existing umbrella, 4.3 on data-driven
+scenarios, 4.4 on a mined family).
 
 ## 6. Testing — enforce the contract
 
@@ -185,7 +250,8 @@ scenarios, 4.4 on a mined family.)
   vs inferred" split).
 - Whether rule-critique flags (4.3) should gate the scenario export or only
   annotate it.
-- How much of the advisor (4.1) ranking is worth shipping deterministically even
-  with no provider configured (it is useful on its own).
+- ~~How much of the advisor (4.1) ranking is worth shipping deterministically~~
+  **Resolved:** *all* of the partition-advisor ranking ships deterministically
+  (phase A1); the LLM is a strictly optional sense-check on top.
 - Prompt-size strategy for large families (summarise from frames, never dump raw
   stats).
