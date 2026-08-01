@@ -350,7 +350,7 @@ tree node, and the counts conserve by construction:
 
 | Metric | Definition |
 |--------|------------|
-| `traversal_frequency` *(activities and edges)* | number of times the counted cases walk this element. A node inside a loop body counts once per iteration. |
+| `traversal_frequency` *(activities and edges)* | number of times the counted cases walk this element. A node inside a loop body counts once per iteration, including under **nested** loops — a loop entered `V` times whose body ran `D` times in total executes its `do` branch `D` times and its `redo` branch `D − V`. |
 | `traversal_percentage` *(OR-fork branches)* | the branch's share of its fork's own traversals, rendered **with the base it divides** (`25% of 258`). |
 
 Identities that hold by construction — each is asserted in
@@ -363,6 +363,11 @@ Identities that hold by construction — each is asserted in
 * the branches of a **choice** sum to the fork's own count, so
   `traversal_percentage` over one fork sums to 100 %;
 * a silent branch is counted like any other.
+
+On a log whose cases all fit the tree, these counts are not merely
+self-consistent: each activity's `traversal_frequency` equals the number
+of times it was **actually observed**. That equality is checked against
+both bundled sample logs and holds at every noise threshold.
 
 Counts are attributed to model elements through provenance: every node
 and connection the tree→UCM converter emits records the `id()` of the
