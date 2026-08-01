@@ -7,69 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- **The log is replayed once per session, not once per view.** Variant
-  clustering (Scenarios) and traversal counting (Model) need *exactly*
-  the same parses, and replay is the most expensive step in the package
-  — on BPI Challenge 2012 at `noise_threshold=0.0` it is **24 minutes**
-  for 4 366 distinct sequences, against 39 seconds to mine the tree
-  itself. They each replayed independently, so looking at both views
-  paid it twice.
-
-  New `algo.discovery.variants.parses` holds the single pass: replay
-  each distinct activity sequence once, keep everything either consumer
-  needs, and hand the same `ParseTable` to both. `cluster()` and
-  `compute_traversal_stats()` accept it via a `parses=` argument and
-  replay nothing themselves; the web app builds it once per
-  log + noise + filters and shares it across the two views.
-
-  The table also carries the **normalised log**, which turned out to
-  matter as much: converting a DataFrame into per-case sequences costs
-  1.6 s on the 5 600-case claims log — twenty times what replaying its
-  164 distinct sequences costs — and every consumer needed it. Sharing
-  both more than halves the work even on logs where replay is cheap
-  (claims: 328 replays → 164, and 2.2× faster end to end).
-
-### Changed — Web app (V5)
-
-- **The Model view reports replay progress**, the way the Scenarios view
-  already did. Computing the traversal metrics is the longest phase of a
-  mine on a large log, and it showed only a static "Replaying the log on
-  the model…" — with no count and no estimate there was no way to tell a
-  slow run from a hung one. It now reads `Replaying variants — 250/4366 ·
-  about 29 min left`, and the alignment stage names its own budget
-  (`Aligning unfitted variants (≤10s)`) so a phase that stops early
-  doesn't look like one that stalled.
-
-### Fixed
-
-- **Alignment repair could take hours; it is now bounded.** Computing the
-  traversal metrics aligns each non-fitting case to its nearest path
-  through the model, and that alignment's cost turns out to be not merely
-  high but *unpredictable* — it follows the model's loops and choices, not
-  the trace's length. On a 2 455-case GitHub-SDLC log the same model
-  aligned a 12-event sequence in 0.05 s and a 10-event one in **26 s**, so
-  no length threshold makes it safe; its 893 non-fitting sequences
-  projected to roughly **ten hours**, which made the default overlay
-  unusable on that log.
-
-  The repair phase now has a wall-clock budget — `max_repair_seconds`
-  overall (default 10 s) and `max_repair_seconds_per_sequence` for any one
-  sequence (default 1 s) — enforced by `pm4py-ucm` rather than delegated,
-  since pm4py's own whole-log time parameter does not reliably stop a
-  batch. Sequences are attempted in order of how many **cases** carry
-  them, so a budget that cannot cover everything is spent where it buys
-  the most coverage, and anything left unaligned is reported in
-  `unexplained_cases` rather than silently attributed. Pass `None` to
-  either limit for the previous unbounded behaviour, or `repair=False` to
-  skip alignment.
-
-  That log now completes in about 10 s with coverage rising from 51 %
-  (fitting cases only) to 63 %. The bundled samples never reach the
-  budget — their alignments are milliseconds — so their numbers are
-  unchanged.
-
 ## [0.7.9] — 2026-08-01
 
 Executable scenarios you can trust. Every scenario `pm4py-ucm` writes now
@@ -78,7 +15,15 @@ deadlocked them — and together they walk every path of the model the
 variants cover. Along the way a replay bug turned up that had been
 **inflating reported fitness**, so some numbers legitimately change.
 
+
+Executable scenarios you can trust, and frequency counts that conserve —
+at a cost you can see and control. Every scenario `pm4py-ucm` writes now
+runs to completion in jUCMNav, and together they walk every path of the
+model the variants cover. Along the way a replay bug turned up that had
+been **inflating reported fitness**, so some numbers legitimately change.
+
 ### Added
+
 
 - **Scenarios are now planned for path coverage.** The goal: if the
   mined variants cover the log's cases, the generated scenario
@@ -127,7 +72,89 @@ variants cover. Along the way a replay bug turned up that had been
   generating them. Walked through in
   `demo/scenario_synthesis_tutorial.ipynb` §5.1.
 
+### Changed
+
+
+- **The replay is optional, and says what it costs.** The traversal
+  metrics are the only ones that conserve, but they are also the only
+  ones that need the log replayed on the model — minutes on a log with
+  thousands of distinct variants, and Streamlit cannot interrupt a mine
+  once it starts. The Performance overlay therefore offers **Replay the
+  log for traversal counts** (on by default), decided *before* the run.
+  Switching it off falls back to the observed event and
+  directly-follows counts, and the diagram caption says so plainly:
+  cheap, but they do not add up where the model has parallel branches or
+  silent skips.
+
+  The counts are never estimated from a *partial* replay. A
+  half-finished pass would bias them toward whichever variants happened
+  to come first and would understate how much of the log the model
+  explains — an error that looks like a modelling problem rather than a
+  measurement one. Skipping is honest; guessing is not.
+
+- **The log is replayed once per session, not once per view.** Variant
+  clustering (Scenarios) and traversal counting (Model) need *exactly*
+  the same parses, and replay is the most expensive step in the package
+  — on BPI Challenge 2012 at `noise_threshold=0.0` it is **24 minutes**
+  for 4 366 distinct sequences, against 39 seconds to mine the tree
+  itself. They each replayed independently, so looking at both views
+  paid it twice.
+
+  New `algo.discovery.variants.parses` holds the single pass: replay
+  each distinct activity sequence once, keep everything either consumer
+  needs, and hand the same `ParseTable` to both. `cluster()` and
+  `compute_traversal_stats()` accept it via a `parses=` argument and
+  replay nothing themselves; the web app builds it once per
+  log + noise + filters and shares it across the two views.
+
+  The table also carries the **normalised log**, which turned out to
+  matter as much: converting a DataFrame into per-case sequences costs
+  1.6 s on the 5 600-case claims log — twenty times what replaying its
+  164 distinct sequences costs — and every consumer needed it. Sharing
+  both more than halves the work even on logs where replay is cheap
+  (claims: 328 replays → 164, and 2.2× faster end to end).
+
+### Changed — Web app (V5)
+
+
+- **The Model view reports replay progress**, the way the Scenarios view
+  already did. Computing the traversal metrics is the longest phase of a
+  mine on a large log, and it showed only a static "Replaying the log on
+  the model…" — with no count and no estimate there was no way to tell a
+  slow run from a hung one. It now reads `Replaying variants — 250/4366 ·
+  about 29 min left`, and the alignment stage names its own budget
+  (`Aligning unfitted variants (≤10s)`) so a phase that stops early
+  doesn't look like one that stalled.
+
 ### Fixed
+
+
+- **Alignment repair could take hours; it is now bounded.** Computing the
+  traversal metrics aligns each non-fitting case to its nearest path
+  through the model, and that alignment's cost turns out to be not merely
+  high but *unpredictable* — it follows the model's loops and choices, not
+  the trace's length. On a 2 455-case GitHub-SDLC log the same model
+  aligned a 12-event sequence in 0.05 s and a 10-event one in **26 s**, so
+  no length threshold makes it safe; its 893 non-fitting sequences
+  projected to roughly **ten hours**, which made the default overlay
+  unusable on that log.
+
+  The repair phase now has a wall-clock budget — `max_repair_seconds`
+  overall (default 10 s) and `max_repair_seconds_per_sequence` for any one
+  sequence (default 1 s) — enforced by `pm4py-ucm` rather than delegated,
+  since pm4py's own whole-log time parameter does not reliably stop a
+  batch. Sequences are attempted in order of how many **cases** carry
+  them, so a budget that cannot cover everything is spent where it buys
+  the most coverage, and anything left unaligned is reported in
+  `unexplained_cases` rather than silently attributed. Pass `None` to
+  either limit for the previous unbounded behaviour, or `repair=False` to
+  skip alignment.
+
+  That log now completes in about 10 s with coverage rising from 51 %
+  (fitting cases only) to 63 %. The bundled samples never reach the
+  budget — their alignments are milliseconds — so their numbers are
+  unchanged.
+
 
 - **Synthesised scenarios deadlocked in jUCMNav when the model had a
   loop.** Two independent defects, both reported on a real clinical log
