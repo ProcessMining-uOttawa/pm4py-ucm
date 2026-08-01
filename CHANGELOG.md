@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.9] — 2026-08-01
+
+Executable scenarios you can trust. Every scenario `pm4py-ucm` writes now
+runs to completion in jUCMNav — three separate loop defects each
+deadlocked them — and together they walk every path of the model the
+variants cover. Along the way a replay bug turned up that had been
+**inflating reported fitness**, so some numbers legitimately change.
+
 ### Added
 
 - **Scenarios are now planned for path coverage.** The goal: if the
@@ -50,6 +58,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   The remaining unreached *arcs* are loop-**bypass** paths — the
   0-iteration case — which no case in these logs exhibits.
+
+  `pm4py_ucm.suggest_loop_iterations(tree)` is public, so a caller can
+  see how long the generated scenarios will be to step through before
+  generating them. Walked through in
+  `demo/scenario_synthesis_tutorial.ipynb` §5.1.
 
 ### Fixed
 
