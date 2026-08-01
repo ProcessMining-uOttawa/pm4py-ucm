@@ -301,7 +301,22 @@ are counted on their closest path through the model, so the numbers still
 cover everything (for an activity the model treats as mandatory that can read
 higher than the events actually observed). Below 70 % the note becomes a
 warning suggesting a lower noise threshold — `0.0` explains every case, at the
-cost of a busier model. See [`docs/metrics.md` §9](../docs/metrics.md). Tick **Heat-map emphasis** to
+cost of a busier model. See [`docs/metrics.md` §9](../docs/metrics.md).
+
+*Too slow?* The traversal counts are the only ones that need the log replayed
+on the model, and on a log with thousands of distinct variants that replay is
+the longest step of a mine — minutes. Because a run cannot be interrupted once
+it starts, the choice is made up front: untick **Replay the log for traversal
+counts** and the traversal metrics fall back to their event-based counterparts
+(`traversal_frequency` → `frequency`, `traversal_percentage` → `percentage`),
+which are cheap but do not conserve. It is a straight trade of accuracy for
+time — the counts are never estimated from a half-finished replay, since that
+would bias them while still looking exact. Your metric picks are untouched, so
+ticking the box again restores the conserving counts, and **both the picks and
+the opt-out are saved with a project** and with the exported Python script
+(as `OVERLAY_REPLAY`, which you can flip back on in the script).
+
+Tick **Heat-map emphasis** to
 additionally colour and thicken activities and edges by the value of the
 **first** metric of each layer: a **time** metric drives a **red** ramp, any
 other a **blue** one, with lighter/thinner = lower and darker/thicker = higher.

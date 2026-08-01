@@ -7,33 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **Exported notebooks now carry the cell `id` that nbformat 4.5 requires.**
-  The generated `.ipynb` declared format 4.5 but emitted no cell ids, so it
-  was malformed by its own declaration. Jupyter patched the omission in and
-  warned that it will become a hard error; `nbformat.validate()` only warns,
-  which is why nothing caught it. Ids are positional, so notebooks stay
-  byte-deterministic.
-- **The replay opt-out is saved with a project, and no longer overwrites the
-  chosen metrics.** Switching off "Replay the log for traversal counts" swaps
-  each traversal metric for its event-based counterpart at render time — but
-  a save captured the *fallbacks* rather than the picks, so resuming such a
-  project lost the user's choice of `traversal_frequency` /
-  `traversal_percentage` for good. The picks are now persisted as picked, the
-  opt-out is persisted alongside them as `overlay_replay`, and the exported
-  Python script carries both (`OVERLAY_REPLAY`), resolving the same fallback
-  at run time — so flipping it back on restores the conserving counts without
-  re-picking anything.
-
 ## [0.7.9] — 2026-08-01
-
-Executable scenarios you can trust. Every scenario `pm4py-ucm` writes now
-runs to completion in jUCMNav — three separate loop defects each
-deadlocked them — and together they walk every path of the model the
-variants cover. Along the way a replay bug turned up that had been
-**inflating reported fitness**, so some numbers legitimately change.
-
 
 Executable scenarios you can trust, and frequency counts that conserve —
 at a cost you can see and control. Every scenario `pm4py-ucm` writes now
@@ -234,6 +208,29 @@ been **inflating reported fitness**, so some numbers legitimately change.
   it. With both fixes, every activity's traversal count now equals its
   observed event count across the fitting cases of both bundled sample
   logs, at every noise threshold.
+- **A saved project no longer loses the metrics you picked when the replay
+  is switched off.** Turning off *Replay the log for traversal counts*
+  swaps each traversal metric for its event-based counterpart so the
+  diagram still says something — a render-time substitution, with the
+  pickers deliberately left alone so the toggle stays reversible. But the
+  project gather read the substituted lists rather than the picks, so
+  saving wrote `frequency` where you had chosen `traversal_frequency`, and
+  the choice was gone for good: resuming and switching the replay back on
+  returned counts that do not conserve. The picks are now stored as
+  picked, and the opt-out is stored beside them as a new `overlay_replay`
+  setting, so a resumed project restores both. The exported Python script
+  carries the pair too — an `OVERLAY_REPLAY` constant resolving the same
+  fallback at run time — which means the script reproduces exactly what
+  the session showed, and flipping that one constant back on recovers the
+  conserving counts without re-picking any metric.
+- **Exported notebooks are valid at the format version they declare.** The
+  generated `.ipynb` announced nbformat 4.5, which requires every cell to
+  carry an `id`, and supplied none. Jupyter has been quietly patching them
+  in while warning that it will become a hard error — and
+  `nbformat.validate()` only warns, which is why the notebook's own
+  validity test never objected. Cells now carry positional ids, so the
+  notebook is well-formed and two exports of the same project remain
+  byte-identical.
 
 ## [0.7.8] — 2026-07-31
 
