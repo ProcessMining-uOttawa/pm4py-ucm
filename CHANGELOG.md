@@ -7,8 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Scenarios are now planned for path coverage.** The goal: if the
+  mined variants cover the log's cases, the generated scenario
+  definitions should collectively walk every path of the UCM. Two things
+  stood in the way, and both are now decided up front by a planner
+  rather than improvised per fork:
+  - **loops are sized from the tree's structure, not just the log.** A
+    body containing a 4-way choice cannot demonstrate all four branches
+    in 2 iterations, whatever the conditions say. New
+    `suggest_loop_iterations(tree)` computes the minimum from the shape
+    alone — a choice needs the *sum* of its branches (one iteration goes
+    down one branch), a sequence needs the *max* (its children share an
+    iteration), a nested loop needs 1 (its own counter covers what is
+    inside it), and a choice on the *redo* path needs one more than in
+    the body (redo runs once fewer than the body). Each scenario's
+    counter is the larger of what its variant observed — still capped by
+    `max_loop_iterations` — and what coverage requires, so the cap trims
+    a loop that merely ran often but never one that has to run to stay
+    honest;
+  - **branches get an explicit schedule.** Each choice hands every
+    branch a contiguous, non-empty slice of its variant's iterations,
+    sized from that branch's own subtree first and only then shared out
+    by observed frequency. Proportional rounding could collapse a rare
+    branch to an empty range; and a nested choice — evaluated only on
+    the iterations where its parent branch is taken — now has its ranges
+    carved out of *those* iterations rather than the whole run.
+  Multi-way choices inside loops are handled like any other, removing
+  the old `true / false / false / …` fallback that made every branch but
+  the first unreachable.
+
+  Measured over the three bundled samples and a real clinical log, at
+  two noise thresholds, decomposed and flat: every scenario runs to
+  completion, and the scenarios collectively reach **every activity that
+  appears in a case the variants cover** — on the clinical log (was 6 of
+  10), `ClaimsPaymentLog` (was 24 of 25), `IssueTrackerSyntheticLog`,
+  and `devlog`, whose tree has 17 loops nested 15 deep. On `devlog` the
+  four activities still unreached occur *only* in cases that do not fit
+  the model, so no variant represents them — that is the honest boundary
+  of the guarantee, whose premise is "if the variants cover the cases".
+
+  The remaining unreached *arcs* are loop-**bypass** paths — the
+  0-iteration case — which no case in these logs exhibits.
+
 ### Fixed
 
+- **Synthesised scenarios deadlocked in jUCMNav when the model had a
+  loop.** Two independent defects, both reported on a real clinical log
+  where all four scenarios failed — as an infinite loop, a blocked
+  AND-join, or a scenario that never reached its end point:
+  - the **loop counter was decremented by a responsibility inside a
+    choice**. The synthesizer attached the `counter = counter - 1`
+    expression to the first responsibility reachable from the LoopJoin,
+    assuming it "runs once per body iteration" — true only when nothing
+    can bypass it. With a body like `X(A, →(…))` that responsibility sits
+    in one branch, so iterations taking the other left the counter
+    untouched, the redo condition stayed true, and the traversal spun
+    forever. The site is now required to **dominate** the loop body;
+    otherwise a dedicated decrement node is spliced directly after the
+    LoopJoin, where nothing can bypass it (that fallback already
+    existed for tau-only bodies).
+  - a **branch inside a loop body could never fire**. The inside-loop
+    XOR conditions partition the counter as `(lower, upper]` with
+    `upper` starting at the counter's initial value, so they assume the
+    counter still reads that value the first time a body choice is
+    evaluated. Decrementing at the top of the body shifted every
+    evaluation down by one and left the topmost range unreachable — the
+    branch that should fire on the first iteration never fired, and its
+    activity appeared in no scenario at all. The decrement now sits at
+    the **end** of the body, immediately before the LoopFork: the one
+    position that is both unavoidable and after the body's choices. It
+    is always a dedicated node, so a modeller's own activity is no
+    longer decorated with bookkeeping either.
+  - the **loop-entry guard raised an AND-join's arity**. Its bypass arc
+    was wired straight to the post-loop node; when that node is an
+    AND-join — which fires only once *every* incoming arc has delivered
+    — a 2-branch parallel suddenly needed 3 tokens and could never
+    complete. The bypass and the loop exit are alternatives, so they now
+    merge through an OrJoin, leaving the join's arity unchanged. (Only
+    the loop's own incoming arc is re-routed; folding in the other
+    predecessors would collapse the parallelism itself. The equivalent
+    problem for a Stub target was already handled.)
 - **Concurrency-aware replay could return a wrong parse.** A parallel
   block replays each child against a *projection* of the window — a
   fresh list whose positions are their own coordinate space — but the

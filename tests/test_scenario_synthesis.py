@@ -40,6 +40,7 @@ class T:
 def _seq(*c): return T(operator="->", children=list(c))
 def _xor(*c): return T(operator="X", children=list(c))
 def _par(*c): return T(operator="+", children=list(c))
+def _loop(do, redo): return T(operator="*", children=[do, redo])
 def _leaf(l): return T(label=l)
 def _tau(): return T()
 
@@ -92,6 +93,235 @@ def test_cluster_collapses_parallel_interleavings_into_one_variant():
     assert result.total_cases == 100
     assert len(result.noise_case_ids) == 0
     assert result.fitness_percentage == 1.0
+
+
+def _loop_body_decrement_sites(ucm):
+    """``[(responsibility_name, expression)]`` for every responsibility
+    carrying a loop-counter decrement."""
+    return [(r.name, r.expression) for r in ucm.responsibilities
+            if r.expression and "- 1" in r.expression]
+
+
+def test_loop_decrement_is_not_placed_inside_a_choice():
+    """The loop counter must be decremented on EVERY iteration.
+
+    When the loop body starts with a choice, the first responsibility
+    reachable from the LoopJoin sits inside one branch only. Attaching
+    the decrement there means an iteration taking any other branch
+    leaves the counter untouched, the redo condition stays true, and
+    the scenario spins forever — jUCMNav reports an infinite loop, a
+    blocked AND-join, or a scenario that never reaches its end point.
+    """
+    # *( X( A, B ), tau ) — a body that is a choice, so neither A nor B
+    # is guaranteed to run on a given iteration.
+    tree = _seq(_loop(_xor(_leaf("A"), _leaf("B")), _tau()), _leaf("C"))
+    log = [("c1", ["A", "C"]), ("c2", ["B", "C"]), ("c3", ["A", "B", "C"])]
+    ucm = pm4py_ucm.discover_ucm_inductive(
+        log, parameters={"process_tree": tree})
+    clustering = _clustering.cluster(log, tree)
+    _scenarios.synthesize_scenarios(ucm, tree, clustering)
+
+    sites = _loop_body_decrement_sites(ucm)
+    assert sites, "the loop must decrement its counter somewhere"
+    names = {n for n, _ in sites}
+    assert not (names & {"A", "B"}), (
+        f"decrement landed on a conditional activity: {sites}")
+    assert any(n.startswith("decrement_") for n in names), (
+        f"expected a dedicated always-executed decrement node, got {sites}")
+
+
+def test_suggest_loop_iterations_sums_choices_and_maxes_sequences():
+    """The structural minimum: a choice needs the sum of its branches
+    (one iteration goes down one branch), a sequence needs the max (its
+    children share an iteration), and a nested loop needs 1 because its
+    own counter covers what is inside it."""
+    # *( ->( A, X(B, C, D) ), tau ) — the 3-way choice sets the floor.
+    three_way = _loop(_seq(_leaf("A"), _xor(_leaf("B"), _leaf("C"),
+                                            _leaf("D"))), _tau())
+    got = _scenarios.suggest_loop_iterations(three_way)
+    assert list(got.values()) == [3], got
+
+    # Two choices in sequence share iterations: max(2, 2) = 2.
+    shared = _loop(_seq(_xor(_leaf("B"), _leaf("C")),
+                        _xor(_leaf("D"), _leaf("E"))), _tau())
+    assert list(_scenarios.suggest_loop_iterations(shared).values()) == [2]
+
+    # Nested choices multiply out: X(X(B,C), X(D,E)) needs 2+2.
+    nested = _loop(_xor(_xor(_leaf("B"), _leaf("C")),
+                        _xor(_leaf("D"), _leaf("E"))), _tau())
+    assert list(_scenarios.suggest_loop_iterations(nested).values()) == [4]
+
+    # A choice on the REDO path runs once fewer than the body, so it
+    # needs one iteration more than the same choice in the body.
+    redo = _loop(_leaf("A"), _xor(_leaf("P"), _leaf("Q")))
+    assert list(_scenarios.suggest_loop_iterations(redo).values()) == [3]
+
+
+def test_loop_counter_is_raised_so_every_body_branch_can_fire():
+    """A 3-way choice in the body cannot be demonstrated in 2
+    iterations, whatever the conditions say. The counter is therefore
+    raised above the ``max_loop_iterations`` cap when coverage needs it —
+    the cap trims a loop that merely ran often, not one that has to run
+    to stay honest."""
+    tree = _seq(_loop(_xor(_leaf("A"), _leaf("B"), _leaf("C")), _tau()),
+                _leaf("Z"))
+    log = [("c1", ["A", "B", "C", "Z"]), ("c2", ["A", "B", "C", "Z"]),
+           ("c3", ["A", "Z"])]
+    ucm = pm4py_ucm.discover_ucm_inductive(
+        log, parameters={"process_tree": tree})
+    group = _scenarios.synthesize_scenarios(
+        ucm, tree, _clustering.cluster(log, tree), max_loop_iterations=2)
+
+    counters = {}
+    for sc in group.scenarios:
+        for init in sc.initializations:
+            if _is_loop_counter_name(init.variable.name):
+                counters[sc.name] = int(init.value)
+    assert counters, "expected a loop counter initialisation"
+    assert max(counters.values()) >= 3, (
+        "the 3-way choice needs 3 iterations to be demonstrable; the cap "
+        f"of 2 must not win here. got {counters}")
+
+
+def test_every_branch_a_variant_takes_gets_a_satisfiable_condition():
+    """The coverage guarantee, at the level this module controls: if a
+    variant takes a branch, that branch's condition is satisfiable for
+    that variant — never ``false``, and never a counter range outside
+    the iterations the variant actually runs."""
+    from pm4py_ucm.objects.ucm.obj import UCM
+
+    tree = _seq(_loop(_xor(_leaf("A"), _leaf("B"), _leaf("C")), _tau()),
+                _leaf("Z"))
+    log = [("c1", ["A", "B", "C", "Z"]), ("c2", ["B", "C", "Z"]),
+           ("c3", ["A", "Z"])]
+    clustering = _clustering.cluster(log, tree)
+    ucm = pm4py_ucm.discover_ucm_inductive(
+        log, parameters={"process_tree": tree})
+    _scenarios.synthesize_scenarios(ucm, tree, clustering)
+
+    forks = [n for m in ucm.maps for n in m.nodes
+             if isinstance(n, UCM.OrFork) and n.name == "OrFork"]
+    assert forks, "expected the body choice to become an OR-fork"
+    for fork in forks:
+        exprs = [(a.condition.expression if a.condition else "true")
+                 for a in fork.succ_connections]
+        # Every branch some variant takes must be reachable, so at most
+        # the branches nobody takes may read "false".
+        assert sum(1 for e in exprs if e.strip() == "false") < len(exprs), (
+            f"every branch of {fork.name} is unsatisfiable: {exprs}")
+        assert any("variant_id" in e for e in exprs), exprs
+
+
+def test_activities_of_fitting_cases_are_all_demonstrable():
+    """The coverage contract, stated as the guarantee it is.
+
+    Every activity that appears in a case the variants cover must have a
+    satisfiable route through the conditions. Activities appearing ONLY
+    in non-fitting cases have no variant to demonstrate them, and that
+    is the honest boundary of the guarantee — the premise is "if the
+    variants cover the cases".
+    """
+    from pm4py_ucm.objects.ucm.obj import UCM
+
+    # A four-way choice inside a loop, plus one activity that only ever
+    # occurs in a trace the tree cannot parse.
+    tree = _seq(_leaf("S"),
+                _loop(_xor(_leaf("A"), _leaf("B"), _leaf("C"), _leaf("D")),
+                      _tau()),
+                _leaf("Z"))
+    log = [("c1", ["S", "A", "B", "Z"]),
+           ("c2", ["S", "C", "D", "Z"]),
+           ("c3", ["S", "A", "Z"]),
+           ("c4", ["S", "A", "NEVER_FITS", "Z"])]
+    clustering = _clustering.cluster(log, tree)
+    covered = {a for cid, acts in log if cid not in clustering.noise_case_ids
+               for a in acts}
+    assert covered >= {"A", "B", "C", "D"}, covered
+
+    ucm = pm4py_ucm.discover_ucm_inductive(
+        log, parameters={"process_tree": tree})
+    _scenarios.synthesize_scenarios(ucm, tree, clustering)
+
+    # Each of the four branches must be satisfiable for some variant.
+    fork = next(n for m in ucm.maps for n in m.nodes
+                if isinstance(n, UCM.OrFork) and n.name == "OrFork"
+                and len(n.succ_connections) == 4)
+    exprs = [(a.condition.expression if a.condition else "true")
+             for a in fork.succ_connections]
+    unsatisfiable = [e for e in exprs if e.strip() == "false"]
+    assert not unsatisfiable, (
+        "every branch of the 4-way choice is taken by some variant, so "
+        f"none may be unsatisfiable; got {exprs}")
+
+    # And the loop must be sized to make four branches demonstrable.
+    assert max(_scenarios.suggest_loop_iterations(tree).values()) >= 4
+
+
+def test_loop_decrement_runs_after_the_bodys_choices():
+    """The decrement must sit at the END of the body, immediately before
+    the LoopFork.
+
+    The inside-loop XOR conditions partition the counter as
+    ``(lower, upper]`` with ``upper`` starting at the counter's initial
+    value M_V, so they assume the counter still reads M_V the first time
+    a body XOR is evaluated. Decrementing at the TOP of the body shifts
+    every evaluation down by one and makes the topmost range
+    unreachable — the branch that should fire on the first iteration
+    never fires at all, and its activity appears in no scenario. (Seen
+    on a real log: "First symptoms (if known)" was never executed by any
+    of the four generated scenarios.)"""
+    from pm4py_ucm.objects.ucm.obj import UCM
+
+    tree = _seq(_loop(_xor(_leaf("A"), _leaf("B")), _tau()), _leaf("C"))
+    log = [("c1", ["A", "B", "C"]), ("c2", ["A", "B", "C"]),
+           ("c3", ["B", "C"])]
+    ucm = pm4py_ucm.discover_ucm_inductive(
+        log, parameters={"process_tree": tree})
+    _scenarios.synthesize_scenarios(ucm, tree, _clustering.cluster(log, tree))
+
+    decrements = [n for m in ucm.maps for n in m.nodes
+                  if isinstance(n, UCM.RespRef)
+                  and n.resp_def is not None
+                  and (n.resp_def.expression or "").count("- 1")]
+    assert decrements, "the loop must decrement its counter"
+    for ref in decrements:
+        targets = [a.target for a in ref.succ_connections]
+        assert len(targets) == 1
+        assert isinstance(targets[0], UCM.OrFork) and \
+            targets[0].name == "LoopFork", (
+                "the decrement must be the last thing in the body, so the "
+                "body's choices see the counter's entering value; it is "
+                f"followed by {type(targets[0]).__name__} "
+                f"{targets[0].name!r}")
+
+
+def test_loop_entry_guard_does_not_raise_an_and_joins_arity():
+    """An AND-join fires only when EVERY incoming arc has delivered, so
+    the loop-entry guard's bypass arc must not land on one directly: a
+    2-branch parallel whose join suddenly needs 3 tokens can never fire.
+    The bypass and the loop exit are alternatives and belong behind an
+    OrJoin."""
+    from pm4py_ucm.objects.ucm.obj import UCM
+
+    # +( P, *( Q, tau ) ) — the loop's exit lands on the AND-join.
+    tree = _par(_leaf("P"), _loop(_leaf("Q"), _tau()))
+    log = [("c1", ["P", "Q"]), ("c2", ["Q", "P"]), ("c3", ["P", "Q", "Q"])]
+    ucm = pm4py_ucm.discover_ucm_inductive(
+        log, parameters={"process_tree": tree})
+    and_joins = [n for m in ucm.maps for n in m.nodes
+                 if isinstance(n, UCM.AndJoin)]
+    assert and_joins, "this tree must produce an AND-join to test against"
+    before = {id(n): len(n.pred_connections) for n in and_joins}
+    assert all(v >= 2 for v in before.values())
+
+    _scenarios.synthesize_scenarios(ucm, tree, _clustering.cluster(log, tree))
+
+    for m in ucm.maps:
+        for n in m.nodes:
+            if isinstance(n, UCM.AndJoin) and id(n) in before:
+                assert len(n.pred_connections) == before[id(n)], (
+                    "the guard changed an AND-join's arity from "
+                    f"{before[id(n)]} to {len(n.pred_connections)}")
 
 
 def test_cluster_replays_once_per_distinct_sequence(monkeypatch):
@@ -539,10 +769,15 @@ def test_synthesis_loop_entry_guard_excluded_from_orfork_condition_emission():
         assert _LOOP_COUNTER_RE.search(expr)
 
 
-def test_synthesis_loop_body_responsibility_carries_decrement():
-    """A body responsibility (Review in this fixture) is decorated
-    with the counter-decrement expression so the counter steps down
-    once per loop iteration."""
+def test_synthesis_loop_body_carries_decrement():
+    """The loop body carries the counter-decrement expression, so the
+    counter steps down once per iteration.
+
+    It rides on a dedicated node at the end of the body rather than on a
+    body activity (``Review`` here): the position has to be one nothing
+    can bypass AND after the body's choices — see
+    ``test_loop_decrement_runs_after_the_bodys_choices`` and
+    ``test_loop_decrement_is_not_placed_inside_a_choice``."""
     loop_tree = T(operator="->", children=[
         _leaf("Open"),
         T(operator="*", children=[_leaf("Review"), _leaf("Revise")]),
@@ -557,10 +792,17 @@ def test_synthesis_loop_body_responsibility_carries_decrement():
     _scenarios.synthesize_scenarios(
         ucm, loop_tree, result, emit_conditions=True,
     )
-    body_resp = next(r for r in ucm.responsibilities if r.name == "Review")
+    decrements = [r for r in ucm.responsibilities
+                  if "- 1" in (r.expression or "")]
+    assert len(decrements) == 1, (
+        f"expected exactly one decrement, got {[r.name for r in decrements]}")
+    body_resp = decrements[0]
     assert _LOOP_COUNTER_RE.search(body_resp.expression or "")
     assert "= " in body_resp.expression
-    assert "- 1" in body_resp.expression
+    # The activity itself is left clean — the decrement is not smuggled
+    # onto a step the modeller wrote.
+    review = next(r for r in ucm.responsibilities if r.name == "Review")
+    assert not (review.expression or "")
 
 
 def test_synthesis_per_variant_loop_counter_initialised_to_max_iterations():
@@ -1242,25 +1484,34 @@ def test_synthesis_decomposed_pairs_each_loop_with_its_own_responsibility():
     result = _clustering.cluster(log, tree)
     _scenarios.synthesize_scenarios(ucm, tree, result)
 
-    # Pair every responsibility carrying a Loop_<X> decrement with its
-    # owning loop name. Each decrement must reference the loop whose
-    # body the responsibility lives in.
-    body_decrements: dict = {}  # {responsibility_name: counter_name}
-    for resp in ucm.responsibilities:
-        expr = resp.expression or ""
-        m = re.search(r"(Loop_\w+) = \1 - 1", expr)
-        if m:
-            body_decrements[resp.name] = m.group(1)
+    # Each loop's decrement must land in the map holding that loop's
+    # body. Alpha's loop is in the root map, Beta's in the plug-in; if
+    # the cross-map correlation got mixed up, a decrement would be
+    # spliced into the wrong map (and so into the wrong loop's body).
+    from pm4py_ucm.objects.ucm.obj import UCM
 
-    # Alpha is inside Loop_Alpha; Beta inside Loop_Beta. If the cross-
-    # map correlation got mixed up, one of the bodies would carry
-    # the OTHER loop's decrement.
-    assert body_decrements.get("Alpha") == "Loop_Alpha", (
-        f"Alpha must decrement Loop_Alpha, got {body_decrements.get('Alpha')!r}"
-    )
-    assert body_decrements.get("Beta") == "Loop_Beta", (
-        f"Beta must decrement Loop_Beta, got {body_decrements.get('Beta')!r}"
-    )
+    map_of: dict = {}          # responsibility name -> map name
+    for m in ucm.maps:
+        for n in m.nodes:
+            if isinstance(n, UCM.RespRef) and n.resp_def is not None:
+                map_of[n.resp_def.name] = m.name
+
+    decrements = {}            # counter name -> responsibility name
+    for resp in ucm.responsibilities:
+        found = re.search(r"(Loop_\w+) = \1 - 1", resp.expression or "")
+        if found:
+            decrements[found.group(1)] = resp.name
+
+    assert set(decrements) == {"Loop_Alpha", "Loop_Beta"}, (
+        f"expected one decrement per loop, got {decrements}")
+    assert map_of[decrements["Loop_Alpha"]] == map_of["Alpha"], (
+        "Loop_Alpha's decrement landed in a different map from Alpha: "
+        f"{map_of[decrements['Loop_Alpha']]!r} vs {map_of['Alpha']!r}")
+    assert map_of[decrements["Loop_Beta"]] == map_of["Beta"], (
+        "Loop_Beta's decrement landed in a different map from Beta: "
+        f"{map_of[decrements['Loop_Beta']]!r} vs {map_of['Beta']!r}")
+    assert map_of["Alpha"] != map_of["Beta"], (
+        "fixture must place the two loops in different maps")
 
 
 def test_synthesis_decomposed_loop_into_stub_keeps_single_bound_entry():
