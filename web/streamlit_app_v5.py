@@ -3092,6 +3092,40 @@ with st.sidebar:
     overlay_nodes = tuple(st.session_state[_applied_node_key])
     overlay_edges = tuple(st.session_state[_applied_edge_key])
 
+    # Replay opt-out. The traversal counts are the only metrics that
+    # conserve, but they are also the only ones that need the log
+    # replayed on the model — minutes on a large log, and there is no way
+    # to interrupt it once a mine starts. So the choice is made here,
+    # before the run, rather than offered as a cancel button that
+    # Streamlit could not honour anyway.
+    _replay_key = f"overlay_replay::{_ov_hash}"
+    replay_enabled = _ovl_exp.checkbox(
+        "Replay the log for traversal counts",
+        key=_replay_key, value=True,
+        help=(
+            "The traversal metrics count how often the log walks the "
+            "model, which is what makes the numbers add up — but they "
+            "need a full replay, the longest step of a mine (minutes on "
+            "a log with thousands of distinct variants). Switch this off "
+            "to skip it: the diagram then falls back to observed event "
+            "and directly-follows counts, which are cheap but do NOT "
+            "conserve where the model has parallel branches or silent "
+            "skips. It is a straight trade of accuracy for time — the "
+            "counts are never estimated from a partial replay, because "
+            "a half-finished one would bias them and understate how much "
+            "of the log the model explains."
+        ),
+    )
+    if not replay_enabled:
+        # Swap each traversal metric for its event-based counterpart so
+        # the overlay still says something, rather than going blank.
+        _fallback = {"traversal_frequency": "frequency",
+                     "traversal_percentage": "percentage"}
+        overlay_nodes = tuple(dict.fromkeys(
+            _fallback.get(m, m) for m in overlay_nodes))
+        overlay_edges = tuple(dict.fromkeys(
+            _fallback.get(m, m) for m in overlay_edges))
+
     # Heat-map emphasis: colour + thickness on activities/edges by the FIRST
     # applied metric of each layer. A render-time overlay (no change to the
     # .jucm), so it applies instantly — no Apply needed.
@@ -4042,6 +4076,14 @@ if _view == "Model":
             _count_caption = (
                 " Counts = **cases walking this path**, replayed on the "
                 "model."
+            )
+        elif not replay_enabled:
+            _count_caption = (
+                " **Replay is off**, so these are observed event and "
+                "directly-follows counts — cheap, but they do not add up "
+                "where the model has parallel branches or silent skips. "
+                "Re-enable *Replay the log for traversal counts* for "
+                "numbers that conserve."
             )
         elif "frequency" in overlay_edges:
             _count_caption = (
