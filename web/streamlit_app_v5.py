@@ -416,8 +416,15 @@ def _mine(
         # for non-fitting ones, per alignment), so this is far cheaper than
         # per case — but it is still the most expensive step of a mine, so
         # it only runs when a traversal metric is actually selected.
+        # Report per-variant progress the way the Scenarios view does.
+        # This is the longest phase of a mine on a big log, and without a
+        # count and an estimate there is no way to tell a slow run from a
+        # hung one — the alignment stage in particular is bounded, but
+        # that is only reassuring if you can see it advancing.
         _phase("Replaying the log on the model...")
-        traversal = pm4py_ucm.compute_traversal_stats(tree, log)
+        traversal = pm4py_ucm.compute_traversal_stats(
+            tree, log, progress_callback=_progress,
+        )
 
     if overlay_nodes or overlay_edges:
         _phase("Computing performance overlay...")

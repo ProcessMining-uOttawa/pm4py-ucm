@@ -246,6 +246,7 @@ def _aligned_paths(
     weights: Optional[Dict[Tuple[str, ...], int]] = None,
     seconds_per_sequence: Optional[float] = 1.0,
     seconds_total: Optional[float] = 10.0,
+    ticker=None,
 ) -> Dict[Tuple[str, ...], Tuple[str, ...]]:
     """Align each non-fitting sequence to its nearest path through the
     model, returning ``{original_sequence: repaired_sequence}``.
@@ -326,7 +327,14 @@ def _aligned_paths(
     for seq in sequences:
         if (seconds_total is not None
                 and _time.perf_counter() - started >= seconds_total):
+            # Out of budget. Report the rest as done so a progress
+            # display settles instead of freezing at a partial count —
+            # the shortfall is carried honestly in unexplained_cases.
+            if ticker is not None:
+                ticker.finish()
             break
+        if ticker is not None:
+            ticker.tick()
         frame = pd.DataFrame([
             {"case:concept:name": "__repair",
              "concept:name": activity,
@@ -446,11 +454,18 @@ def compute_traversal_stats(
     repaired_paths: Dict[Tuple[str, ...], Tuple[str, ...]] = {}
     if repair and nofit and (max_repair_sequences is None
                              or len(nofit) <= max_repair_sequences):
-        r_ticker = Ticker(progress_callback, "Aligning variants", len(nofit))
+        # Name the budget in the stage label: on a big log this phase can
+        # stop early, and "will it ever finish?" is exactly the question a
+        # bare spinner leaves open.
+        stage = "Aligning unfitted variants"
+        if max_repair_seconds is not None:
+            stage += f" (≤{max_repair_seconds:g}s)"
+        r_ticker = Ticker(progress_callback, stage, len(nofit))
         repaired_paths = _aligned_paths(
             tree, nofit, weights=sequence_cases,
             seconds_per_sequence=max_repair_seconds_per_sequence,
             seconds_total=max_repair_seconds,
+            ticker=r_ticker,
         )
         r_ticker.finish()
 

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — Web app (V5)
+
+- **The Model view reports replay progress**, the way the Scenarios view
+  already did. Computing the traversal metrics is the longest phase of a
+  mine on a large log, and it showed only a static "Replaying the log on
+  the model…" — with no count and no estimate there was no way to tell a
+  slow run from a hung one. It now reads `Replaying variants — 250/4366 ·
+  about 29 min left`, and the alignment stage names its own budget
+  (`Aligning unfitted variants (≤10s)`) so a phase that stops early
+  doesn't look like one that stalled.
+
 ### Fixed
 
 - **Alignment repair could take hours; it is now bounded.** Computing the
