@@ -315,6 +315,52 @@ def test_empty_log_is_not_a_division_by_zero():
     assert stats.node_counts == {}
 
 
+def test_a_shared_parse_table_is_replayed_only_once(monkeypatch):
+    """Clustering and traversal counting need the same parses, and replay
+    is the dominant cost on a large log. Given a pre-built table, neither
+    may replay anything itself — and both must produce what they would
+    have produced on their own."""
+    from pm4py_ucm.algo.discovery.variants import clustering as _clustering
+    from pm4py_ucm.algo.discovery.variants import parses as _parses
+
+    tree = _seq(_leaf("A"), _xor(_leaf("B"), _leaf("C")))
+    log = [(f"c{i}", ["A", "B"]) for i in range(5)]
+    log += [(f"d{i}", ["A", "C"]) for i in range(3)]
+    log += [("bad", ["A", "ZZZ"])]
+
+    alone_cluster = _clustering.cluster(log, tree)
+    alone_stats = tv.compute_traversal_stats(tree, log, repair=False)
+
+    table = _parses.build(log, tree)
+    assert len(table) == 3, "three distinct sequences"
+    assert table.cases is not None, "the table carries the normalised log"
+
+    calls = []
+    real = _cs_replay = __import__(
+        "pm4py_ucm.algo.discovery.variants.choice_signature",
+        fromlist=["replay"]).replay
+
+    def counting(*a, **k):
+        calls.append(1)
+        return real(*a, **k)
+
+    monkeypatch.setattr(_clustering._cs, "replay", counting)
+    monkeypatch.setattr(_parses._cs, "replay", counting)
+
+    shared_cluster = _clustering.cluster(log, tree, parses=table)
+    shared_stats = tv.compute_traversal_stats(
+        tree, log, repair=False, parses=table)
+
+    assert not calls, f"a shared table must be replayed zero times, got {len(calls)}"
+    # And the shared results match the standalone ones exactly.
+    assert [v.frequency for v in shared_cluster.variants] == \
+        [v.frequency for v in alone_cluster.variants]
+    assert list(shared_cluster.noise_case_ids) == list(
+        alone_cluster.noise_case_ids)
+    assert shared_stats.node_counts == alone_stats.node_counts
+    assert shared_stats.fitting_cases == alone_stats.fitting_cases
+
+
 def test_progress_is_reported_for_both_phases():
     """Both long phases report progress with real counts.
 

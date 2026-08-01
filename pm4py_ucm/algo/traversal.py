@@ -71,6 +71,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .discovery.variants import choice_signature as _cs
+from .discovery.variants import parses as _parses
 
 #: Tree operators, matched on the enum's ``value`` so PM4Py need not be
 #: imported here (mirrors ``objects.ucm.conversion.from_process_tree``).
@@ -375,6 +376,7 @@ def compute_traversal_stats(
     max_repair_seconds_per_sequence: Optional[float] = 1.0,
     coarsen_loops: bool = True,
     progress_callback=None,
+    parses: "Optional[_parses.ParseTable]" = None,
 ) -> TraversalStats:
     """Count how often each part of ``tree`` is traversed by ``log``.
 
@@ -411,6 +413,12 @@ def compute_traversal_stats(
     progress_callback
         Optional ``callback(stage, done, total)`` — replay and alignment
         dominate the cost on large logs.
+    parses
+        Optional pre-built
+        :class:`~pm4py_ucm.algo.discovery.variants.parses.ParseTable`.
+        Variant clustering needs exactly the same parses, so a caller
+        doing both can replay the log once and share the table instead of
+        paying the dominant cost twice. Must come from the same tree.
 
     Returns
     -------
@@ -419,7 +427,10 @@ def compute_traversal_stats(
     from .discovery.variants.clustering import _normalise_log
     from ..util.progress import Ticker
 
-    cases = _normalise_log(log)
+    # A supplied table already carries the normalised log; redoing the
+    # groupby costs more than the replay itself on many logs.
+    cases = (parses.cases if parses is not None and parses.cases is not None
+             else _normalise_log(log))
     node_ids = _cs.assign_node_ids(tree)
 
     # Cases sharing an activity sequence share a parse, so replay once
@@ -435,19 +446,39 @@ def compute_traversal_stats(
     if not cases:
         return stats
 
-    ticker = Ticker(progress_callback, "Replaying variants",
-                    len(sequence_cases))
+    # The replay itself comes from the shared pass, so a caller that also
+    # clusters the log (scenario synthesis needs the identical parses)
+    # can build the table once and hand it to both instead of paying the
+    # dominant cost twice.
+    if parses is None:
+        parses = _parses.replay_sequences(
+            tree, sequence_cases, node_ids=node_ids,
+            coarsen_loops=coarsen_loops, progress_callback=progress_callback,
+        )
+    # Deliberately keep the LOCAL node_ids: the table's own mapping is
+    # keyed on ``id()`` of the tree it was built from, which is a
+    # different object once the table has been round-tripped through a
+    # cache. The parse dictionaries inside it are keyed on the *integer*
+    # ids, and those are assignment-order based, so they stay valid for
+    # any structurally identical tree.
     parsed: Dict[Tuple[str, ...], Any] = {}
     nofit: List[Tuple[str, ...]] = []
     for seq in sequence_cases:
-        result = _replay_sequence(tree, node_ids, seq,
-                                  coarsen_loops=coarsen_loops)
-        if result is None:
+        parse = parses.parses.get(seq)
+        if parse is None:
+            parse = _parses.replay_sequences(
+                tree, [seq], node_ids=node_ids,
+                coarsen_loops=coarsen_loops).parses[seq]
+            parses.parses[seq] = parse
+        if not parse.fits:
             nofit.append(seq)
         else:
-            parsed[seq] = result
-        ticker.tick()
-    ticker.finish()
+            parsed[seq] = (
+                parse.signature,
+                node_counts_for_parse(tree, node_ids, parse.xor_branch_counts,
+                                      parse.loop_iter_totals),
+                parse.xor_branch_counts,
+            )
 
     # Repair the rest, unless switched off or too expensive to be worth
     # blocking on.

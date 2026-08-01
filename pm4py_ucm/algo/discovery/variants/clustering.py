@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from . import choice_signature as _cs
+from . import parses as _parses
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +212,7 @@ def cluster(
     tree,
     coarsen_loops: bool = True,
     progress_callback=None,
+    parses: "Optional[_parses.ParseTable]" = None,
 ) -> ClusteringResult:
     """Replay every case in ``log`` on ``tree`` and group by signature.
 
@@ -231,6 +233,15 @@ def cluster(
         Optional ``callback(stage, done, total)`` fired per replayed
         case (throttled) — replay is the pipeline's dominant cost on
         large logs. See :mod:`pm4py_ucm.util.progress`.
+    parses
+        Optional pre-built
+        :class:`~pm4py_ucm.algo.discovery.variants.parses.ParseTable`.
+        Replay is by far the most expensive step here, and traversal
+        counting needs exactly the same parses, so a caller doing both
+        can build the table once and pass it to each — otherwise the log
+        is replayed twice. It must come from the **same tree** and the
+        same ``coarsen_loops`` setting; sequences missing from it are
+        replayed on demand.
 
     Returns
     -------
@@ -240,7 +251,11 @@ def cluster(
     """
     from ....util.progress import Ticker
 
-    cases = _normalise_log(log)
+    # A supplied table already carries the normalised log — turning a
+    # DataFrame into cases costs more than the replay does on a log with
+    # few distinct sequences, so it is not worth redoing.
+    cases = (parses.cases if parses is not None and parses.cases is not None
+             else _normalise_log(log))
     node_ids = _cs.assign_node_ids(tree)
     ticker = Ticker(progress_callback, "Replaying cases", len(cases))
 
@@ -253,30 +268,32 @@ def cluster(
     sequence_variants_seen: set = set()
     # A trace's parse is a function of its activity sequence alone, so
     # cases sharing a sequence are replayed once and the result reused.
-    # Real logs repeat sequences heavily, and the saving is largest on
-    # exactly the traces that cost the most: a NOFIT verdict is only
-    # reached after the backtracking search exhausts its budget, so a
-    # repeated non-fitting sequence used to pay that price every time.
-    # The per-case loop below is otherwise untouched — each case still
-    # contributes its own counts, in the original order.
-    replays: Dict[tuple, tuple] = {}
+    # The table is built by the shared pass in ``parses``, so a caller
+    # that also computes traversal counts can hand the same table to
+    # both and pay for the replay once — it is the most expensive step
+    # in the package on a large log. The per-case loop below is
+    # otherwise untouched: each case still contributes its own counts,
+    # in the original order.
+    table = parses if parses is not None else _parses.replay_sequences(
+        tree, (seq for _cid, seq in cases), node_ids=node_ids,
+        coarsen_loops=coarsen_loops, progress_callback=progress_callback,
+        stage="Replaying variants",
+    )
     for case_id, trace in cases:
         seq_key = tuple(trace)
         sequence_variants_seen.add(seq_key)
-        cached = replays.get(seq_key)
-        if cached is None:
-            trace_loop_iters: Dict[int, int] = {}
-            trace_xor_counts: Dict[int, Dict[int, int]] = {}
-            signature = _cs.replay(
-                tree, trace, node_ids=node_ids, coarsen_loops=coarsen_loops,
-                loop_iter_counts=trace_loop_iters,
-                xor_branch_counts=trace_xor_counts,
-            )
-            # Read-only from here on, so one copy can serve every case
-            # with this sequence.
-            cached = (signature, trace_loop_iters, trace_xor_counts)
-            replays[seq_key] = cached
-        signature, trace_loop_iters, trace_xor_counts = cached
+        parse = table.parses.get(seq_key)
+        if parse is None:
+            # A caller-supplied table that predates this log; replay the
+            # straggler rather than silently dropping the case.
+            parse = _parses.replay_sequences(
+                tree, [seq_key], node_ids=node_ids,
+                coarsen_loops=coarsen_loops,
+            ).parses[seq_key]
+            table.parses[seq_key] = parse
+        signature = parse.signature
+        trace_loop_iters = parse.loop_iter_max
+        trace_xor_counts = parse.xor_branch_counts
         if signature == _cs.NOFIT:
             noise.append(case_id)
             ticker.tick()

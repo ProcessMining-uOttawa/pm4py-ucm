@@ -303,6 +303,41 @@ def _log_and_tree(
         return log, tree
 
 
+@st.cache_data(show_spinner=False)
+def _parse_table(
+    log_bytes: bytes,
+    log_kind: str,
+    csv_columns,
+    noise_threshold: float,
+    filter_spec: Tuple,
+    _file_hash: str,
+    _progress=None,
+) -> Any:
+    """Replay every distinct activity sequence once, for the whole app.
+
+    The Model view's traversal counts and the Scenarios view's variant
+    clustering need *the same* parses, and replay is by far the most
+    expensive step on a large log — on BPI Challenge 2012 at
+    ``noise_threshold=0.0`` it is ~23 minutes against 39 seconds to mine
+    the tree. Computing it here, keyed exactly like :func:`_log_and_tree`,
+    means opening both views pays for it once.
+
+    Cached on the log + noise threshold + filters, i.e. everything the
+    tree depends on. The integer-keyed parse data survives the cache
+    round trip and stays valid against the fresh tree copy the caller
+    holds; the table's own ``node_ids`` does not, and is not used.
+    """
+    from pm4py_ucm.algo.discovery.variants import parses as _parses_mod
+
+    log, tree = _log_and_tree(
+        log_bytes, log_kind, csv_columns, noise_threshold, filter_spec,
+        _file_hash,
+    )
+    return _parses_mod.build(
+        log, tree, coarsen_loops=True, progress_callback=_progress,
+    )
+
+
 def _wants_traversal(*metric_groups) -> bool:
     """Is any replay-based metric selected across these overlay layers?
 
@@ -365,6 +400,7 @@ def _mine(
     filter_spec: Tuple = (),
     _status=None,
     _progress=None,
+    _parses=None,
 ) -> Dict[str, Any]:
     """Mine a UCM from the event log. Returns .jucm bytes + metadata.
 
@@ -423,7 +459,7 @@ def _mine(
         # that is only reassuring if you can see it advancing.
         _phase("Replaying the log on the model...")
         traversal = pm4py_ucm.compute_traversal_stats(
-            tree, log, progress_callback=_progress,
+            tree, log, progress_callback=_progress, parses=_parses,
         )
 
     if overlay_nodes or overlay_edges:
@@ -672,6 +708,7 @@ def _synthesize(
     filter_spec: Tuple = (),
     _status=None,
     _progress=None,
+    _parses=None,
 ) -> Dict[str, Any]:
     """Run the full concurrency-aware variant + scenario pipeline.
 
@@ -732,7 +769,7 @@ def _synthesize(
 
     _phase("Clustering variants (concurrency-aware replay)...")
     clustering = _clustering_mod.cluster(
-        log, tree, progress_callback=_progress,
+        log, tree, progress_callback=_progress, parses=_parses,
     )
 
     _phase(f"Synthesizing {condition_strategy} scenarios...")
@@ -3687,12 +3724,22 @@ with st.sidebar:
 # ---- Mine UCM (for Model tab) ----------------------------------------------
 try:
     with st.status("Mining UCM...", expanded=True) as status:
+        # The replay table is shared with the Scenarios view: both need
+        # the same parses, and on a big log that is the dominant cost.
+        # Built only when something will actually consume it.
+        _shared_parses = (
+            _parse_table(log_bytes, log_kind, csv_columns, noise_threshold,
+                         filter_spec, file_hash,
+                         _progress=_ProgressUI(status))
+            if _wants_traversal(overlay_nodes, overlay_edges) else None
+        )
         mined = _mine(
             log_bytes, log_kind, csv_columns,
             decomposition_spec, resource_attribute,
             effective_min_support, noise_threshold,
             overlay_nodes, overlay_edges,
             file_hash, filter_spec, _status=status,
+            _parses=_shared_parses,
             _progress=_ProgressUI(status),
         )
         status.update(label="Done.", state="complete")
@@ -4267,6 +4314,13 @@ if _view == "Scenarios":
                     group_name, decomposition_spec,
                     resource_attribute, effective_min_support,
                     file_hash, filter_spec, _status=status,
+                    # Same shared replay the Model view uses. If that
+                    # view already mined this log, the table is a cache
+                    # hit and clustering skips the replay entirely.
+                    _parses=_parse_table(
+                        log_bytes, log_kind, csv_columns, noise_threshold,
+                        filter_spec, file_hash,
+                        _progress=_ProgressUI(status)),
                     _progress=_ProgressUI(status),
                 )
                 status.update(label="Done.", state="complete")

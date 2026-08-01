@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The log is replayed once per session, not once per view.** Variant
+  clustering (Scenarios) and traversal counting (Model) need *exactly*
+  the same parses, and replay is the most expensive step in the package
+  — on BPI Challenge 2012 at `noise_threshold=0.0` it is **24 minutes**
+  for 4 366 distinct sequences, against 39 seconds to mine the tree
+  itself. They each replayed independently, so looking at both views
+  paid it twice.
+
+  New `algo.discovery.variants.parses` holds the single pass: replay
+  each distinct activity sequence once, keep everything either consumer
+  needs, and hand the same `ParseTable` to both. `cluster()` and
+  `compute_traversal_stats()` accept it via a `parses=` argument and
+  replay nothing themselves; the web app builds it once per
+  log + noise + filters and shares it across the two views.
+
+  The table also carries the **normalised log**, which turned out to
+  matter as much: converting a DataFrame into per-case sequences costs
+  1.6 s on the 5 600-case claims log — twenty times what replaying its
+  164 distinct sequences costs — and every consumer needed it. Sharing
+  both more than halves the work even on logs where replay is cheap
+  (claims: 328 replays → 164, and 2.2× faster end to end).
+
 ### Changed — Web app (V5)
 
 - **The Model view reports replay progress**, the way the Scenarios view
