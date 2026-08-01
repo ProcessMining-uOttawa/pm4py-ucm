@@ -39,6 +39,11 @@ REGISTRY: Tuple[Param, ...] = (
     # Performance overlay.
     Param("overlay_nodes", "overlay", []),
     Param("overlay_edges", "overlay", []),
+    # Whether the traversal metrics may replay the log on the model. Off, the
+    # traversal metrics fall back to their event-based counterparts at render
+    # time — but the picks above still record what the user ASKED for, so
+    # switching replay back on restores the conserving counts.
+    Param("overlay_replay", "overlay", True),
     Param("overlay_heatmap", "overlay", False),
     # Heat-map scale: "local" (per map) | "global" (whole model) | "family"
     # (one shared scale across all Family/Compare cells). Superseded the earlier

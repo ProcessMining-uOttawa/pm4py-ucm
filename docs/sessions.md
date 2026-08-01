@@ -96,8 +96,15 @@ param whose widget key is `flt_arank::<hash>` can build the right key for the
 - `decomposition` — the resolved `applied_decomp` spec (a `"off"` string or a
   sorted tuple of `(key, value)`), already hashable/serialisable.
 - `resource_attribute` — the performers string.
-- `overlay_nodes` / `overlay_edges` — the two multiselect lists;
-  `overlay_heatmap` / `overlay_heatmap_scope` — the heat-map's on/off and its
+- `overlay_nodes` / `overlay_edges` — the two multiselect lists, stored as the
+  user **picked** them. When `overlay_replay` is off the app renders the
+  event-based fallbacks instead, but the picks are what gets persisted, so
+  turning the replay back on after a resume restores the conserving counts
+  rather than silently keeping the fallbacks.
+- `overlay_replay` — whether the traversal metrics may replay the log on the
+  model (default `True`). The exported script carries it as `OVERLAY_REPLAY`
+  and resolves the same fallback at runtime.
+- `overlay_heatmap` / `overlay_heatmap_scope` — the heat-map's on/off and its
   scale (`"local"` / `"global"` / `"family"`). A project written before the
   3-way scale carried a boolean `overlay_heatmap_global`, migrated on load.
 - `filter_spec` — the **semantic** filter tuple (`activity_ranks`,

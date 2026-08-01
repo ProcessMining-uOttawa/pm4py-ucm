@@ -2663,6 +2663,11 @@ def _apply_project_config(cfg, fh, csv_columns=None):
     if "overlay_edges" in cfg:
         ss[f"overlay_edges::{fh}"] = list(cfg["overlay_edges"])
         ss[f"overlay_edges_applied::{fh}"] = list(cfg["overlay_edges"])
+    # Replay opt-out. Seeded directly like the heat-map checkbox below; the
+    # metric picks above are restored as PICKED, so a project saved with the
+    # replay off comes back with both the user's metrics and their opt-out.
+    if "overlay_replay" in cfg:
+        ss[f"overlay_replay::{fh}"] = bool(cfg["overlay_replay"])
     # Heat-map on/off + scale (the checkbox / radio carry no value=/index that
     # clashes with a pre-set key, so seed them directly, warning-free).
     if "overlay_heatmap" in cfg:
@@ -3099,9 +3104,12 @@ with st.sidebar:
     # before the run, rather than offered as a cancel button that
     # Streamlit could not honour anyway.
     _replay_key = f"overlay_replay::{_ov_hash}"
+    # Seed rather than pass value=: a restored project sets this key directly,
+    # and a widget carrying both a default and a Session-State value warns.
+    st.session_state.setdefault(_replay_key, True)
     replay_enabled = _ovl_exp.checkbox(
         "Replay the log for traversal counts",
-        key=_replay_key, value=True,
+        key=_replay_key,
         help=(
             "The traversal metrics count how often the log walks the "
             "model, which is what makes the numbers add up — but they "
@@ -3116,6 +3124,11 @@ with st.sidebar:
             "of the log the model explains."
         ),
     )
+    # What the user actually picked, kept apart from what gets rendered: a
+    # saved project must record the choice, not the fallback it degraded to,
+    # or switching replay back on after a resume would silently come back
+    # with event-based counts.
+    overlay_nodes_picked, overlay_edges_picked = overlay_nodes, overlay_edges
     if not replay_enabled:
         # Swap each traversal metric for its event-based counterpart so
         # the overlay still says something, rather than going blank.
@@ -3872,8 +3885,11 @@ with st.sidebar:
             "notation": style,
             "decomposition": decomposition_spec,
             "resource_attribute": resource_attribute,
-            "overlay_nodes": list(overlay_nodes),
-            "overlay_edges": list(overlay_edges),
+            # The picks, not the replay-off fallbacks — see the comment at
+            # the opt-out checkbox.
+            "overlay_nodes": list(overlay_nodes_picked),
+            "overlay_edges": list(overlay_edges_picked),
+            "overlay_replay": bool(replay_enabled),
             "overlay_heatmap": bool(overlay_heatmap),
             "overlay_heatmap_scope": overlay_heat_scope,
             "filter_spec": filter_spec,

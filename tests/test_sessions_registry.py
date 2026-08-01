@@ -26,6 +26,7 @@ FULL_VALUES = {
     "resource_attribute": "org:resource",
     "overlay_nodes": ["frequency", "sojourn_median_time"],
     "overlay_edges": ["percentage", "frequency"],
+    "overlay_replay": False,
     "overlay_heatmap": True,
     "overlay_heatmap_scope": "family",
     "filter_spec": [["exclude_activities", ["Fix Bug"]],
