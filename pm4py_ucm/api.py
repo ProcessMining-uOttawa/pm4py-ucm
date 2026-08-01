@@ -32,6 +32,9 @@ from .algo.discovery.ucm import algorithm as _discovery
 from .algo.discovery.resources import algorithm as _resources
 from .algo.discovery.variants import clustering as _clustering
 from .algo.discovery.scenarios import synthesis as _scenarios
+from .algo.discovery.scenarios.synthesis import (  # noqa: F401
+    suggest_loop_iterations,
+)
 from .algo.discovery.scenarios import reports as _scenario_reports
 from .algo.discovery import families as _families
 from .algo import performance as _performance

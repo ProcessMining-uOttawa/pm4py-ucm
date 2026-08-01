@@ -41,6 +41,7 @@ from .api import (
     annotate_performance,
     compute_traversal_stats,
     suggest_decomposition,
+    suggest_loop_iterations,
 )
 from .objects.ucm.obj import UCM
 
@@ -69,7 +70,8 @@ __all__ = [
     "annotate_performance",
     "compute_traversal_stats",
     "suggest_decomposition",
+    "suggest_loop_iterations",
     "rank_partition_attributes",
 ]
 
-__version__ = "0.7.8"
+__version__ = "0.7.9"
