@@ -407,7 +407,30 @@ state what the numbers cover. **`fitting_ratio` is the one to show a
 reader**; the web app puts it under the model's metrics row and, below
 70 %, points at the noise threshold as the knob that changes it.
 
-### 9.4 Cost
+### 9.4 Alignment is bounded
+
+Alignment cost is not merely high, it is **unpredictable**: it follows the
+model's loops and choices rather than the trace's length. On a real
+2 455-case log the same model aligned a 12-event sequence in 0.05 s and a
+10-event one in 26 s, so no length threshold makes it safe. Left
+unbounded, that log's 893 non-fitting sequences projected to roughly ten
+hours.
+
+The repair phase is therefore bounded by wall clock —
+`max_repair_seconds` overall (default 10 s) and
+`max_repair_seconds_per_sequence` for any one sequence (default 1 s) —
+and sequences are attempted in order of how many **cases** carry them, so
+a budget that cannot cover everything is spent where it buys the most
+coverage. Whatever is left unaligned is reported in
+`unexplained_cases`; it is never silently attributed. Pass `None` to
+either limit for the unbounded behaviour, or `repair=False` to skip
+alignment entirely.
+
+On that log the defaults bring the phase to about 10 s and lift coverage
+from 51 % (fitting only) to 63 %. On the bundled samples the budget is
+never reached — their alignments are milliseconds.
+
+### 9.5 Cost
 
 Traversal counts are a function of the *parse*, not of the trace, so the
 work is deduplicated twice: once per distinct activity sequence (which is

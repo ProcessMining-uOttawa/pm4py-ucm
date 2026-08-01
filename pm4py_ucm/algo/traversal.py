@@ -66,6 +66,7 @@ repair likewise runs once per distinct non-fitting sequence.
 
 from __future__ import annotations
 
+import time as _time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -242,6 +243,10 @@ def _replay_sequence(tree, node_ids, seq: Sequence[str], **kwargs):
 
 def _aligned_paths(
     tree, sequences: List[Tuple[str, ...]],
+    weights: Optional[Dict[Tuple[str, ...], int]] = None,
+    seconds_per_sequence: Optional[float] = 1.0,
+    seconds_total: Optional[float] = 10.0,
+    ticker=None,
 ) -> Dict[Tuple[str, ...], Tuple[str, ...]]:
     """Align each non-fitting sequence to its nearest path through the
     model, returning ``{original_sequence: repaired_sequence}``.
@@ -250,6 +255,24 @@ def _aligned_paths(
     guaranteed to fit. Sequences that cannot be aligned are omitted
     rather than guessed at. Requires pm4py; returns an empty mapping if
     it is unavailable, which the caller reports as un-counted coverage.
+
+    **Alignment is bounded**, because its cost is not merely high but
+    wildly unpredictable: on a real 2 455-case log the same model took
+    0.05 s for a 12-event sequence and 26 s for a 10-event one — the
+    search space depends on the model's loops and choices, not on the
+    trace's length, so there is no size threshold that makes it safe.
+    Left unbounded, 893 non-fitting sequences projected to ~10 hours.
+
+    Two limits therefore apply, both passed down to pm4py's aligner:
+    ``seconds_per_sequence`` stops any single pathological sequence from
+    eating the budget, and ``seconds_total`` bounds the whole phase.
+    Sequences left unaligned are simply not repaired, and the caller
+    reports them as unexplained coverage rather than pretending. Pass
+    ``None`` to either for the unbounded behaviour.
+
+    Sequences are attempted in order of how many **cases** carry them
+    (``weights``), so a budget that cannot cover everything is spent
+    where it buys the most coverage.
     """
     if not sequences:
         return {}
@@ -266,30 +289,65 @@ def _aligned_paths(
     # An empty sequence contributes no rows, so it would not come back
     # from the aligner and would shift every later result by one.
     sequences = [s for s in sequences if s]
-    width = max(2, len(str(len(sequences))))
-    rows = []
-    for i, seq in enumerate(sequences):
-        for j, activity in enumerate(seq):
-            rows.append({"case:concept:name": f"__repair_{i:0{width}d}",
-                         "concept:name": activity,
-                         "time:timestamp": pd.Timestamp("2000-01-01")
-                         + pd.Timedelta(seconds=j)})
-    if not rows:
+    if not sequences:
         return {}
+    if weights:
+        # Heaviest first: if the budget runs out, it has bought the most
+        # cases it could.
+        sequences = sorted(sequences, key=lambda s: -weights.get(s, 0))
 
     try:
         net, im, fm = pm4py.convert_to_petri_net(tree)
-        results = pm4py.conformance_diagnostics_alignments(
-            pd.DataFrame(rows), net, im, fm,
-            case_id_key="case:concept:name",
-            activity_key="concept:name",
-            timestamp_key="time:timestamp",
+        from pm4py.algo.conformance.alignments.petri_net import (
+            algorithm as _alignments,
         )
     except Exception:
         return {}
 
+    variant = _alignments.Variants.VERSION_STATE_EQUATION_A_STAR
+    params: Dict[Any, Any] = {
+        "case_id_key": "case:concept:name",
+        "activity_key": "concept:name",
+        "timestamp_key": "time:timestamp",
+    }
+    try:
+        limits = variant.value.Parameters
+        if seconds_per_sequence is not None:
+            params[limits.PARAM_MAX_ALIGN_TIME_TRACE] = float(
+                seconds_per_sequence)
+    except Exception:
+        pass
+
+    # One sequence per call, with the clock checked between them. pm4py's
+    # own whole-log time parameter does not reliably stop a batch, and a
+    # single unbounded sequence here can run for tens of seconds, so the
+    # overall budget is enforced here rather than delegated.
     out: Dict[Tuple[str, ...], Tuple[str, ...]] = {}
-    for seq, result in zip(sequences, results or []):
+    started = _time.perf_counter()
+    for seq in sequences:
+        if (seconds_total is not None
+                and _time.perf_counter() - started >= seconds_total):
+            # Out of budget. Report the rest as done so a progress
+            # display settles instead of freezing at a partial count —
+            # the shortfall is carried honestly in unexplained_cases.
+            if ticker is not None:
+                ticker.finish()
+            break
+        if ticker is not None:
+            ticker.tick()
+        frame = pd.DataFrame([
+            {"case:concept:name": "__repair",
+             "concept:name": activity,
+             "time:timestamp": pd.Timestamp("2000-01-01")
+             + pd.Timedelta(seconds=j)}
+            for j, activity in enumerate(seq)
+        ])
+        try:
+            results = _alignments.apply(frame, net, im, fm,
+                                        variant=variant, parameters=params)
+        except Exception:
+            continue
+        result = (results or [None])[0]
         if not result:
             continue
         moves = result.get("alignment") or []
@@ -313,6 +371,8 @@ def compute_traversal_stats(
     *,
     repair: bool = True,
     max_repair_sequences: Optional[int] = 2000,
+    max_repair_seconds: Optional[float] = 10.0,
+    max_repair_seconds_per_sequence: Optional[float] = 1.0,
     coarsen_loops: bool = True,
     progress_callback=None,
 ) -> TraversalStats:
@@ -336,6 +396,15 @@ def compute_traversal_stats(
         non-fitting sequences exceeds this (alignment is the expensive
         step). ``None`` disables the guard. The resulting shortfall is
         visible as :attr:`TraversalStats.unexplained_cases`.
+    max_repair_seconds, max_repair_seconds_per_sequence
+        Wall-clock bounds on the alignment phase as a whole and on any
+        single sequence. Alignment cost is not merely high but
+        unpredictable — it follows the model's loops and choices, not
+        the trace's length, so a short sequence can cost seconds while a
+        longer one costs milliseconds. Bounding it keeps a mine
+        responsive; whatever is left unaligned is reported as
+        unexplained rather than silently attributed. Pass ``None`` to
+        either for the unbounded behaviour.
     coarsen_loops
         Passed to :func:`choice_signature.replay`; does not affect the
         counts, only how signatures are pooled.
@@ -385,8 +454,19 @@ def compute_traversal_stats(
     repaired_paths: Dict[Tuple[str, ...], Tuple[str, ...]] = {}
     if repair and nofit and (max_repair_sequences is None
                              or len(nofit) <= max_repair_sequences):
-        r_ticker = Ticker(progress_callback, "Aligning variants", len(nofit))
-        repaired_paths = _aligned_paths(tree, nofit)
+        # Name the budget in the stage label: on a big log this phase can
+        # stop early, and "will it ever finish?" is exactly the question a
+        # bare spinner leaves open.
+        stage = "Aligning unfitted variants"
+        if max_repair_seconds is not None:
+            stage += f" (≤{max_repair_seconds:g}s)"
+        r_ticker = Ticker(progress_callback, stage, len(nofit))
+        repaired_paths = _aligned_paths(
+            tree, nofit, weights=sequence_cases,
+            seconds_per_sequence=max_repair_seconds_per_sequence,
+            seconds_total=max_repair_seconds,
+            ticker=r_ticker,
+        )
         r_ticker.finish()
 
     # Aggregate. Counts are keyed on the signature, so sequences that

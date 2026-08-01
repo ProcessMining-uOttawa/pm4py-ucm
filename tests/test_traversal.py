@@ -315,6 +315,71 @@ def test_empty_log_is_not_a_division_by_zero():
     assert stats.node_counts == {}
 
 
+def test_progress_is_reported_for_both_phases():
+    """Both long phases report progress with real counts.
+
+    On a big log this is the difference between a slow run and an
+    apparently hung one, so the replay stage must tick per variant and
+    the alignment stage must name its budget — a phase that stops early
+    should not look like one that stalled."""
+    pytest.importorskip("pm4py")
+    pytest.importorskip("pandas")
+
+    tree = _seq(_leaf("A"), _leaf("B"))
+    log = [["A", "B"]] * 3 + [["A", "B", f"X{i}"] for i in range(4)]
+    seen = []
+    tv.compute_traversal_stats(
+        tree, log, max_repair_seconds=5.0,
+        progress_callback=lambda stage, done, total: seen.append(
+            (stage, done, total)),
+    )
+    stages = {s for s, _d, _t in seen}
+    replay = [s for s in stages if s.startswith("Replaying")]
+    align = [s for s in stages if s.startswith("Aligning")]
+    assert replay, f"no replay progress reported; got {stages}"
+    assert align, f"no alignment progress reported; got {stages}"
+    # The alignment stage advertises its budget so the user can see the
+    # phase is bounded.
+    assert "5s" in align[0], align[0]
+    # Totals are the real work counts, and each stage reaches its total.
+    for stage in (replay[0], align[0]):
+        ticks = [(d, t) for s, d, t in seen if s == stage]
+        assert ticks[-1][0] == ticks[-1][1] > 0, (stage, ticks[-3:])
+
+
+def test_repair_is_bounded_by_a_time_budget():
+    """Alignment cost is unpredictable — it follows the model's loops and
+    choices, not the trace's length — so the repair phase is bounded by
+    wall clock. A budget of zero must do no alignment at all and report
+    the shortfall rather than block."""
+    import time
+
+    tree = _seq(_leaf("A"), _leaf("B"))
+    log = [["A", "B", f"X{i}"] for i in range(12)]
+
+    # Warm up: pm4py's alignment machinery imports lazily and costs
+    # seconds the first time, which would otherwise swamp the measurement.
+    tv.compute_traversal_stats(tree, [["A", "B", "X0"]], max_repair_seconds=5.0)
+
+    started = time.perf_counter()
+    off = tv.compute_traversal_stats(tree, log, repair=False)
+    without_repair = time.perf_counter() - started
+
+    started = time.perf_counter()
+    stats = tv.compute_traversal_stats(tree, log, max_repair_seconds=0.0)
+    with_zero_budget = time.perf_counter() - started
+
+    assert stats.repaired_cases == 0, "a zero budget must align nothing"
+    assert stats.unexplained_cases == off.unexplained_cases == 12
+    # A spent budget costs about what skipping repair costs: the bound is
+    # checked before any alignment is attempted, not after one runs.
+    assert with_zero_budget <= without_repair + 2.0, (
+        f"zero budget took {with_zero_budget:.1f}s vs "
+        f"{without_repair:.1f}s with repair off")
+    # Fit is a property of the model, not of how long we spent aligning.
+    assert stats.fitting_ratio == 0.0
+
+
 def test_repair_guard_skips_alignment_when_there_are_too_many_variants():
     tree = _seq(_leaf("A"), _leaf("B"))
     log = [["A", "B", "X"], ["A", "B", "Y"], ["A", "B", "Z"]]

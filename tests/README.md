@@ -1,6 +1,6 @@
 # Test suite
 
-**955 tests** across **28 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
+**957 tests** across **28 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
 
 > Regenerate this file with `python tests/gen_readme.py` after adding or removing tests. Purposes are the first sentence of each module's docstring; edit the docstring, not this table.
 
@@ -25,8 +25,8 @@
 | | _Model families subtotal_ | | **89** |
 | **Performance & metrics** | [`test_metric_validation.py`](test_metric_validation.py) | Metric-correctness validation suite. | 45 |
 |  | [`test_performance.py`](test_performance.py) | Tests for the performance overlay (frequencies / times on activities and edges): stats computation, segment-based annotation, visualizer output, and .jucm round-trip of the metadata. | 17 |
-|  | [`test_traversal.py`](test_traversal.py) | Tests for replay-based traversal counting. | 21 |
-| | _Performance & metrics subtotal_ | | **83** |
+|  | [`test_traversal.py`](test_traversal.py) | Tests for replay-based traversal counting. | 23 |
+| | _Performance & metrics subtotal_ | | **85** |
 | **Layout** | [`test_graphviz_layout.py`](test_graphviz_layout.py) | Tests for the graphviz-based layouter. | 8 |
 |  | [`test_layout.py`](test_layout.py) | Tests for the compact left-to-right auto-layouter. | 15 |
 |  | [`test_routing_points.py`](test_routing_points.py) | Tests for the routing-empty-points pass (issue 4). | 7 |
@@ -41,6 +41,6 @@
 |  | [`test_sessions_registry.py`](test_sessions_registry.py) | Tests for the Session Parameter Registry (``web/sessions/registry.py``). | 10 |
 | | _Sessions (save / share / resume) subtotal_ | | **46** |
 | **Progress / infrastructure** | [`test_progress.py`](test_progress.py) | Tests for the progress-reporting layer and the vectorized DataFrame resource miner. | 15 |
-| | **Total** | | **955** |
+| | **Total** | | **957** |
 
 See the repository [`README.md`](../README.md#testing) for how to run the suite, and [`docs/metrics.md`](../docs/metrics.md) for the metric definitions the validation tests enforce.
