@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Alignment repair could take hours; it is now bounded.** Computing the
+  traversal metrics aligns each non-fitting case to its nearest path
+  through the model, and that alignment's cost turns out to be not merely
+  high but *unpredictable* — it follows the model's loops and choices, not
+  the trace's length. On a 2 455-case GitHub-SDLC log the same model
+  aligned a 12-event sequence in 0.05 s and a 10-event one in **26 s**, so
+  no length threshold makes it safe; its 893 non-fitting sequences
+  projected to roughly **ten hours**, which made the default overlay
+  unusable on that log.
+
+  The repair phase now has a wall-clock budget — `max_repair_seconds`
+  overall (default 10 s) and `max_repair_seconds_per_sequence` for any one
+  sequence (default 1 s) — enforced by `pm4py-ucm` rather than delegated,
+  since pm4py's own whole-log time parameter does not reliably stop a
+  batch. Sequences are attempted in order of how many **cases** carry
+  them, so a budget that cannot cover everything is spent where it buys
+  the most coverage, and anything left unaligned is reported in
+  `unexplained_cases` rather than silently attributed. Pass `None` to
+  either limit for the previous unbounded behaviour, or `repair=False` to
+  skip alignment.
+
+  That log now completes in about 10 s with coverage rising from 51 %
+  (fitting cases only) to 63 %. The bundled samples never reach the
+  budget — their alignments are milliseconds — so their numbers are
+  unchanged.
+
 ## [0.7.9] — 2026-08-01
 
 Executable scenarios you can trust. Every scenario `pm4py-ucm` writes now

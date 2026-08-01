@@ -339,8 +339,9 @@ def _fit_note(fit: Optional[Dict[str, Any]]) -> None:
             "higher than the events actually observed.")
     if unexplained:
         parts.append(
-            f"{unexplained:,} case(s) could not be placed on the model and "
-            "are not counted.")
+            f"{unexplained:,} case(s) are not counted — they do not fit the "
+            "model, and aligning them to a nearest path did not finish "
+            "within the time budget.")
     if ratio < 0.7:
         parts.append(
             "A lower **noise threshold** keeps more of the behaviour and "

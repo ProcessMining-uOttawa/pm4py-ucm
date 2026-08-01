@@ -315,6 +315,35 @@ def test_empty_log_is_not_a_division_by_zero():
     assert stats.node_counts == {}
 
 
+def test_repair_is_bounded_by_a_time_budget():
+    """Alignment cost is unpredictable — it follows the model's loops and
+    choices, not the trace's length — so the repair phase is bounded by
+    wall clock. A budget of zero must do no alignment at all and report
+    the shortfall rather than block."""
+    import time
+
+    tree = _seq(_leaf("A"), _leaf("B"))
+    log = [["A", "B", f"X{i}"] for i in range(12)]
+
+    started = time.perf_counter()
+    off = tv.compute_traversal_stats(tree, log, repair=False)
+    without_repair = time.perf_counter() - started
+
+    started = time.perf_counter()
+    stats = tv.compute_traversal_stats(tree, log, max_repair_seconds=0.0)
+    with_zero_budget = time.perf_counter() - started
+
+    assert stats.repaired_cases == 0, "a zero budget must align nothing"
+    assert stats.unexplained_cases == off.unexplained_cases == 12
+    # A spent budget costs about what skipping repair costs: the bound is
+    # enforced before any alignment is attempted, not after.
+    assert with_zero_budget <= without_repair + 3.0, (
+        f"zero budget took {with_zero_budget:.1f}s vs "
+        f"{without_repair:.1f}s with repair off")
+    # Fit is a property of the model, not of how long we spent aligning.
+    assert stats.fitting_ratio == 0.0
+
+
 def test_repair_guard_skips_alignment_when_there_are_too_many_variants():
     tree = _seq(_leaf("A"), _leaf("B"))
     log = [["A", "B", "X"], ["A", "B", "Y"], ["A", "B", "Z"]]
