@@ -115,6 +115,19 @@ Two things the emitter needs live in the app today, not the library:
   gained a `heat=` kwarg for this. The performance **sub-lines** are carried
   regardless (they ride in the `.jucm` metadata via `annotate_performance`).
 
+  **The replay opt-out travels with the metrics, and stays a live switch.**
+  `OVERLAY_NODES` / `OVERLAY_EDGES` hold the metrics the session *picked*;
+  `OVERLAY_REPLAY` holds whether it allowed the traversal replay. An inlined
+  `_effective_overlays()` resolves the pair at **run time** into the
+  `NODE_METRICS` / `EDGE_METRICS` the pipeline annotates with, swapping each
+  traversal metric for its event-based counterpart when the replay is off —
+  exactly the substitution the app makes at render time, so the script
+  reproduces what the user saw and `wants_traversal()` correctly skips the
+  replay. Resolving late rather than baking the fallback into the emitted
+  constants is deliberate: flipping `OVERLAY_REPLAY = True` in the generated
+  script recovers the conserving counts without re-picking any metric, which
+  is the sort of edit the export exists to make possible.
+
 **(b) Dashboards — shipped, and it needed no new module.** The dashboards
 engine is **already a reusable library package** (`pm4py_ucm.algo.dashboards`)
 that exposes `build_fact_table` + `write_dashboard`; only the interactive
@@ -142,6 +155,10 @@ instead defines each stage and **immediately invokes it**, showing the
 intermediate result inline — the loaded log (`.head()`), the case counts before
 and after filtering, the mined model image, the variants table, the family grid,
 the dashboard file list — so the notebook reads like a personalised walkthrough.
+It is emitted as nbformat 4.5 JSON by hand, cell ids included: 4.5 requires them,
+and Jupyter's habit of patching a missing one in is documented to end. The ids
+are **positional**, not random, so exporting the same project twice still yields
+byte-identical files — the determinism the golden test rests on.
 
 ## 7. Phasing
 
