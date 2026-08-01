@@ -180,6 +180,73 @@ def test_notebook_is_a_tutorial_not_a_single_run_call():
     assert joined.index("log = read_log(") < joined.index("def run_family")
 
 
+def test_notebook_cells_carry_the_id_nbformat_45_requires():
+    """A notebook declaring nbformat 4.5 must give every cell an ``id``.
+
+    Jupyter patches a missing one in and warns today, but the warning says
+    it will become a hard error -- and ``nbformat.validate`` only warns, so
+    nothing else here would catch the omission.
+    """
+    data = json.loads(generate_notebook(_doc({"family_attrs": ["country"]}),
+                                        include_scenarios=True))
+    assert (data["nbformat"], data["nbformat_minor"]) == (4, 5)
+    ids = [c.get("id") for c in data["cells"]]
+    assert all(ids), "every cell needs an id when nbformat_minor >= 5"
+    assert len(set(ids)) == len(ids), "cell ids must be unique"
+    # nbformat's own schema: 1-64 chars of [a-zA-Z0-9-_].
+    assert all(re.fullmatch(r"[a-zA-Z0-9\-_]{1,64}", i) for i in ids)
+
+
+def test_notebook_ids_are_stable_across_generations():
+    """Positional, not random -- the notebook must stay byte-deterministic."""
+    doc = _doc({"noise_threshold": 0.25})
+    assert generate_notebook(doc) == generate_notebook(doc)
+
+
+def test_replay_opt_out_swaps_traversal_metrics_without_losing_the_picks():
+    """A session that turned the replay off still records what it picked.
+
+    The script keeps the picks in OVERLAY_NODES/EDGES and resolves the
+    fallback at runtime, so flipping OVERLAY_REPLAY back on restores the
+    conserving counts instead of silently keeping the event-based ones.
+    """
+    cfg = {"overlay_nodes": ["traversal_frequency", "median_time"],
+           "overlay_edges": ["traversal_percentage"]}
+    off = generate_script(_doc(dict(cfg, overlay_replay=False)))
+    assert "OVERLAY_REPLAY = False" in off
+    # The picks survive verbatim -- they are what the user asked for.
+    assert "OVERLAY_NODES = ['traversal_frequency', 'median_time']" in off
+    assert "OVERLAY_EDGES = ['traversal_percentage']" in off
+    # Replay defaults on when a project predates the setting.
+    assert "OVERLAY_REPLAY = True" in generate_script(_doc(cfg))
+
+    # Exec the emitted helpers and check the resolution both ways.
+    def resolve(src):
+        ns = {"__name__": "x"}
+        exec(compile(src, "gen.py", "exec"), ns)  # noqa: S102
+        return ns["NODE_METRICS"], ns["EDGE_METRICS"], ns["wants_traversal"]()
+
+    nodes, edges, wants = resolve(off)
+    assert nodes == ["frequency", "median_time"]
+    assert edges == ["percentage"]
+    assert wants is False, "replay off must not trigger a traversal pass"
+
+    nodes, edges, wants = resolve(generate_script(_doc(cfg)))
+    assert nodes == ["traversal_frequency", "median_time"]
+    assert edges == ["traversal_percentage"]
+    assert wants is True
+
+
+def test_replay_fallback_dedupes_when_both_metrics_collapse():
+    """frequency picked alongside traversal_frequency must not double up."""
+    src = generate_script(_doc({
+        "overlay_nodes": ["traversal_frequency", "frequency"],
+        "overlay_replay": False}))
+    ns = {"__name__": "x"}
+    exec(compile(src, "gen.py", "exec"), ns)  # noqa: S102
+    assert ns["NODE_METRICS"] == ["frequency"]
+
+
 def test_dashboards_emitted_when_the_project_carries_them():
     from sessions.dashboards import wrap_registry
     reg = {"active": "d1", "dashboards": [

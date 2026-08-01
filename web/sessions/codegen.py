@@ -187,22 +187,47 @@ def resource_params():
     return params
 
 
+def _effective_overlays():
+    """The metrics actually annotated with, after the replay opt-out.
+
+    OVERLAY_NODES / OVERLAY_EDGES record what the session ASKED for. When
+    OVERLAY_REPLAY is off, each traversal metric falls back to its
+    event-based counterpart so the diagram still says something -- the
+    same trade the app makes. Flip OVERLAY_REPLAY back to True to get the
+    conserving counts without re-picking the metrics; it costs a full
+    replay of the log on the model, which is the longest step of a mine.
+    """
+    if OVERLAY_REPLAY:
+        return list(OVERLAY_NODES), list(OVERLAY_EDGES)
+    fallback = {"traversal_frequency": "frequency",
+                "traversal_percentage": "percentage"}
+
+    def swap(metrics):
+        return list(dict.fromkeys(fallback.get(m, m) for m in metrics))
+
+    return swap(OVERLAY_NODES), swap(OVERLAY_EDGES)
+
+
+NODE_METRICS, EDGE_METRICS = _effective_overlays()
+
+
 def wants_traversal():
     """Do the chosen overlay metrics need a replay of the log on the model?
 
     The traversal metrics count how often the model is WALKED, which
     conserves across the diagram; the other metrics count events and
     directly-follows pairs. Replaying costs real time, so it only runs
-    when one of them is selected.
+    when one of them is selected -- and never when the replay is off,
+    since _effective_overlays has then already swapped them out.
     """
     from pm4py_ucm.algo.performance import TRAVERSAL_METRICS
     return any(m in TRAVERSAL_METRICS
-               for m in tuple(OVERLAY_NODES) + tuple(OVERLAY_EDGES))
+               for m in tuple(NODE_METRICS) + tuple(EDGE_METRICS))
 
 
 def _heat_metrics():
-    nm = OVERLAY_NODES[0] if OVERLAY_NODES else None
-    em = OVERLAY_EDGES[0] if OVERLAY_EDGES else None
+    nm = NODE_METRICS[0] if NODE_METRICS else None
+    em = EDGE_METRICS[0] if EDGE_METRICS else None
     return nm, em
 
 
@@ -380,6 +405,7 @@ def _config(
         f"RESOURCE_ATTRIBUTE = {cfg['resource_attribute']!r}",
         f"OVERLAY_NODES = {list(cfg['overlay_nodes'])!r}",
         f"OVERLAY_EDGES = {list(cfg['overlay_edges'])!r}",
+        f"OVERLAY_REPLAY = {bool(cfg['overlay_replay'])!r}",
         f"OVERLAY_HEATMAP = {bool(cfg['overlay_heatmap'])!r}",
         f"OVERLAY_HEATMAP_SCOPE = {cfg['overlay_heatmap_scope']!r}",
         f"FILTER_SPEC = {_as_dict(cfg['filter_spec'])!r}",
@@ -429,10 +455,10 @@ def _model_fn() -> str:
         "        log, parameters=params, decomposition=DECOMPOSITION)\n"
         "    traversal = (pm4py_ucm.compute_traversal_stats(tree, log)\n"
         "                 if wants_traversal() else None)\n"
-        "    if OVERLAY_NODES or OVERLAY_EDGES:\n"
+        "    if NODE_METRICS or EDGE_METRICS:\n"
         "        pm4py_ucm.annotate_performance(\n"
         "            ucm, log,\n"
-        "            node_metrics=OVERLAY_NODES, edge_metrics=OVERLAY_EDGES,\n"
+        "            node_metrics=NODE_METRICS, edge_metrics=EDGE_METRICS,\n"
         "            traversal=traversal, tree=tree)\n"
         '    pm4py_ucm.write_ucm(ucm, str(OUT_DIR / "model.jucm"))\n'
         "    _save_image(pm4py_ucm.save_vis_ucm, ucm,\n"
@@ -496,7 +522,7 @@ def _family_fn() -> str:
         "        include_values=FAMILY_INCLUDE_VALUES,\n"
         "        parameters=resource_params(),\n"
         "    )\n"
-        "    if OVERLAY_NODES or OVERLAY_EDGES:\n"
+        "    if NODE_METRICS or EDGE_METRICS:\n"
         '        fam_cases = family.log_df["case:concept:name"].astype(str)\n'
         "        for cell in family.cells:\n"
         "            cell_df = family.log_df[\n"
@@ -507,8 +533,8 @@ def _family_fn() -> str:
         "                else None)\n"
         "            pm4py_ucm.annotate_performance(\n"
         "                cell.ucm, cell_df,\n"
-        "                node_metrics=OVERLAY_NODES,\n"
-        "                edge_metrics=OVERLAY_EDGES,\n"
+        "                node_metrics=NODE_METRICS,\n"
+        "                edge_metrics=EDGE_METRICS,\n"
         "                traversal=cell_traversal, tree=cell.tree)\n"
         '    pm4py_ucm.write_ucm_family(family, str(OUT_DIR / "family.zip"))\n'
         "    _save_image(pm4py_ucm.save_vis_ucm_family, family,\n"
@@ -519,7 +545,7 @@ def _family_fn() -> str:
         "                parameters=model_heat_params(family))\n"
         "    umbrella = pm4py_ucm.assemble_ucm_family(\n"
         '        family, mode="umbrella", dedup=FAMILY_DEDUP,\n'
-        "        node_metrics=OVERLAY_NODES, edge_metrics=OVERLAY_EDGES)\n"
+        "        node_metrics=NODE_METRICS, edge_metrics=EDGE_METRICS)\n"
         "    pm4py_ucm.write_ucm(\n"
         '        umbrella, str(OUT_DIR / "family_umbrella.jucm"))\n'
         "    stats = pm4py_ucm.compute_family_stats(family)\n"
@@ -713,6 +739,19 @@ def _nb_code(text: str) -> Dict[str, Any]:
             "outputs": [], "source": text.splitlines(keepends=True) or [""]}
 
 
+def _nb_with_ids(cells: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Give every cell the ``id`` that nbformat 4.5 requires.
+
+    Jupyter tolerates the omission today — it patches a missing id in and
+    warns — but the warning says it will become a hard error, and a
+    notebook that declares 4.5 without ids is malformed by its own
+    declaration. The ids are positional rather than random so that
+    generating the same project twice yields byte-identical notebooks,
+    which the determinism guarantee depends on.
+    """
+    return [dict(cell, id=f"cell-{i}") for i, cell in enumerate(cells)]
+
+
 def generate_notebook(
     doc: ProjectDoc,
     *,
@@ -822,7 +861,7 @@ def generate_notebook(
     cells.append(_nb_md(f"---\nDone — every artifact is under `{out_dir}/`."))
 
     nb = {
-        "cells": cells,
+        "cells": _nb_with_ids(cells),
         "metadata": {
             "kernelspec": {
                 "display_name": "Python 3", "language": "python",

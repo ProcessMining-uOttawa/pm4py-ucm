@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Exported notebooks now carry the cell `id` that nbformat 4.5 requires.**
+  The generated `.ipynb` declared format 4.5 but emitted no cell ids, so it
+  was malformed by its own declaration. Jupyter patched the omission in and
+  warned that it will become a hard error; `nbformat.validate()` only warns,
+  which is why nothing caught it. Ids are positional, so notebooks stay
+  byte-deterministic.
+- **The replay opt-out is saved with a project, and no longer overwrites the
+  chosen metrics.** Switching off "Replay the log for traversal counts" swaps
+  each traversal metric for its event-based counterpart at render time — but
+  a save captured the *fallbacks* rather than the picks, so resuming such a
+  project lost the user's choice of `traversal_frequency` /
+  `traversal_percentage` for good. The picks are now persisted as picked, the
+  opt-out is persisted alongside them as `overlay_replay`, and the exported
+  Python script carries both (`OVERLAY_REPLAY`), resolving the same fallback
+  at run time — so flipping it back on restores the conserving counts without
+  re-picking anything.
+
 ## [0.7.9] — 2026-08-01
 
 Executable scenarios you can trust. Every scenario `pm4py-ucm` writes now
