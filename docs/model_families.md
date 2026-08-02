@@ -80,8 +80,33 @@ XES exports). Per attribute type:
 |---------------|---------------------------------------------------------------------------------|
 | enumeration   | one cell per value, **case-insensitively** — `F` and `f` are the same value, displayed as the log's most frequent spelling (every merged spelling stays on `PartitionValue.raw_values`); past `max_values_per_attribute` the least frequent values merge into an **Other** bucket |
 | boolean       | `true` / `false` (any letter case)                                               |
-| numeric       | **binned** into ranges — `bins` quantiles, or explicit `bin_edges={attr: [edges]}` |
+| numeric       | **binned** into ranges — `bins` quantiles, or explicit `bin_edges={attr: [edges]}`. At most `bins` distinct whole numbers are kept as one bin per value instead, so levels `1..4` stay `1`, `2`, `3`, `4` |
 | missing value | an **Unknown** bucket (`unknown_bucket=False` drops those cases)                 |
+
+A column is numeric when its **values** are, not when its dtype says so:
+XES exports routinely serialise numbers as strings, so an object column
+is coerced first and treated as numeric when at least
+`numeric_coercion_threshold` of its non-null values parse (default
+`0.99`). Values that do not parse become missing, and land in the
+**Unknown** bucket.
+
+Two consequences worth knowing before you partition:
+
+- A numeric-looking column is an axis of **ranges**, not of discrete
+  values, once it holds more distinct values than `bins`. If you want
+  the individual values, raise `bins` to at least that count, or pass
+  explicit `bin_edges`.
+- Columns naming an *entity* — `org:resource`, `org:group`, `org:role`,
+  `concept:instance` — are never coerced however numeric they look,
+  because their digits are labels and a range like `541-561` over them
+  means nothing. They partition as enumerations, or are dropped when
+  their cardinality is too high.
+
+The threshold is deliberately strict. A column of treatment codes
+`"1"`/`"2"`/`"3"` that writes combinations as `"2,3"` is 97.7% numeric,
+and coercing it would file every combination case under **Unknown**
+rather than giving it a cell; a column whose only non-numeric value is a
+single `"na"` sits at 99.6% and is genuinely numeric.
 
 Additional policy knobs:
 

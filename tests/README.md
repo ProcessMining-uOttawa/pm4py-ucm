@@ -1,6 +1,6 @@
 # Test suite
 
-**962 tests** across **28 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
+**996 tests** across **29 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
 
 > Regenerate this file with `python tests/gen_readme.py` after adding or removing tests. Purposes are the first sentence of each module's docstring; edit the docstring, not this table.
 
@@ -16,9 +16,10 @@
 |  | [`test_conversion.py`](test_conversion.py) | Tests for the process tree → UCM converter. | 7 |
 |  | [`test_decomposition.py`](test_decomposition.py) | Tests for hierarchical decomposition of process trees into multi-map UCMs. | 39 |
 |  | [`test_expression_minimizer.py`](test_expression_minimizer.py) | Unit tests for the boolean simplifier used on data-driven OR-fork conditions. | 17 |
-| | _Discovery & conversion subtotal_ | | **95** |
+|  | [`test_numeric_string_typing.py`](test_numeric_string_typing.py) | Numeric attributes serialised as strings must type as integers. | 25 |
+| | _Discovery & conversion subtotal_ | | **120** |
 | **Resources & performers** | [`test_resources.py`](test_resources.py) | Tests for resource mining and performer binding. | 22 |
-| **Scenario synthesis** | [`test_scenario_synthesis.py`](test_scenario_synthesis.py) | End-to-end smoke tests for variant clustering + scenario synthesis. | 50 |
+| **Scenario synthesis** | [`test_scenario_synthesis.py`](test_scenario_synthesis.py) | End-to-end smoke tests for variant clustering + scenario synthesis. | 59 |
 | **Model families** | [`test_family.py`](test_family.py) | Tests for attribute-based model families. | 49 |
 |  | [`test_family_stats.py`](test_family_stats.py) | Tests for the family statistics layer and the HTML report. | 32 |
 |  | [`test_partition_advisor.py`](test_partition_advisor.py) | Tests for the deterministic partition advisor (docs/ai_insights.md §4.1b). | 8 |
@@ -41,6 +42,6 @@
 |  | [`test_sessions_registry.py`](test_sessions_registry.py) | Tests for the Session Parameter Registry (``web/sessions/registry.py``). | 10 |
 | | _Sessions (save / share / resume) subtotal_ | | **50** |
 | **Progress / infrastructure** | [`test_progress.py`](test_progress.py) | Tests for the progress-reporting layer and the vectorized DataFrame resource miner. | 15 |
-| | **Total** | | **962** |
+| | **Total** | | **996** |
 
 See the repository [`README.md`](../README.md#testing) for how to run the suite, and [`docs/metrics.md`](../docs/metrics.md) for the metric definitions the validation tests enforce.
