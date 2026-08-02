@@ -328,6 +328,18 @@ def extract_case_features(
         )
         return None, {}, [], None
 
+    # By name, not by the frame's column order. ``pm4py.read_xes`` does
+    # not fix that order between runs, and everything downstream
+    # inherits it: the URN variables are created in it, and — the part
+    # that changes the model — so are the one-hot feature columns the
+    # decision tree sees, which is what settles a tie between two
+    # equally-informative splits. Mining the same log twice could
+    # therefore mine two different conditions (on ClaimsPaymentLog, a
+    # branch guarded by one broker in one run and by another in the
+    # next, at identical accuracy). Sorting makes the mined model a
+    # function of the log's content and nothing else.
+    candidate_cols.sort()
+
     # Take the first row per case as the canonical value snapshot.
     per_case = log_df.drop_duplicates(
         subset=case_id_col, keep="first",
@@ -476,8 +488,15 @@ def mine_orfork_condition(
             "install it with `pip install scikit-learn`."
         ) from exc
 
-    # Align features with the labelled cases.
-    labelled_ids = [cid for cid in case_to_branch if cid in features_df.index]
+    # Align features with the labelled cases. Sorted, not in
+    # ``case_to_branch``'s insertion order: that order is whatever the
+    # caller happened to walk the log in, and it would otherwise decide
+    # the order of the training rows — and with them anything the
+    # classifier settles by scan order. The trained tree should depend
+    # on which cases took which branch, not on how they were collected.
+    labelled_ids = sorted(
+        cid for cid in case_to_branch if cid in features_df.index
+    )
     if not labelled_ids:
         return OrForkMiningResult(
             tree_xor_id=tree_xor_id,

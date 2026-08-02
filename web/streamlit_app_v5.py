@@ -782,6 +782,10 @@ def _synthesize(
     if condition_strategy == "data-driven":
         synth_kwargs["log"] = log
         synth_kwargs["decision_tree_max_depth"] = int(decision_tree_max_depth)
+        # Labelling which branch each case took at each XOR is another
+        # replay of the same log on the same tree; hand it the session's
+        # table so it reads the parses clustering has just used.
+        synth_kwargs["parses"] = _parses
     group = _scenarios.synthesize_scenarios(ucm, tree, clustering, **synth_kwargs)
     data_group = group if condition_strategy == "data-driven" else None
 

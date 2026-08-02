@@ -31,6 +31,7 @@ from .visualization.ucm import visualizer as _visualizer
 from .algo.discovery.ucm import algorithm as _discovery
 from .algo.discovery.resources import algorithm as _resources
 from .algo.discovery.variants import clustering as _clustering
+from .algo.discovery.variants import parses as _parses
 from .algo.discovery.scenarios import synthesis as _scenarios
 from .algo.discovery.scenarios.synthesis import (  # noqa: F401
     suggest_loop_iterations,
@@ -357,10 +358,21 @@ synthesize_scenarios` for details.
         decomposition=decomposition,
     )
 
-    # 3. Cluster the log on the tree.
+    # 3. Cluster the log on the tree. Replay is the dominant cost of
+    #    this pipeline, so it happens exactly once, here: clustering
+    #    groups cases by signature and — under ``data-driven`` —
+    #    synthesis labels which branch each case took at each XOR, and
+    #    both questions are answered by the same parses. Normalising
+    #    the log into cases is itself expensive enough to be worth
+    #    doing once, and the table carries that too.
+    parse_table = _parses.build(
+        log, tree, coarsen_loops=coarsen_loops,
+        progress_callback=progress_callback,
+    )
     clustering = _clustering.cluster(
         log, tree, coarsen_loops=coarsen_loops,
         progress_callback=progress_callback,
+        parses=parse_table,
     )
 
     # 4. Synthesize scenarios on the UCM.
@@ -372,6 +384,7 @@ synthesize_scenarios` for details.
         condition_strategy=condition_strategy,
         log=log if condition_strategy == "data-driven" else None,
         decision_tree_max_depth=decision_tree_max_depth,
+        parses=parse_table,
     )
 
     return ucm, clustering

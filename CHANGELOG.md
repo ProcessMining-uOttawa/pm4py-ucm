@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Mining the same log twice now mines the same conditions.** It did
+  not: two runs of identical code on `ClaimsPaymentLog` guarded a branch
+  with `Broker == Citadel_Insurance` in one and
+  `Broker == Greenline_Insurance_Services` in the other, at identical
+  accuracy, and ordered the scenarios' `<initializations>` differently
+  too. `pm4py.read_xes` does not fix the frame's column order between
+  runs, and `extract_case_features` walked it — so the URN variables
+  were created in that order, and so were the one-hot feature columns
+  the decision tree sees, which is what settles a tie between two
+  equally-informative splits. The candidate columns are now ordered by
+  name, and the training rows by case ID rather than by whatever order
+  the caller collected them in. The mined model is a function of the
+  log's content and nothing else. Where a tie previously fell one way or
+  the other by luck, it now falls consistently — so a re-mined model may
+  differ from a particular past run, and will not differ again.
+
+### Changed
+
+- **The data-driven condition strategy walks the log once, not once per
+  case.** Deciding which branch a case took at a given XOR is a question
+  about its activity sequence alone, so every case carrying the same
+  sequence has the same answer. Two things followed from taking that
+  seriously:
+
+  - the labelling pass behind `condition_strategy="data-driven"` replays
+    each **distinct sequence** once and fans the result out over the
+    cases sharing it — on `RoadTraffic`, 231 replays where there were
+    150 370;
+  - it reads the cases from the `ParseTable` clustering already built
+    instead of re-deriving them with its own `groupby`. Turning that
+    561 000-row frame into cases costs ~27 s, more than replaying its
+    distinct sequences does, and it had been happening twice.
+
+  `discover_scenarios` therefore builds one table and gives it to both
+  consumers; `synthesize_scenarios` accepts it via a new `parses=`
+  argument, and the V5 app hands over its session-wide one. As a
+  side-effect the labelling and the clustering can no longer disagree
+  about a case's sequence: both read the same normalised view, where
+  re-grouping the frame took events in row order and clustering took
+  them in timestamp order.
+
+  End-to-end `discover_scenarios(..., condition_strategy="data-driven")`,
+  measured against 0.7.9 with the log's column order pinned so the two
+  runs are comparable:
+
+  | log | noise | before | after |
+  | --- | --- | --- | --- |
+  | `ClaimsPaymentLog` | 0.0 | 6.2 s | 5.4 s |
+  | `ClaimsPaymentLog` | 0.2 | 4.4 s | 2.3 s |
+  | `RoadTraffic` | 0.0 | 113.4 s | 44.4 s |
+  | `RoadTraffic` | 0.2 | 99.3 s | 41.7 s |
+
+  Output is unchanged, and checked to be: on both logs at both noise
+  thresholds the case-to-branch mapping handed to the decision miner is
+  identical case for case (1.18 M labels on `RoadTraffic` alone), as are
+  every mined tree, every arc condition, and the `.jucm` itself.
+
 ## [0.7.9] — 2026-08-01
 
 Executable scenarios you can trust, and frequency counts that conserve —
