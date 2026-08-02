@@ -34,7 +34,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ....objects.ucm.obj import UCM
 from ..variants import choice_signature as _cs
-from ..variants.clustering import ClusteringResult, Variant
+from ..variants import parses as _parses
+from ..variants.clustering import ClusteringResult, Variant, _normalise_log
 from . import decision_mining as _dm
 from . import expression_minimizer as _emin
 
@@ -66,6 +67,7 @@ def synthesize_scenarios(
     condition_strategy: str = "variant",
     log=None,
     decision_tree_max_depth: int = 3,
+    parses: "Optional[_parses.ParseTable]" = None,
 ) -> UCM.ScenarioGroup:
     """Populate ``ucm`` with one scenario per variant in ``clustering``.
 
@@ -141,6 +143,17 @@ def synthesize_scenarios(
         but verbose expressions; ``3`` is a sweet spot that keeps
         the jUCMNav expression readable while still capturing
         the most informative splits.
+    parses
+        Optional
+        :class:`~pm4py_ucm.algo.discovery.variants.parses.ParseTable`
+        from the **same tree**. Only the ``data-driven`` strategy uses
+        it, to label which branch each case took at each outside-loop
+        XOR. That labelling needs the log replayed and normalised into
+        cases, and so did clustering, so passing the table clustering
+        was given (or built) collapses the two into one pass — together
+        those are the dominant cost on a large log. Sequences the table
+        lacks are replayed on demand, so a stale or partial table costs
+        time but never correctness.
 
     Returns
     -------
@@ -304,6 +317,7 @@ def synthesize_scenarios(
                 max_loop_iterations=max_loop_iterations,
                 max_depth=decision_tree_max_depth,
                 plan=loop_plan,
+                parses=parses,
             )
         # else: data-driven but no attributes — leave at default true
         # and rely on the warning already emitted by extract_case_features.
@@ -1464,6 +1478,81 @@ def _representative_value_for_variant(
     return None
 
 
+def _label_cases_by_xor_branch(
+    tree,
+    log,
+    node_ids: Dict[int, int],
+    xor_ids: List[int],
+    parses: "Optional[_parses.ParseTable]" = None,
+) -> Dict[int, Dict[str, int]]:
+    """``{xor_node_id: {case_id: branch_index}}`` — which branch each
+    case took, at every XOR the case decided exactly once.
+
+    A trace's parse is a function of its activity sequence alone, so
+    every case carrying the same sequence gets the same labels. This
+    replays each **distinct sequence** once and fans the result out
+    over the cases sharing it; it used to replay once per *case*, which
+    on Road Traffic meant 150 370 replays where 231 suffice. That was
+    the whole gap between the data-driven strategy's runtime and the
+    variant-driven one's — the latter needs no replay of its own, since
+    clustering already handed it per-variant branch counts drawn from
+    the one pass in :mod:`..variants.parses`.
+
+    ``parses`` is that same table: hand over the one clustering already
+    built and the two share a single replay pass over the log — and its
+    normalised ``[(case_id, [activity, …]), …]`` view as well, which
+    saves walking the log a second time. Turning a 561 000-row frame
+    into cases costs ~27 s, more than replaying its distinct sequences
+    does, so it is worth doing once. Sequences the table does not carry
+    are replayed on demand.
+
+    Reading that view rather than re-deriving it is also what makes the
+    labelling and the clustering agree by construction: both now see
+    each case's events in the order :func:`_normalise_log` puts them in,
+    where re-grouping the frame here used to take them in row order, and
+    the two could disagree on a log whose events are not stored in
+    timestamp order.
+
+    Only ``xor_branch_counts`` and fit/no-fit are read from the parses,
+    and both are independent of the table's ``coarsen_loops`` setting:
+    coarsening changes how a fitting parse is *reported* (``LOOP``
+    against ``LOOP_FINE``), never which parse the search finds or how
+    much budget it spends getting there. A table built for uncoarsened
+    clustering therefore labels identically.
+    """
+    labels: Dict[int, Dict[str, int]] = {x: {} for x in xor_ids}
+    table = parses if parses is not None else _parses.ParseTable(
+        node_ids=node_ids,
+    )
+    cases = (table.cases if table.cases is not None
+             else _normalise_log(log))
+    # ``{sequence: {xor_id: branch}}``, or ``None`` for a sequence that
+    # does not replay — a non-conforming case contributes no label.
+    per_sequence: Dict[Tuple[str, ...], Optional[Dict[int, int]]] = {}
+    for case_id, trace in cases:
+        sequence = tuple(trace)
+        if sequence not in per_sequence:
+            parse = table.ensure(tree, sequence, node_ids=node_ids)
+            per_sequence[sequence] = None if not parse.fits else {
+                # An outside-loop XOR is decided exactly once, so its
+                # counts sum to 1. An inside-loop one is decided per
+                # iteration and sums higher; it is skipped, since
+                # per-iteration choices aren't captured by case
+                # attributes anyway.
+                xor_id: next(iter(counts))
+                for xor_id, counts in parse.xor_branch_counts.items()
+                if sum(counts.values()) == 1
+            }
+        chosen = per_sequence[sequence]
+        if chosen is None:
+            continue
+        for xor_id, branch in chosen.items():
+            # ``_normalise_log`` guarantees string case ids, which is
+            # what ``features_df`` is indexed by.
+            labels[xor_id][case_id] = branch
+    return labels
+
+
 def _emit_orfork_conditions_data_driven(
     ucm: UCM,
     tree,
@@ -1476,6 +1565,7 @@ def _emit_orfork_conditions_data_driven(
     max_loop_iterations: Optional[int],
     max_depth: int = 3,
     plan: Optional["_LoopPlan"] = None,
+    parses: "Optional[_parses.ParseTable]" = None,
 ) -> List["_dm.OrForkMiningResult"]:
     """Replace outside-loop OR-fork conditions with decision-mined
     expressions trained on per-case attributes; keep inside-loop and
@@ -1494,27 +1584,12 @@ def _emit_orfork_conditions_data_driven(
     # branch then deadlocked at runtime.
     ucm_index = _index_ucm_forks_by_tree_id(ucm, node_ids)
 
-    # Replay every case to collect per-XOR branch labels (outside-
-    # loop only — inside-loop XORs are skipped for decision mining
-    # since per-iteration choices aren't captured by case attributes).
-    case_to_branch_per_xor: Dict[int, Dict[str, int]] = {
-        x: {} for x, _, _ in xor_seq
-    }
-    case_id_col = "case:concept:name"
-    for case_id, trace_df in log.groupby(case_id_col):
-        trace = trace_df["concept:name"].tolist()
-        xor_counts: Dict[int, Dict[int, int]] = {}
-        sig = _cs.replay(
-            tree, trace, node_ids=node_ids, coarsen_loops=True,
-            xor_branch_counts=xor_counts,
-        )
-        if sig == _cs.NOFIT:
-            continue
-        for xor_id, branch_counts in xor_counts.items():
-            # Outside-loop XOR: exactly one branch was taken (count 1).
-            if sum(branch_counts.values()) == 1:
-                chosen = next(iter(branch_counts))
-                case_to_branch_per_xor[xor_id][str(case_id)] = chosen
+    # Per-XOR branch labels for every case (outside-loop only —
+    # inside-loop XORs are skipped for decision mining since
+    # per-iteration choices aren't captured by case attributes).
+    case_to_branch_per_xor = _label_cases_by_xor_branch(
+        tree, log, node_ids, [x for x, _, _ in xor_seq], parses=parses,
+    )
 
     mining_results: List["_dm.OrForkMiningResult"] = []
     for of_idx, (tree_xor_id, n_branches, enclosing_loop_id) in enumerate(xor_seq):

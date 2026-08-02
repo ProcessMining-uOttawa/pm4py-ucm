@@ -87,6 +87,34 @@ class ParseTable:
     def get(self, sequence: Iterable[str]) -> Optional[SequenceParse]:
         return self.parses.get(tuple(sequence))
 
+    def ensure(
+        self,
+        tree,
+        sequence: Iterable[str],
+        node_ids: Optional[Dict[int, int]] = None,
+    ) -> SequenceParse:
+        """Return the parse for ``sequence``, replaying it if absent.
+
+        A table handed in by a caller can predate the log it is used
+        against, and a consumer that met a sequence the table does not
+        carry would otherwise have to drop the case. Replay that one
+        straggler and remember it instead.
+
+        ``node_ids`` defaults to :attr:`node_ids`, which is only valid
+        for the very tree the table was built from (see the class
+        docstring) — pass the caller's own map otherwise.
+        """
+        key = tuple(sequence)
+        parse = self.parses.get(key)
+        if parse is None:
+            parse = replay_sequences(
+                tree, [key],
+                node_ids=self.node_ids if node_ids is None else node_ids,
+                coarsen_loops=self.coarsen_loops,
+            ).parses[key]
+            self.parses[key] = parse
+        return parse
+
     def __len__(self) -> int:
         return len(self.parses)
 

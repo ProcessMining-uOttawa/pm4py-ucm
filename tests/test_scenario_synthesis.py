@@ -1644,3 +1644,376 @@ def test_jucm_export_without_scenarios_remains_byte_stable_legacy():
     assert "<scenarioGroups" not in text
     assert "<variables" not in text
     assert "<enumerationTypes" not in text
+
+
+# ---------------------------------------------------------------------------
+# Per-sequence branch labelling for the data-driven strategy
+# ---------------------------------------------------------------------------
+#
+# The data-driven strategy has to know which branch every case took at
+# every XOR. It used to answer that by replaying each case on its own —
+# 150 370 replays on Road Traffic, a log with 231 distinct activity
+# sequences. A trace's parse is a function of its activity sequence
+# alone, so the labelling now replays once per distinct sequence and
+# fans the result out over the cases sharing it. These tests pin that
+# the two ways of asking agree, case for case.
+
+
+def _branch_labels_per_case(tree, log_df, node_ids, xor_ids):
+    """Reference labelling: replay every case separately.
+
+    Deliberately a transcription of what
+    ``_label_cases_by_xor_branch`` did before it learned to work per
+    sequence — the whole point of the comparison is that nothing about
+    the answer changed."""
+    from pm4py_ucm.algo.discovery.variants import choice_signature as _cs_mod
+    labels = {x: {} for x in xor_ids}
+    for case_id, trace_df in log_df.groupby("case:concept:name"):
+        counts = {}
+        sig = _cs_mod.replay(
+            tree, trace_df["concept:name"].tolist(), node_ids=node_ids,
+            coarsen_loops=True, xor_branch_counts=counts,
+        )
+        if sig == _cs_mod.NOFIT:
+            continue
+        for xor_id, branch_counts in counts.items():
+            if sum(branch_counts.values()) == 1:
+                labels[xor_id][str(case_id)] = next(iter(branch_counts))
+    return labels
+
+
+def _labelling_tree_and_log():
+    """A tree exercising every shape the labelling must survive, plus a
+    log carrying many cases per distinct sequence.
+
+    ``X -> (A × B) -> ((P × Q) ⟳ R) -> (Y ∥ Z) -> W``:
+
+    * ``A × B`` is the outside-loop XOR — decided once per case, and
+      the one the decision miner actually trains on;
+    * ``P × Q`` sits inside the loop, so a two-iteration trace decides
+      it twice and it drops out under the ``sum(counts) == 1`` rule;
+    * ``Y ∥ Z`` gives two distinct sequences the same parse shape and
+      drives replay through the parallel projections;
+    * one trace does not replay at all and must contribute no label
+      anywhere.
+
+    Returns ``(tree, log_df, shapes)`` where ``shapes`` is the
+    ``(sequence, attribute_value, n_cases)`` list the log was built
+    from — one entry per distinct sequence."""
+    import pandas as pd
+
+    tree = _seq(
+        _leaf("X"),
+        _xor(_leaf("A"), _leaf("B")),
+        _loop(_xor(_leaf("P"), _leaf("Q")), _leaf("R")),
+        _par(_leaf("Y"), _leaf("Z")),
+        _leaf("W"),
+    )
+    shapes = [
+        (["X", "A", "P", "Y", "Z", "W"], "low", 40),
+        (["X", "A", "P", "Z", "Y", "W"], "low", 25),
+        (["X", "A", "Q", "R", "P", "Y", "Z", "W"], "low", 15),
+        (["X", "B", "Q", "Y", "Z", "W"], "high", 30),
+        (["X", "B", "Q", "R", "Q", "Z", "Y", "W"], "high", 20),
+        (["X", "A", "UNKNOWN", "W"], "low", 5),  # never replays
+    ]
+    rows = []
+    n = 0
+    for trace, category, repeats in shapes:
+        for _ in range(repeats):
+            n += 1
+            for j, act in enumerate(trace):
+                rows.append({
+                    "case:concept:name": f"c{n:04d}",
+                    "concept:name": act,
+                    "time:timestamp": (
+                        pd.Timestamp("2026-01-01") + pd.Timedelta(j, "s")
+                    ),
+                    "Category": category,
+                })
+    return tree, pd.DataFrame(rows), shapes
+
+
+def _ids_and_xors(tree):
+    """``(node_ids, [multi_child_xor_tree_id, ...])`` for ``tree``."""
+    from pm4py_ucm.algo.discovery.variants import choice_signature as _cs_mod
+    node_ids = _cs_mod.assign_node_ids(tree)
+    xor_ids = [
+        x for x, _, _ in _scenarios._collect_multi_child_xors(tree, node_ids)
+    ]
+    return node_ids, xor_ids
+
+
+def _count_replays(monkeypatch):
+    """Count the :func:`choice_signature.replay` calls the parse table
+    makes. Returns a one-element list holding the running count."""
+    from pm4py_ucm.algo.discovery.variants import parses as _parses_mod
+    calls = [0]
+    real = _parses_mod._cs.replay
+
+    def counting(*args, **kwargs):
+        calls[0] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(_parses_mod._cs, "replay", counting)
+    return calls
+
+
+def test_branch_labels_per_sequence_agree_with_per_case(monkeypatch):
+    """The per-sequence labelling returns exactly the mapping per-case
+    replay did — and reaches it with one replay per distinct sequence
+    rather than one per case."""
+    tree, log_df, shapes = _labelling_tree_and_log()
+    node_ids, xor_ids = _ids_and_xors(tree)
+
+    expected = _branch_labels_per_case(tree, log_df, node_ids, xor_ids)
+    calls = _count_replays(monkeypatch)
+    actual = _scenarios._label_cases_by_xor_branch(
+        tree, log_df, node_ids, xor_ids,
+    )
+
+    assert actual == expected
+    assert calls[0] == len(shapes), (
+        f"expected one replay per distinct sequence ({len(shapes)}); "
+        f"got {calls[0]}"
+    )
+    n_cases = log_df["case:concept:name"].nunique()
+    assert len(shapes) < n_cases  # the saving is real on this log
+
+    xor_seq = _scenarios._collect_multi_child_xors(tree, node_ids)
+    outside = next(x for x, _, loop in xor_seq if loop is None)
+    inside = next(x for x, _, loop in xor_seq if loop is not None)
+    n_nofit = next(r for trace, _c, r in shapes if "UNKNOWN" in trace)
+    # Every case that replays is labelled at the outside-loop XOR.
+    assert len(actual[outside]) == n_cases - n_nofit
+    # The inside-loop XOR is labelled only where the loop ran once —
+    # a second iteration decides it twice and it drops out. (The
+    # emitter skips inside-loop XORs anyway; this pins the rule.)
+    assert 0 < len(actual[inside]) < len(actual[outside])
+
+
+def test_branch_labels_reuse_a_shared_parse_table(monkeypatch):
+    """Handed the table clustering already built, the labelling
+    replays nothing at all — and still returns the same mapping."""
+    from pm4py_ucm.algo.discovery.variants import parses as _parses_mod
+
+    tree, log_df, _shapes = _labelling_tree_and_log()
+    node_ids, xor_ids = _ids_and_xors(tree)
+    expected = _branch_labels_per_case(tree, log_df, node_ids, xor_ids)
+
+    table = _parses_mod.build(log_df, tree)
+    _clustering.cluster(log_df, tree, parses=table)
+
+    calls = _count_replays(monkeypatch)
+    actual = _scenarios._label_cases_by_xor_branch(
+        tree, log_df, node_ids, xor_ids, parses=table,
+    )
+    assert actual == expected
+    assert calls[0] == 0, "a complete table should need no further replay"
+
+
+def test_branch_labels_survive_an_uncoarsened_parse_table():
+    """A table built for ``coarsen_loops=False`` clustering labels
+    identically. Coarsening changes how a fitting parse is *reported*,
+    never which parse the search finds — the labelling leans on that to
+    share one table with clustering whatever the caller asked for."""
+    from pm4py_ucm.algo.discovery.variants import parses as _parses_mod
+
+    tree, log_df, _shapes = _labelling_tree_and_log()
+    node_ids, xor_ids = _ids_and_xors(tree)
+    expected = _branch_labels_per_case(tree, log_df, node_ids, xor_ids)
+
+    fine = _parses_mod.build(log_df, tree, coarsen_loops=False)
+    assert fine.coarsen_loops is False
+    actual = _scenarios._label_cases_by_xor_branch(
+        tree, log_df, node_ids, xor_ids, parses=fine,
+    )
+    assert actual == expected
+
+
+def test_branch_labels_replay_what_a_stale_parse_table_lacks(monkeypatch):
+    """A supplied table is a performance hint, not a source of truth:
+    sequences it does not carry are replayed on demand and remembered,
+    never silently dropped."""
+    from pm4py_ucm.algo.discovery.variants import parses as _parses_mod
+
+    tree, log_df, shapes = _labelling_tree_and_log()
+    node_ids, xor_ids = _ids_and_xors(tree)
+    expected = _branch_labels_per_case(tree, log_df, node_ids, xor_ids)
+
+    partial = _parses_mod.build(log_df, tree)
+    dropped = sorted(partial.parses)[:2]
+    for key in dropped:
+        del partial.parses[key]
+
+    calls = _count_replays(monkeypatch)
+    actual = _scenarios._label_cases_by_xor_branch(
+        tree, log_df, node_ids, xor_ids, parses=partial,
+    )
+    assert actual == expected
+    assert calls[0] == len(dropped)
+    assert len(partial.parses) == len(shapes)  # stragglers were remembered
+
+
+def test_data_driven_conditions_identical_with_and_without_parse_table():
+    """End to end: the .jucm the data-driven strategy writes does not
+    depend on whether synthesis was handed a parse table."""
+    import pytest
+    pytest.importorskip("sklearn")
+    from pm4py_ucm.algo.discovery.variants import parses as _parses_mod
+
+    tree, log_df, _shapes = _labelling_tree_and_log()
+
+    def synth(parses):
+        clustering = _clustering.cluster(log_df, tree, parses=parses)
+        ucm = pm4py_ucm.convert_to_ucm(tree)
+        _scenarios.synthesize_scenarios(
+            ucm, tree, clustering,
+            condition_strategy="data-driven", log=log_df,
+            emit_conditions=True, parses=parses,
+        )
+        text = _jucm_exporter.serialize_to_string(ucm)
+        # The header stamps wall-clock time, so two serializations
+        # either side of a second boundary differ for no reason.
+        return re.sub(r' (?:created|modified)="[^"]*"', "", text)
+
+    assert synth(None) == synth(_parses_mod.build(log_df, tree))
+
+
+def test_branch_labels_need_no_dataframe_when_the_table_carries_the_cases():
+    """The labelling reads the table's normalised case view rather than
+    re-grouping the frame — so a complete table is all it needs.
+
+    Re-deriving each case's sequence with a pandas groupby cost 46 s of
+    an 80 s Road Traffic run, doing again what building the table had
+    already done."""
+    from pm4py_ucm.algo.discovery.variants import parses as _parses_mod
+
+    tree, log_df, _shapes = _labelling_tree_and_log()
+    node_ids, xor_ids = _ids_and_xors(tree)
+    expected = _branch_labels_per_case(tree, log_df, node_ids, xor_ids)
+
+    table = _parses_mod.build(log_df, tree)
+    assert table.cases is not None
+    actual = _scenarios._label_cases_by_xor_branch(
+        tree, None, node_ids, xor_ids, parses=table,
+    )
+    assert actual == expected
+
+
+def test_branch_labels_normalise_the_log_when_no_case_view_is_supplied():
+    """Without a table — or with one built by ``replay_sequences``,
+    which carries parses but no cases — the log is normalised the same
+    way clustering normalises it, so the two agree on what each case's
+    sequence is."""
+    from pm4py_ucm.algo.discovery.variants import parses as _parses_mod
+
+    tree, log_df, _shapes = _labelling_tree_and_log()
+    node_ids, xor_ids = _ids_and_xors(tree)
+    expected = _branch_labels_per_case(tree, log_df, node_ids, xor_ids)
+
+    assert _scenarios._label_cases_by_xor_branch(
+        tree, log_df, node_ids, xor_ids,
+    ) == expected
+
+    cases_only = _parses_mod.replay_sequences(
+        tree, [seq for _cid, seq in _parses_mod.build(log_df, tree).cases],
+    )
+    assert cases_only.cases is None
+    assert _scenarios._label_cases_by_xor_branch(
+        tree, log_df, node_ids, xor_ids, parses=cases_only,
+    ) == expected
+
+
+# ---------------------------------------------------------------------------
+# Reproducibility of the mined conditions
+# ---------------------------------------------------------------------------
+#
+# Mining the same log twice used to be able to produce two different
+# models. ``pm4py.read_xes`` does not fix the frame's column order
+# between runs, and the one-hot feature columns the decision tree sees
+# were built in that order — which is what settles a tie between two
+# equally-informative splits. On ClaimsPaymentLog one run guarded a
+# branch with ``Broker == Citadel_Insurance`` and the next with
+# ``Broker == Greenline_Insurance_Services``, at identical accuracy.
+
+
+def _tied_attribute_log():
+    """A log whose branch is predicted *perfectly* by either of two
+    attributes, so which one the tree splits on is settled purely by
+    feature order — the tie the old code let the column order break."""
+    import pandas as pd
+
+    tree = _seq(_leaf("X"), _xor(_leaf("A"), _leaf("B")), _leaf("C"))
+    rows = []
+    for i in range(40):
+        takes_a = i % 2 == 0
+        for j, act in enumerate(["X", "A" if takes_a else "B", "C"]):
+            rows.append({
+                "case:concept:name": f"c{i:03d}",
+                "concept:name": act,
+                "time:timestamp": pd.Timestamp("2026-01-01") + pd.Timedelta(j, "s"),
+                # Two attributes, each on its own a perfect predictor.
+                "Alpha": "left" if takes_a else "right",
+                "Zeta": "up" if takes_a else "down",
+            })
+    return tree, pd.DataFrame(rows)
+
+
+def _mine(tree, log_df):
+    """Mine the log's OR-fork conditions; return the per-branch
+    expressions and the order the URN variables were created in."""
+    clustering = _clustering.cluster(log_df, tree)
+    ucm = pm4py_ucm.convert_to_ucm(tree)
+    group = _scenarios.synthesize_scenarios(
+        ucm, tree, clustering,
+        condition_strategy="data-driven", log=log_df, emit_conditions=True,
+    )
+    results = {r.tree_xor_id: dict(r.per_branch_expression)
+               for r in group._mining_results}
+    return results, [v.name for v in ucm.variables]
+
+
+def test_mined_conditions_do_not_depend_on_the_frames_column_order():
+    """Reordering the log's columns must not change the mined model."""
+    import pytest
+    pytest.importorskip("sklearn")
+
+    tree, log_df = _tied_attribute_log()
+    forward, vars_forward = _mine(tree, log_df)
+    reversed_, vars_reversed = _mine(
+        tree, log_df.reindex(columns=list(reversed(log_df.columns))),
+    )
+
+    assert forward == reversed_
+    assert vars_forward == vars_reversed
+    # And the tie really is a tie — both attributes predict perfectly,
+    # so nothing but the ordering rule decides which one is used.
+    exprs = " ".join(e for r in forward.values() for e in r.values())
+    assert "Alpha" in exprs and "Zeta" not in exprs, (
+        f"expected the tie broken by name; got {exprs}"
+    )
+
+
+def test_mined_conditions_do_not_depend_on_case_iteration_order():
+    """The trained tree depends on which cases took which branch, not
+    on the order the caller collected them in."""
+    import pytest
+    pytest.importorskip("sklearn")
+    from pm4py_ucm.algo.discovery.scenarios import decision_mining as _dm_mod
+
+    tree, log_df = _tied_attribute_log()
+    features_df, specs, columns, _raw = _dm_mod.extract_case_features(log_df)
+    node_ids, xor_ids = _ids_and_xors(tree)
+    labels = _scenarios._label_cases_by_xor_branch(
+        tree, log_df, node_ids, xor_ids,
+    )[xor_ids[0]]
+
+    def mine(case_to_branch):
+        return _dm_mod.mine_orfork_condition(
+            features_df, specs, columns, case_to_branch, xor_ids[0], 2,
+        ).per_branch_expression
+
+    forward = mine(dict(labels))
+    backward = mine({k: labels[k] for k in reversed(list(labels))})
+    assert forward == backward

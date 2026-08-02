@@ -286,11 +286,7 @@ def cluster(
         if parse is None:
             # A caller-supplied table that predates this log; replay the
             # straggler rather than silently dropping the case.
-            parse = _parses.replay_sequences(
-                tree, [seq_key], node_ids=node_ids,
-                coarsen_loops=coarsen_loops,
-            ).parses[seq_key]
-            table.parses[seq_key] = parse
+            parse = table.ensure(tree, seq_key, node_ids=node_ids)
         signature = parse.signature
         trace_loop_iters = parse.loop_iter_max
         trace_xor_counts = parse.xor_branch_counts
