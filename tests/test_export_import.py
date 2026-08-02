@@ -502,5 +502,115 @@ class DtdGuardTests(unittest.TestCase):
         self.assertIsNotNone(parse_string(xml))
 
 
+class ScenarioImportTests(unittest.TestCase):
+    """The importer reads ``<ucmspec>`` — variables and scenarios.
+
+    It used to skip it entirely ("the round-trip is UCM-only"), so a
+    model read back had no scenarios at all. Anything consuming them was
+    handed an empty list, and could not tell "nothing to check" apart
+    from "checked, and found nothing wrong".
+    """
+
+    def _model(self):
+        """A UCM with one scenario over one enum and one integer variable."""
+        u = UCM(name="Scenarios")
+        m = u.add_map(name="main")
+        sp = m.add_node(UCM.StartPoint(name="start"))
+        ep = m.add_node(UCM.EndPoint(name="end"))
+        other = m.add_node(UCM.EndPoint(name="aborted"))
+        fork = m.add_node(UCM.OrFork(name="Choice"))
+        m.add_connection(sp, fork)
+        et = u.get_or_add_enumeration_type("VariantId", values=["v1", "v2"])
+        variant = u.get_or_add_variable(
+            "variant_id", type="enumeration", enumeration_type=et)
+        counter = u.get_or_add_variable("Loop_Assess", type="integer")
+        m.add_connection(fork, ep, condition=UCM.Condition(
+            label="take", expression="variant_id == v1"))
+        m.add_connection(fork, other, condition=UCM.Condition(
+            label="skip", expression="variant_id == v2"))
+        group = u.add_scenario_group(name="MinedScenarios")
+        sc = UCM.ScenarioDef(name="v1_flow", description="covers 3 cases")
+        sc._owner = u
+        sc.add_initialization(variant, "v1")
+        sc.add_initialization(counter, "4")
+        sc.add_start_point(sp, enabled=True)
+        sc.add_end_point(ep, enabled=True, mandatory=True)
+        sc.add_end_point(other, enabled=False, mandatory=False)
+        group.add_scenario(sc)
+        return u
+
+    def test_scenarios_survive_a_round_trip(self):
+        back = parse_string(serialize_to_string(self._model()))
+        self.assertEqual(len(back.scenario_groups), 1)
+        group = back.scenario_groups[0]
+        self.assertEqual(group.name, "MinedScenarios")
+        self.assertEqual(len(group.scenarios), 1)
+        sc = group.scenarios[0]
+        self.assertEqual(sc.name, "v1_flow")
+        self.assertEqual(sc.description, "covers 3 cases")
+
+    def test_initializations_keep_their_variable_and_value(self):
+        back = parse_string(serialize_to_string(self._model()))
+        sc = back.scenario_groups[0].scenarios[0]
+        got = {i.variable.name: i.value for i in sc.initializations}
+        self.assertEqual(got, {"variant_id": "v1", "Loop_Assess": "4"})
+
+    def test_variables_and_enumeration_types_come_back(self):
+        back = parse_string(serialize_to_string(self._model()))
+        by_name = {v.name: v for v in back.variables}
+        self.assertEqual(set(by_name), {"variant_id", "Loop_Assess"})
+        self.assertEqual(by_name["Loop_Assess"].type, "integer")
+        self.assertEqual(by_name["variant_id"].type, "enumeration")
+        # The enum variable still points at its type, not a fresh one.
+        et = by_name["variant_id"].enumeration_type
+        self.assertIsNotNone(et)
+        self.assertEqual(et.name, "VariantId")
+        self.assertEqual(list(et.values), ["v1", "v2"])
+        self.assertIn(et, back.enumeration_types)
+
+    def test_start_and_end_points_resolve_to_the_right_nodes(self):
+        back = parse_string(serialize_to_string(self._model()))
+        sc = back.scenario_groups[0].scenarios[0]
+        self.assertEqual([sp.start_point.name for sp in sc.start_points],
+                         ["start"])
+        self.assertEqual([ep.end_point.name for ep in sc.end_points],
+                         ["end", "aborted"])
+        # ...and the flags that decide whether a miss is an error.
+        flags = {ep.end_point.name: (ep.enabled, ep.mandatory)
+                 for ep in sc.end_points}
+        self.assertEqual(flags, {"end": (True, True),
+                                 "aborted": (False, False)})
+
+    def test_round_trip_does_not_consume_ids(self):
+        """Re-importing must adopt the file's ids, not allocate fresh ones.
+
+        Reserving a parsed id without assigning it leaves the object with
+        a newly minted id *and* the parsed one burnt, so ``nextGlobalID``
+        creeps upward on every round-trip and two consecutive exports
+        differ.
+        """
+        xml1 = serialize_to_string(self._model())
+        xml2 = serialize_to_string(parse_string(xml1))
+        grab = lambda s: re.search(r'nextGlobalID="(\d+)"', s).group(1)
+        self.assertEqual(grab(xml1), grab(xml2))
+
+    def test_reference_fixture_scenarios_are_imported(self):
+        here = os.path.dirname(__file__)
+        ref = os.path.join(here, "fixtures", "SimpleExample.jucm")
+        if not os.path.exists(ref):
+            self.skipTest(f"reference fixture not present: {ref}")
+        ucm = read_ucm(ref)
+        self.assertEqual(len(ucm.scenario_groups), 1)
+        self.assertEqual([s.name for s in ucm.scenario_groups[0].scenarios],
+                         ["ScenarioDef6"])
+
+    def test_model_without_a_ucmspec_still_imports(self):
+        xml = serialize_to_string(self._model())
+        stripped = re.sub(r"<ucmspec>.*?</ucmspec>", "", xml, flags=re.S)
+        back = parse_string(stripped)
+        self.assertEqual(back.scenario_groups, [])
+        self.assertTrue(back.maps)          # the UCM half is unaffected
+
+
 if __name__ == "__main__":
     unittest.main()

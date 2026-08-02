@@ -342,7 +342,102 @@ def _parse_root(root: ET.Element) -> UCM:
         if binding is not None:
             stub.bindings.append(binding)
 
+    # ---- Pass 3: ucmspec — variables and scenario definitions --------
+    # Read after the maps, since a scenario's start and end points are
+    # references to path nodes that must already exist.
+    _parse_ucmspec(root, ucm, by_id, by_xpath)
+
     return ucm
+
+
+def _parse_ucmspec(root, ucm: UCM, by_id, by_xpath) -> None:
+    """Parse ``<ucmspec>``: enumeration types, variables, scenarios.
+
+    Without this a model reads back with no scenarios at all, and
+    anything that consumes them — scenario traversal above all — is
+    handed an empty list and cannot tell "nothing to check" apart from
+    "checked, and found nothing wrong".
+    """
+    spec = root.find("ucmspec")
+    if spec is None:
+        return
+
+    for et_el in spec.findall("enumerationTypes"):
+        raw = et_el.get("values", "")
+        values = [v.strip() for v in raw.split(",") if v.strip()]
+        et = ucm.get_or_add_enumeration_type(
+            _unwrap_name(et_el.get("name", "")), values=values,
+        )
+        et_id = _int_or_none(et_el.get("id"))
+        if et_id is not None:
+            # Adopt the file's id rather than the one just allocated,
+            # otherwise every round-trip burns an id and nextGlobalID
+            # creeps upward.
+            et._id = et_id
+            ucm._counter.reserve(et_id)
+            by_id[et_id] = et
+
+    for v_el in spec.findall("variables"):
+        enum_type = None
+        ref = v_el.get("enumerationType")
+        if ref:
+            cand = _resolve(by_id, by_xpath, ref)
+            if isinstance(cand, UCM.EnumerationType):
+                enum_type = cand
+        var = ucm.get_or_add_variable(
+            _unwrap_name(v_el.get("name", "")),
+            type=v_el.get("type", "boolean"),
+            enumeration_type=enum_type,
+        )
+        v_id = _int_or_none(v_el.get("id"))
+        if v_id is not None:
+            var._id = v_id
+            ucm._counter.reserve(v_id)
+            by_id[v_id] = var
+
+    for g_el in spec.findall("scenarioGroups"):
+        group = ucm.add_scenario_group(
+            name=_unwrap_name(g_el.get("name", "")))
+        g_id = _int_or_none(g_el.get("id"))
+        if g_id is not None:
+            group._id = g_id
+            ucm._counter.reserve(g_id)
+            by_id[g_id] = group
+        for s_el in g_el.findall("scenarios"):
+            scenario = UCM.ScenarioDef(
+                id=_int_or_none(s_el.get("id")),
+                name=_unwrap_name(s_el.get("name", "")),
+                description=s_el.get("description", ""),
+            )
+            scenario._owner = ucm
+            if scenario._id is not None:
+                ucm._counter.reserve(scenario._id)
+            for i_el in s_el.findall("initializations"):
+                var = _resolve(by_id, by_xpath, i_el.get("variable", ""))
+                if isinstance(var, UCM.Variable):
+                    scenario.add_initialization(var, i_el.get("value", ""))
+            for sp_el in s_el.findall("startPoints"):
+                sp = _resolve(by_id, by_xpath, sp_el.get("startPoint", ""))
+                if isinstance(sp, UCM.StartPoint):
+                    scenario.add_start_point(
+                        sp,
+                        enabled=sp_el.get("enabled", "true").lower() == "true",
+                    )
+            for ep_el in s_el.findall("endPoints"):
+                ep = _resolve(by_id, by_xpath, ep_el.get("endPoint", ""))
+                if isinstance(ep, UCM.EndPoint):
+                    scenario.add_end_point(
+                        ep,
+                        enabled=ep_el.get("enabled", "true").lower() == "true",
+                        # ``mandatory`` is present only when true — both
+                        # jUCMNav and our exporter omit it otherwise — so
+                        # a missing attribute means False, and defaulting
+                        # it to True would silently promote optional end
+                        # points into ones whose absence is an error.
+                        mandatory=(
+                            ep_el.get("mandatory", "false").lower() == "true"),
+                    )
+            group.add_scenario(scenario)
 
 
 def _build_plugin_binding(
