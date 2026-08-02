@@ -1469,8 +1469,16 @@ def _representative_value_for_variant(
         return "true" if _dm._boolean_value(mode.iloc[0]) else "false"
     if spec.type == "integer":
         # Numeric — use median, apply scale factor, round to int.
+        # The source column may be a coerced string column, so parse
+        # with ``to_numeric``: an unparseable straggler drops out of
+        # the median instead of costing the variant its initialisation.
         try:
-            median = float(series.astype(float).median())
+            import pandas as pd
+
+            numeric = pd.to_numeric(series, errors="coerce").dropna()
+            if numeric.empty:
+                return None
+            median = float(numeric.median())
         except (TypeError, ValueError):
             return None
         scaled = int(round(median * spec.scale_factor))

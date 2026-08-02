@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ..scenarios.decision_mining import (
+    DEFAULT_NUMERIC_COERCION_THRESHOLD,
     AttributeSpec,
     _sanitise_jucmnav_name,
     extract_case_features,
@@ -190,6 +191,7 @@ def detect_case_attributes(
     log_df,
     case_id_col: str = "case:concept:name",
     max_enum_cardinality: int = 40,
+    numeric_coercion_threshold: float = DEFAULT_NUMERIC_COERCION_THRESHOLD,
 ):
     """Detect the case-constant attributes of ``log_df`` usable as
     partition axes.
@@ -211,6 +213,7 @@ def detect_case_attributes(
         log_df,
         case_id_col=case_id_col,
         max_enum_cardinality=max_enum_cardinality,
+        numeric_coercion_threshold=numeric_coercion_threshold,
     )
     return specs or {}, per_case_raw
 
@@ -493,6 +496,7 @@ def partition_log(
     other_bucket: bool = True,
     unknown_bucket: bool = True,
     max_enum_cardinality: int = 40,
+    numeric_coercion_threshold: float = DEFAULT_NUMERIC_COERCION_THRESHOLD,
     include_values: Optional[Dict[str, Sequence[str]]] = None,
     ignore_value_case: bool = True,
 ) -> Partition:
@@ -519,6 +523,14 @@ def partition_log(
         Integer attributes are partitioned into ranges: ``bins``
         quantile bins by default, or the explicit ascending edge list
         from ``bin_edges[attribute_name]`` (n+1 edges → n ranges).
+        Note that a column of numbers serialised as strings is an
+        integer axis, not an enumeration one, so it is binned into
+        ranges — pass ``numeric_coercion_threshold`` above ``1.0`` to
+        keep such a column categorical.
+    numeric_coercion_threshold
+        Share of a string column's non-null values that must parse as
+        numbers for it to be typed as a numeric attribute. See
+        :func:`~pm4py_ucm.algo.discovery.scenarios.decision_mining.extract_case_features`.
     unknown_bucket
         Cases with a missing attribute value go to an ``Unknown``
         bucket when ``True``; otherwise they are dropped (counted in
@@ -556,6 +568,7 @@ def partition_log(
     specs, per_case_raw = detect_case_attributes(
         log_df, case_id_col=case_id_col,
         max_enum_cardinality=max_enum_cardinality,
+        numeric_coercion_threshold=numeric_coercion_threshold,
     )
     if not specs:
         raise ValueError(

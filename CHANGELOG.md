@@ -9,6 +9,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A numeric case attribute serialised as a string is now typed as a
+  number, not discarded as a high-cardinality string.** Attribute typing
+  in `extract_case_features` consulted the column's *dtype*, so a log
+  that wrote its amounts as text fell through to the string branch and,
+  if it carried more distinct values than `max_enum_cardinality`, was
+  dropped. On `BPI_Challenge_2012.xes` that column is
+  `case:AMOUNT_REQ` — perfectly case-constant, 631 distinct values, and
+  exactly the variable one would expect to govern a loan application.
+  Dropping it left the log with no usable attribute at all, and
+  data-driven OR-fork mining abandoned it with "No case-constant
+  attributes met the type / cardinality filters".
+
+  Object columns are now coerced with `pandas.to_numeric` before the
+  enumeration branch is considered, and typed as numerics when at least
+  `numeric_coercion_threshold` of their non-null values parse (default
+  `0.99`, exposed on `extract_case_features`, `detect_case_attributes`,
+  and `partition_log`). Values that do not parse become `NaN`, which the
+  feature encoder already tolerates, so a mostly-numeric column with a
+  few `"N/A"` markers stays usable instead of being dropped whole.
+
+  The threshold is strict because the case it guards against is a
+  *structured* non-numeric minority rather than a stray marker. A
+  clinical log we type records treatment as `"1"`/`"2"`/`"3"` with
+  combination therapies written `"2,3"` and `"1,2,3"` — 97.7% numeric.
+  Coercing it reclassified six patients' combination therapy as missing
+  data, which in a family partition files them under `Unknown` instead
+  of giving them their own cell. Columns whose only non-numeric value is
+  a single `"na"` or `"?"` sit at 99.6% and stay numeric, as intended.
+
+  Columns naming an *entity* rather than a quantity are never coerced,
+  however numeric they look: `org:resource`, `org:group`, `org:role`,
+  and `concept:instance` (see `IDENTIFIER_COLUMNS`, matched after
+  stripping any `case:` prefix, case-insensitively). Their digits are
+  labels, so ordering them or splitting on `org_resource <= 250` is
+  meaningless; on `RoadTraffic.xes`, coercion turned `org:resource` into
+  a four-range family axis. They remain enumerations when their
+  cardinality is low enough. The exclusion governs only the coercion
+  path, so a natively-numeric column of the same name types as it always
+  did.
+
+  Typing therefore follows the values rather than the declared type, and
+  **cardinality no longer overrides it**: a string column of three
+  distinct numbers is an `integer`, exactly as an `int64` column of the
+  same three values already was. A column that used to classify as a
+  low-cardinality enumeration *and* is cleanly numeric now classifies as
+  an integer — which changes its guards from `attr == V` equalities to
+  `attr <= T` / `attr > T` comparisons, and, in `partition_log`, changes
+  such an axis from discrete values to binned ranges when it holds more
+  distinct values than the requested `bins`. A saved Web-tool family
+  configuration that filtered on the old enumeration labels will no
+  longer match: `include_values` naming values that are now range labels
+  silently narrows the partition, or raises if it selects none of them.
+  Pass `numeric_coercion_threshold` above `1.0` to restore dtype-only
+  typing. Genuinely non-numeric strings are unaffected.
+
+  Across the seven logs of our evaluation the net effect is now purely
+  additive: `case:AMOUNT_REQ` on BPI 2012, and `Household factor score`
+  and `Smoking History` on a clinical log — each previously dropped
+  whole, the latter two over a single `"na"` / `"?"`. No column on any
+  of the seven changes away from the type it already had.
+
 - **Mining the same log twice now mines the same conditions.** It did
   not: two runs of identical code on `ClaimsPaymentLog` guarded a branch
   with `Broker == Citadel_Insurance` in one and
