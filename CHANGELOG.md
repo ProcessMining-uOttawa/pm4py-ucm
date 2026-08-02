@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.10] — 2026-08-01
+
+Two changes to the data-driven path, one about speed and reproducibility
+and one about what the miner can see at all. Together they mean a log
+whose decisive attribute is a number written as text — BPI Challenge
+2012's `case:AMOUNT_REQ` is the canonical case — now yields a model
+instead of a warning, and mining the same log twice yields the same
+model.
+
+**If you have saved projects or exported scripts**, one migration note
+applies, and only if your log has a case attribute that is numeric but
+serialised as a string *and* has few enough distinct values to have been
+an enumeration before. Such a column is now an `integer`, so a family
+axis over it is binned into ranges rather than listing discrete values,
+and the `include_values` picks stored in a saved project (or emitted as
+`FAMILY_INCLUDE_VALUES` into an exported script or notebook) name labels
+that no longer exist on that axis. The consequence is a partition
+narrower than the one you saved, or — when none of the stored picks
+match — a `ValueError` listing the values now available. Re-pick the
+values in the Family view and save again. No column in any log we test
+against is affected; `numeric_coercion_threshold` above `1.0` restores
+the previous typing wholesale if you need the old behaviour while you
+migrate.
+
 ### Fixed
 
 - **A numeric case attribute serialised as a string is now typed as a

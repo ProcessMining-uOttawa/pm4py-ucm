@@ -47,6 +47,7 @@ AREAS: dict[str, list[str]] = {
         "test_decomposition.py",
         "test_choice_signature.py",
         "test_boolean_detection.py",
+        "test_numeric_string_typing.py",
         "test_expression_minimizer.py",
     ],
     "Resources & performers": [

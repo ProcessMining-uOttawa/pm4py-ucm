@@ -241,7 +241,11 @@ everywhere else.
 
 **Only numeric attributes.** `attr(name)` reads a *numeric* case
 attribute; a categorical one is filtered with the widget's Filter row.
-This keeps the whole grammar single-typed.
+This keeps the whole grammar single-typed. Numeric here means the
+*values* are numbers, not the column's dtype — an amount the log
+serialises as text counts, and so is available to `attr()`. Identifier
+columns (`org:resource` and friends) never do, however numeric they
+look.
 
 **Result type** is inferred from the AST — a comparison, a logical, or a
 bare `contains()` is a 0/1 indicator → `percent`; anything mentioning a
