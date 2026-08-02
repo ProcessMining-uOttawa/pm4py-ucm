@@ -20,6 +20,16 @@ this module:
    * ``enumeration`` — for low-cardinality strings (≤
      ``max_enum_cardinality``).
 
+   Numeric typing is decided by **content, not dtype**: an object
+   column whose values are numbers serialised as strings is coerced
+   and typed as a numeric, exactly as the same values would be had
+   the log carried them as ``int64``. XES exports routinely
+   stringify the one attribute that governs the process — BPI
+   Challenge 2012 ships ``case:AMOUNT_REQ`` (631 distinct values,
+   perfectly case-constant) as ``str``, which without coercion is
+   discarded as a high-cardinality string and leaves the log with
+   nothing to mine.
+
    High-cardinality strings, timestamps, dates and constants are
    dropped.
 3. Trains a small ``sklearn.DecisionTreeClassifier`` per outside-
@@ -49,6 +59,36 @@ import warnings
 #: timestamps, and high-cardinality strings). Synthesizer treats it
 #: as "abandon data-driven mining with a warning".
 NO_USEFUL_ATTRIBUTES = "NO_USEFUL_ATTRIBUTES"
+
+#: Default share of a string column's non-null values that must parse
+#: as numbers before the column is typed as a numeric rather than as a
+#: string. Deliberately strict: a column that is *mostly* numbers with
+#: a handful of ``"N/A"`` / ``"unknown"`` markers is still a numeric
+#: attribute (the stragglers become NaN, which the feature encoder
+#: already tolerates), but a genuinely categorical column that happens
+#: to contain a few numeric labels must stay an enumeration.
+#:
+#: The line sits at 0.99 because the failure it guards against is a
+#: *structured* minority, not a stray marker. A clinical log we type
+#: records treatment codes as ``"1"``/``"2"``/``"3"`` with combination
+#: therapies written ``"2,3"`` and ``"1,2,3"`` — 97.7% numeric, and
+#: coercing it would silently reclassify those combinations as missing
+#: data. Columns whose only non-numeric value is one ``"na"`` or one
+#: ``"?"`` sit at 99.6% and remain numeric, which is what one wants.
+DEFAULT_NUMERIC_COERCION_THRESHOLD = 0.99
+
+#: Columns never coerced to a number, however numeric their values look.
+#: These name *entities*, so their values are labels that happen to be
+#: digits: ordering them or splitting them on a threshold
+#: (``org_resource <= 250``) is meaningless. They are still perfectly
+#: good enumerations when their cardinality is low enough — the
+#: exclusion only keeps them off the numeric path, which is exactly how
+#: they behaved before numeric coercion existed. Matched after stripping
+#: any ``case:`` prefix, case-insensitively. Extend for logs with
+#: site-specific identifier columns.
+IDENTIFIER_COLUMNS = frozenset({
+    "org:resource", "org:group", "org:role", "concept:instance",
+})
 
 
 def _boolean_value(v):
@@ -267,15 +307,65 @@ def _infer_scale_factor(values: Sequence[float], max_power: int = 6) -> int:
     return 10 ** min(max_digits, max_power)
 
 
+def _is_identifier_column(col: str) -> bool:
+    """Whether ``col`` names an entity rather than a quantity — see
+    :data:`IDENTIFIER_COLUMNS`."""
+    name = col[len("case:"):] if col.startswith("case:") else col
+    return name.strip().casefold() in IDENTIFIER_COLUMNS
+
+
+def _numeric_view(series, min_convertible_fraction: float):
+    """Return ``series`` as numbers, or ``None`` if it isn't numeric.
+
+    Already-numeric columns pass straight through. Object/string
+    columns are coerced with :func:`pandas.to_numeric`; the coercion
+    is accepted only when at least ``min_convertible_fraction`` of the
+    **non-null** values parse. Values that don't parse become NaN in
+    the returned series, so a mostly-numeric column with a few
+    ``"N/A"`` markers stays usable rather than being dropped whole.
+
+    Returning ``None`` (rather than a half-empty numeric column) is
+    what preserves the existing behaviour for genuinely non-numeric
+    strings: the caller falls through to the enumeration /
+    high-cardinality branch exactly as before."""
+    import pandas as pd
+
+    non_null = series.dropna()
+    if non_null.empty:
+        return None
+    try:
+        coerced_non_null = pd.to_numeric(non_null, errors="coerce")
+    except (TypeError, ValueError):
+        # Ragged object columns (lists, dicts, mixed unorderables) —
+        # not numeric, and not our problem to salvage.
+        return None
+    converted = float(coerced_non_null.notna().sum()) / float(len(non_null))
+    if converted < min_convertible_fraction:
+        return None
+    return pd.to_numeric(series, errors="coerce")
+
+
 def extract_case_features(
     log_df,
     case_id_col: str = "case:concept:name",
     constancy_threshold: float = 0.99,
     max_enum_cardinality: int = 20,
+    numeric_coercion_threshold: float = DEFAULT_NUMERIC_COERCION_THRESHOLD,
 ) -> Tuple[Any, Dict[str, AttributeSpec], List[str], Any]:
     """Pull every case-constant attribute out of ``log_df``,
     classify each into a jUCMNav-compatible type, and return a
     per-case feature DataFrame ready for sklearn.
+
+    Parameters
+    ----------
+    numeric_coercion_threshold
+        Share of a string column's non-null values that must parse as
+        numbers for the column to be typed as a numeric instead of a
+        string (default :data:`DEFAULT_NUMERIC_COERCION_THRESHOLD`).
+        Set to ``1.0`` to demand that every value parses; set above
+        ``1.0`` to disable coercion entirely and restore dtype-only
+        numeric typing. Columns named in :data:`IDENTIFIER_COLUMNS` are
+        never coerced whatever this is set to.
 
     Returns
     -------
@@ -369,9 +459,24 @@ def extract_case_features(
             )
             attribute_specs[spec.jucmnav_name] = spec
             continue
-        # Numerics: integer-valued or floats.
+        # Numerics: integer-valued or floats — by content, not dtype.
+        # A string column of numbers is the same attribute as the
+        # int64 column carrying those numbers, and gets the same
+        # treatment (including the float scale factor). Cardinality
+        # does not enter into it: an int64 column with three distinct
+        # values is already an integer here, never an enumeration, so
+        # a *string* column of three distinct numbers must be too.
         if str(series.dtype).startswith(("int", "float")):
-            scale = _infer_scale_factor(non_null.tolist())
+            # Already a number: typed as one before coercion existed, and
+            # still is — the identifier exclusion below governs only the
+            # coercion path, so no column changes type because of it.
+            numeric = series
+        elif _is_identifier_column(col):
+            numeric = None
+        else:
+            numeric = _numeric_view(series, numeric_coercion_threshold)
+        if numeric is not None:
+            scale = _infer_scale_factor(numeric.dropna().tolist())
             spec = AttributeSpec(
                 source_name=col,
                 jucmnav_name=_sanitise_jucmnav_name(col),
@@ -430,7 +535,11 @@ def extract_case_features(
             ).astype("float")
             feature_columns.append((jname, jname))
         elif spec.type == "integer":
-            encoded[jname] = (series.astype("float") * spec.scale_factor).round()
+            # ``to_numeric`` rather than ``astype`` — the column may be
+            # a coerced string column, where a stray unparseable value
+            # must become NaN (the tree fills those) instead of raising.
+            numeric = pd.to_numeric(series, errors="coerce")
+            encoded[jname] = (numeric.astype("float") * spec.scale_factor).round()
             feature_columns.append((jname, jname))
         elif spec.type == "enumeration":
             # spec.enum_values is sanitised; compare against the
