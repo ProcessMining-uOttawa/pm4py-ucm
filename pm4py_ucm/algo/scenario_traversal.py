@@ -21,7 +21,10 @@ jUCMNav reports in its Problems view:
 
 * ``blocked_and_join`` — an AND-join that received some but not all of
   its arms and never fired;
-* ``infinite_loop`` — traversal exceeded its step budget;
+* ``infinite_loop`` — one element was entered as many times as
+  jUCMNav's *maximum hit count* preference allows. That ceiling is a
+  setting, not a property of the model, so see
+  :func:`required_max_hit_count` before concluding a model is at fault;
 * ``end_point_not_reached`` — a mandatory end point never got a token;
 * ``no_branch_enabled`` / ``multiple_branches_enabled`` — an OR-fork
   whose guards do not select exactly one branch.
@@ -150,6 +153,27 @@ def _coerce(raw: str):
     return s
 
 
+def _default_value(variable) -> Any:
+    """The value a declared variable holds before any initialization.
+
+    Mirrors ``UcmEnvironment.refresh``, which registers every declared
+    variable with a default the moment the environment is built:
+    ``registerBoolean(name)`` → ``false``, ``registerInteger(name)`` →
+    ``0``, and ``registerEnumerationInstance(type, name)`` → the
+    enumeration's *first* value. Consequently a guard may reference an
+    attribute no scenario initializes and still evaluate — which is why
+    such a guard is not, by itself, a defect.
+    """
+    kind = (getattr(variable, "type", "") or "").strip().lower()
+    if kind == "integer":
+        return 0
+    if kind == "enumeration":
+        et = getattr(variable, "enumeration_type", None)
+        values = list(getattr(et, "values", []) or [])
+        return values[0] if values else ""
+    return False
+
+
 def _run_actions(expression: str, values: Dict[str, Any],
                  var_names: Iterable[str]) -> None:
     """Apply a responsibility's action expression to ``values``.
@@ -264,10 +288,20 @@ class _Traversal:
         self.max_hit_count = max_hit_count
         self.max_steps = max_steps
         self.var_names = {v.name for v in ucm.variables}
-        self.values: Dict[str, Any] = {
-            i.variable.name: _coerce(i.value)
-            for i in scenario.initializations
-        }
+        # Every *declared* variable holds its type default before the
+        # scenario's own initializations are applied, exactly as
+        # jUCMNav's UcmEnvironment.refresh() registers each variable up
+        # front (boolean -> false, integer -> 0, enumeration -> the first
+        # value of its type). Without this, a guard naming an attribute
+        # the scenario never initializes looks like an error, when
+        # jUCMNav evaluates it perfectly happily against the default —
+        # the difference between reporting a model broken and reporting
+        # it fine.
+        self.values: Dict[str, Any] = {}
+        for var in ucm.variables:
+            self.values[var.name] = _default_value(var)
+        for init in scenario.initializations:
+            self.values[init.variable.name] = _coerce(init.value)
         self.hits: Dict[Tuple[str, int], int] = {}
         #: Human-readable label per counted element, for reporting which
         #: one is closest to jUCMNav's ceiling.

@@ -293,10 +293,41 @@ class TestExpressions:
         _scenario(u, inits=[(var, "v1")], starts=[sp], ends=[ep])
         assert st.check_traversal(u) == []
 
-    def test_an_uninitialised_variable_is_reported_not_guessed(self):
-        u = _fork_model("y > 0", "y <= 0")
+class TestTypeDefaults:
+    """A declared variable holds a default before any initialization.
+
+    jUCMNav's ``UcmEnvironment.refresh`` registers every declared
+    variable the moment the environment is built, so a guard naming an
+    attribute that no scenario initializes still evaluates — against
+    ``false`` / ``0`` / the enumeration's first value. Treating that as
+    an error condemns models that in fact run: on one of ours it turned
+    a clean model with 100% path coverage into twenty reported problems.
+    """
+
+    def test_an_uninitialised_integer_defaults_to_zero(self):
+        u = _fork_model("y <= 0", "y > 0")
         u.get_or_add_variable("y", type="integer")   # declared, never set
-        assert "expression_error" in _kinds(st.check_traversal(u))
+        assert st.check_traversal(u) == []
+
+    def test_an_uninitialised_boolean_defaults_to_false(self):
+        u = _fork_model("z == false", "z == true")
+        u.get_or_add_variable("z", type="boolean")
+        assert st.check_traversal(u) == []
+
+    def test_an_uninitialised_enumeration_defaults_to_its_first_value(self):
+        u = _fork_model("colour == red", "colour == blue")
+        et = u.get_or_add_enumeration_type("Colour", values=["red", "blue"])
+        u.get_or_add_variable(
+            "colour", type="enumeration", enumeration_type=et)
+        assert st.check_traversal(u) == []
+
+    def test_an_initialization_still_wins_over_the_default(self):
+        u = _fork_model("y <= 0", "y > 0")
+        var = u.get_or_add_variable("y", type="integer")
+        sc = u.scenario_groups[0].scenarios[0]
+        sc.add_initialization(var, "7")
+        # y is 7, so the mandatory end point is no longer the one taken.
+        assert "end_point_not_reached" in _kinds(st.check_traversal(u))
 
 
 # ---------------------------------------------------------------------------
