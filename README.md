@@ -510,6 +510,48 @@ pm4py_ucm.write_condition_mining_report(group, "condition_mining.csv")
   loop's post-loop continuation is a `Stub`, an `OrJoin` is spliced
   before the stub so its plug-in binding stays complete.
 
+### Before running scenarios in jUCMNav: check the hit-count ceiling
+
+jUCMNav declares an infinite loop as soon as a **single element** has
+been entered as many times as its *maximum hit count* preference allows
+(*Preferences → jUCMNav → Scenario Traversal*). That ceiling is a
+setting, not a property of your model. Set below what a model
+legitimately needs, jUCMNav abandons the offending visit, its AND-joins
+then starve, and the scenario never reaches its end point — producing a
+Problems view full of blocked joins and unreached end points for a model
+that is perfectly correct.
+
+A model whose discovered tree nests loops around parallel branches
+enters some elements once per iteration of *every* enclosing loop, so it
+can need a far higher ceiling than a flat one. Across the 28 models of
+our evaluation most need 2–6; one, a depth-3 loop nest, needs 10 — and
+against a preference set to exactly 10 it reported eight errors that
+were entirely artefacts of the setting.
+
+jUCMNav's own default is 1000, which is ample. If yours has been
+lowered, raise it before concluding that a generated model is broken.
+To find what a specific model needs:
+
+```python
+from pm4py_ucm.algo.scenario_traversal import required_max_hit_count
+
+need, scenario, element = required_max_hit_count(ucm)
+print(f"set jUCMNav's maximum hit count to at least {need} "
+      f"(driven by {element} in {scenario})")
+```
+
+The same module executes every scenario offline under jUCMNav's
+traversal semantics, so a model can be checked before it is opened in
+the tool at all — it reports blocked AND-joins, unreached end points,
+and forks where no branch (or more than one) is enabled:
+
+```python
+from pm4py_ucm.algo.scenario_traversal import check_traversal
+
+for problem in check_traversal(ucm):
+    print(problem)
+```
+
 ### Concurrency-aware variants
 
 Two traces that differ only in the interleaving order of activities
