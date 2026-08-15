@@ -16,7 +16,12 @@ from pm4py_ucm.objects.ucm.importer.variants.jucm import (
 )
 
 
-_REFERENCE_FILE = "/mnt/user-data/uploads/1778703500370_SimpleExampleWithStub.jucm"
+# A jUCMNav-authored model (ISO-8859-1, specVersion 6), kept verbatim as
+# the reference for the binding XPaths below: these tests exist to match
+# what jUCMNav itself writes, so this file must never be regenerated from
+# our own exporter's output.
+_REFERENCE_FILE = os.path.join(
+    os.path.dirname(__file__), "fixtures", "SimpleExampleWithStub.jucm")
 
 
 class StubBindingObjectModelTests(unittest.TestCase):

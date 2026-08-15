@@ -29,8 +29,10 @@ jobs:
           cache: pip
 
       - name: Install Graphviz binary
-        # Needed for the graphviz layout engine and the visualization tests.
-        # Without it, three tests skip; with it, the full 108-test suite runs.
+        # The graphviz Python wheel ships bindings only: the layout engine
+        # and the visualization tests need the `dot` binary on PATH.
+        # (The three skips the suite reports are unrelated to Graphviz —
+        # they want a reference .jucm fixture that is not checked in.)
         run: sudo apt-get update && sudo apt-get install -y graphviz
 
       - name: Install package with dev extras
