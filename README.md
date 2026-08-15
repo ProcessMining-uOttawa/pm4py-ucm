@@ -191,10 +191,23 @@ full notation reference.
 ## Installation
 
 ```bash
-pip install pm4py-ucm           # core package + graphviz Python bindings
-pip install pm4py-ucm[pm4py]    # also install pm4py for discovery
-pip install pm4py-ucm[viz]      # add matplotlib for inline notebook display
-pip install pm4py-ucm[dev]      # everything (pytest, pm4py, matplotlib)
+pip install "pm4py-ucm[pm4py]"  # recommended: core package + pm4py, needed for discovery
+pip install pm4py-ucm           # core package + graphviz Python bindings, without pm4py
+pip install "pm4py-ucm[viz]"    # add matplotlib for inline notebook display
+pip install "pm4py-ucm[dev]"    # everything (pytest, pm4py, matplotlib)
+```
+
+`pm4py` is an optional extra rather than a hard dependency, so the core
+install gives you the UCM object model, the layout engine and the jUCMNav
+exporter, but `discover_ucm_inductive()`, `discover_scenarios()` and the
+other discovery entry points raise `ModuleNotFoundError` without it.
+Install the `[pm4py]` extra unless you are only building or reading models
+by hand.
+
+From a local checkout, the same extras work with an editable install:
+
+```bash
+pip install -e ".[dev]"
 ```
 
 The graphviz **system binary** must be on `PATH` for rendering (the
