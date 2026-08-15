@@ -6,6 +6,10 @@
 # auto-rebuilds; the cap keeps the deployed app on validated 1.x. Relax
 # to <3 once 2.x is verified against this app.
 streamlit>=1.57,<2
+
+# pm4py stays listed because it is an *optional* extra of pm4py-ucm, not a
+# core dependency, so `-e .` alone would not pull it in. scikit-learn used
+# to be listed here for the same reason; it is now a core dependency and
+# arrives through `-e .` below.
 pm4py>=2.7
-scikit-learn>=1.3
 -e .

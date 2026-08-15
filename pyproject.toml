@@ -37,6 +37,10 @@ classifiers = [
 dependencies = [
     "graphviz>=0.20",
     "Pillow>=10.0",
+    # The data-driven condition encoding trains a DecisionTreeClassifier
+    # per outside-loop XOR, so this is not optional: without it,
+    # discover_scenarios(..., condition_strategy="data-driven") raises.
+    "scikit-learn>=1.3",
 ]
 
 [project.optional-dependencies]
