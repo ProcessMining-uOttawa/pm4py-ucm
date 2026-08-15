@@ -1,0 +1,132 @@
+name: publish
+
+# Build the sdist + wheel and upload them using PyPI Trusted Publishing
+# (OIDC), so no API token is ever stored in this repository.
+#
+# ── One-time setup, needed BEFORE the first run ──────────────────────
+#
+# 1. PyPI has no `pm4py-ucm` project yet, so register a *pending*
+#    publisher: https://pypi.org/manage/account/publishing/
+#      PyPI project name: pm4py-ucm
+#      Owner:             ProcessMining-uOttawa
+#      Repository:        pm4py-ucm
+#      Workflow name:     publish.yml
+#      Environment:       pypi
+#    Repeat at https://test.pypi.org/manage/account/publishing/ with
+#    environment `testpypi` if you want to rehearse first.
+#
+# 2. Create the `pypi` and `testpypi` environments under
+#    Settings → Environments. Adding yourself as a required reviewer on
+#    `pypi` turns every real upload into an explicit approval click.
+#
+# ── Releasing ────────────────────────────────────────────────────────
+#
+# Rehearsal:  Actions → publish → Run workflow → target: testpypi
+# Real thing: publish a GitHub Release tagged v<version> (e.g. v0.7.10);
+#             this workflow then runs on its own. The tag must match
+#             `project.version` in pyproject.toml or the build fails.
+#
+# Note that PyPI uploads are permanent: a version number can be yanked
+# but never re-used, so rehearse on TestPyPI before the first release.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Index to upload to"
+        type: choice
+        options: [testpypi, pypi]
+        default: testpypi
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and verify distributions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build twine
+
+      - name: Check the release tag matches the packaged version
+        # Guards against tagging v0.7.11 while pyproject still says
+        # 0.7.10 — PyPI would happily accept the mismatch and the
+        # version number could not be re-used afterwards.
+        if: github.event_name == 'release'
+        run: |
+          version=$(python -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          tag="${GITHUB_REF_NAME#v}"
+          echo "pyproject.toml: $version    tag: $tag"
+          if [ "$version" != "$tag" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match project.version $version"
+            exit 1
+          fi
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Check package metadata
+        # --strict fails on a malformed long_description, which PyPI
+        # would otherwise reject only after the upload.
+        run: twine check --strict dist/*
+
+      - name: Verify the sdist installs and imports cleanly
+        # A fresh venv with no dev extras: catches a MANIFEST.in that
+        # misses a data file, and confirms the core install imports
+        # without pm4py present.
+        run: |
+          python -m venv /tmp/probe
+          /tmp/probe/bin/python -m pip install --upgrade pip
+          /tmp/probe/bin/python -m pip install dist/*.tar.gz
+          /tmp/probe/bin/python -c "import pm4py_ucm; print('import OK:', pm4py_ucm.__file__)"
+
+      - name: Upload distributions as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Upload to ${{ (github.event_name == 'release' || inputs.target == 'pypi') && 'PyPI' || 'TestPyPI' }}
+    needs: build
+    runs-on: ubuntu-latest
+
+    # Scope the OIDC token to this job, which does nothing but fetch the
+    # built files and hand them to the index.
+    permissions:
+      id-token: write
+
+    environment:
+      name: ${{ (github.event_name == 'release' || inputs.target == 'pypi') && 'pypi' || 'testpypi' }}
+      url: ${{ (github.event_name == 'release' || inputs.target == 'pypi') && 'https://pypi.org/p/pm4py-ucm' || 'https://test.pypi.org/p/pm4py-ucm' }}
+
+    steps:
+      - name: Download the built distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: ${{ (github.event_name == 'release' || inputs.target == 'pypi') && 'https://upload.pypi.org/legacy/' || 'https://test.pypi.org/legacy/' }}
