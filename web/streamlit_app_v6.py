@@ -3921,11 +3921,20 @@ with _transforms_slot:
             # off by enough that the seeded value landed under a key nothing
             # reads — the reduction then did nothing at all, silently. Set it
             # against the live key instead, before the widget exists.
-            _want_vrank = st.session_state.pop("_force_vrank", None)
-            if _want_vrank:
-                st.session_state[_vrank_key] = (
-                    int(_want_vrank[0]), min(int(_want_vrank[1]), _f_nvar))
-                st.session_state.pop(_vpct_key, None)
+            # Durable, not popped. A one-click reduction cannot compute this
+            # key — the signature is derived from the upstream filters as
+            # they stand on this run — and a consume-once flag did not
+            # survive the hand-off reliably. Keeping the cap and re-applying
+            # it while the slider still sits at its full range is
+            # self-correcting: it lands whichever run the widget appears on,
+            # under whatever the live key is, and a deliberate move of the
+            # slider takes it off full range so the cap stops overriding.
+            _cap = st.session_state.get("_vrank_cap")
+            if _cap:
+                _cur = st.session_state.get(_vrank_key)
+                if _cur is None or tuple(_cur) == (1, _f_nvar):
+                    st.session_state[_vrank_key] = (1, min(int(_cap), _f_nvar))
+                    st.session_state.pop(_vpct_key, None)
             # Both widgets are controlled purely via session_state (no
             # ``value=`` passed) so the callbacks can drive either one without
             # tripping Streamlit's "default value but also set via Session
@@ -4122,7 +4131,7 @@ if _risk.high and st.session_state.get("mine_ok_fp") != _screen_fp:
         # before building the widgets in question.
         st.session_state["_force_filter_on"] = True
         if "variant_ranks" in spec:
-            st.session_state["_force_vrank"] = tuple(spec["variant_ranks"])
+            st.session_state["_vrank_cap"] = int(spec["variant_ranks"][1])
         # Deliberately NOT consenting to mine here. The re-run re-screens the
         # reduced log: if it now passes both thresholds the gate does not
         # appear and mining just proceeds, and if the *other* condition is
@@ -4162,7 +4171,14 @@ if _risk.high and st.session_state.get("mine_ok_fp") != _screen_fp:
                  "the log." if _spec else
                  "Mine the log as currently filtered — adjust the sidebar's "
                  "Log filters first if you want to reduce it further.")
-        if _cols[_i].button(_label, key=f"gate_act_{_i}", type="primary",
+        # Key on what the button *does*, never on its position. The row's
+        # membership changes between renders — once a reduction is applied
+        # its button drops out — so an index key silently re-points at a
+        # different action, and the click that follows is attributed to
+        # whatever now occupies that slot rather than to the button pressed.
+        _key = ("gate_mine" if _spec is None
+                else "gate_quick_" + "_".join(sorted(_spec)))
+        if _cols[_i].button(_label, key=_key, type="primary",
                             width="stretch", help=_help):
             if _spec is None:
                 st.session_state["mine_ok_fp"] = _screen_fp
