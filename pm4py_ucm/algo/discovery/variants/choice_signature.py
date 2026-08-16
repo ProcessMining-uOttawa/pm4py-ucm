@@ -155,6 +155,7 @@ def replay(
     xor_branch_counts: Optional[Dict[int, Dict[int, int]]] = None,
     max_replay_states: int = DEFAULT_MAX_REPLAY_STATES,
     loop_total_counts: Optional[Dict[int, int]] = None,
+    stats: Optional[Dict[str, Any]] = None,
 ) -> Union[tuple, str]:
     """Replay ``trace`` on ``tree`` and return its canonical signature.
 
@@ -217,6 +218,17 @@ def replay(
         A canonical signature (nested tuple) when the trace fits, or
         :data:`NOFIT` (string) when it does not.
 
+    Other Parameters
+    ----------------
+    stats
+        Optional dict, filled with ``budget_exhausted`` (bool) describing
+        *why* a :data:`NOFIT` was returned: ``True`` when the search ran
+        out of ``max_replay_states`` and was truncated, ``False`` when the
+        tree genuinely cannot produce the trace. Both cases return
+        :data:`NOFIT`, so without this the two are indistinguishable and a
+        truncated search is reported as a fitness result. A ``True`` here
+        is the signal to raise ``max_replay_states``.
+
     Notes
     -----
     The replay used to be a pure greedy alphabet peel: at every
@@ -264,7 +276,17 @@ def replay(
         coarsen_loops, budget, memo,
     )
     if parse is None:
+        # Two very different things reach this line: a trace the tree
+        # genuinely cannot produce, and one whose search was cut short by
+        # the state budget. Both return NOFIT — callers depend on that —
+        # but a depleted budget means the search was *truncated*, not that
+        # the trace was refuted. Record which it was when the caller asks,
+        # so a timeout cannot masquerade as a fitness result.
+        if stats is not None:
+            stats["budget_exhausted"] = budget[0] <= 0
         return NOFIT
+    if stats is not None:
+        stats["budget_exhausted"] = False
     frag, loop_delta, xor_delta = parse
     # Merge deltas of the WINNING parse into the caller's dicts.
     # Backtracking discards deltas of every rejected attempt.

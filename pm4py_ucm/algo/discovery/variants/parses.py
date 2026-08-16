@@ -49,6 +49,12 @@ class SequenceParse:
     #: ``{loop_node_id: total body iterations over all visits}`` — what
     #: an execution count needs. The two differ only under nesting.
     loop_iter_totals: Dict[int, int] = field(default_factory=dict)
+    #: Only meaningful when :attr:`signature` is ``NOFIT``: ``True`` when the
+    #: replay ran out of its state budget and was truncated, ``False`` when
+    #: the tree genuinely cannot produce this sequence. Lets a caller report
+    #: "gave up" apart from "does not fit" — the first is fixable by raising
+    #: ``max_replay_states``, the second is a fact about the model.
+    budget_exhausted: bool = False
 
     @property
     def fits(self) -> bool:
@@ -179,6 +185,7 @@ def replay_sequences(
         xor_counts: Dict[int, Dict[int, int]] = {}
         loop_max: Dict[int, int] = {}
         loop_totals: Dict[int, int] = {}
+        stats: Dict[str, Any] = {}
         signature = _cs.replay(
             tree, list(key), node_ids=node_ids,
             coarsen_loops=coarsen_loops,
@@ -186,12 +193,14 @@ def replay_sequences(
             loop_iter_counts=loop_max,
             loop_total_counts=loop_totals,
             max_replay_states=max_replay_states,
+            stats=stats,
         )
         table.parses[key] = SequenceParse(
             signature=signature,
             xor_branch_counts=xor_counts,
             loop_iter_max=loop_max,
             loop_iter_totals=loop_totals,
+            budget_exhausted=bool(stats.get("budget_exhausted")),
         )
         ticker.tick()
     ticker.finish()

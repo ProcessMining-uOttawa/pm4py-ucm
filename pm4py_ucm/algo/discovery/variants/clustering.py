@@ -103,6 +103,12 @@ class ClusteringResult:
     noise_case_ids: List[str]
     sequence_variant_count: int
     total_cases: int
+    #: Subset of :attr:`noise_case_ids` whose replay was *truncated* by the
+    #: per-trace state budget rather than refuted by the tree. Normally
+    #: empty. Non-empty means the fitness figure understates the model —
+    #: those cases were never actually judged — and the remedy is a larger
+    #: ``max_replay_states``, not a different model.
+    budget_exhausted_case_ids: List[str] = field(default_factory=list)
 
     @property
     def fitness_percentage(self) -> float:
@@ -213,6 +219,7 @@ def cluster(
     coarsen_loops: bool = True,
     progress_callback=None,
     parses: "Optional[_parses.ParseTable]" = None,
+    max_replay_states: int = _cs.DEFAULT_MAX_REPLAY_STATES,
 ) -> ClusteringResult:
     """Replay every case in ``log`` on ``tree`` and group by signature.
 
@@ -233,6 +240,16 @@ def cluster(
         Optional ``callback(stage, done, total)`` fired per replayed
         case (throttled) — replay is the pipeline's dominant cost on
         large logs. See :mod:`pm4py_ucm.util.progress`.
+    max_replay_states
+        Per-trace budget for the replay's backtracking search, forwarded
+        to :func:`choice_signature.replay`. Ignored when ``parses`` is
+        supplied, since that table was already built under its own budget.
+        Cases whose search is truncated by it land in
+        :attr:`ClusteringResult.budget_exhausted_case_ids`, so a caller can
+        tell "gave up" from "does not fit" and knows when raising this is
+        the right response. Note that raising it mainly makes *failures*
+        more expensive: every non-fitting trace spends the full budget
+        before it is abandoned.
     parses
         Optional pre-built
         :class:`~pm4py_ucm.algo.discovery.variants.parses.ParseTable`.
@@ -265,6 +282,7 @@ def cluster(
     bucket_loop_max: Dict[tuple, Dict[int, int]] = {}
     bucket_xor_totals: Dict[tuple, Dict[int, Dict[int, int]]] = {}
     noise: List[str] = []
+    budget_exhausted: List[str] = []
     sequence_variants_seen: set = set()
     # A trace's parse is a function of its activity sequence alone, so
     # cases sharing a sequence are replayed once and the result reused.
@@ -278,6 +296,7 @@ def cluster(
         tree, (seq for _cid, seq in cases), node_ids=node_ids,
         coarsen_loops=coarsen_loops, progress_callback=progress_callback,
         stage="Replaying variants",
+        max_replay_states=max_replay_states,
     )
     for case_id, trace in cases:
         seq_key = tuple(trace)
@@ -292,6 +311,10 @@ def cluster(
         trace_xor_counts = parse.xor_branch_counts
         if signature == _cs.NOFIT:
             noise.append(case_id)
+            # Keep the two reasons apart: a truncated search is a budget
+            # problem the caller can fix, not evidence about the model.
+            if parse.budget_exhausted:
+                budget_exhausted.append(case_id)
             ticker.tick()
             continue
         buckets.setdefault(signature, []).append(case_id)
@@ -350,4 +373,5 @@ def cluster(
         noise_case_ids=noise,
         sequence_variant_count=len(sequence_variants_seen),
         total_cases=len(cases),
+        budget_exhausted_case_ids=budget_exhausted,
     )
