@@ -3741,6 +3741,23 @@ with _transforms_slot:
         st.session_state["_filter_log_fh"] = file_hash
         st.session_state.pop("log_filter_on", None)
 
+    # A one-click reduction from the cost screen sets this. Handled *here*,
+    # before the checkbox exists, because that is the only place the widget
+    # key may legally be dropped — inside the button press it is already
+    # instantiated and assignment raises. Relying on the value=/restore slot
+    # instead left the box unticked while its filter was in force, which is
+    # precisely the mismatch that causes trouble later.
+    _forced_on = bool(st.session_state.pop("_force_filter_on", False))
+    if _forced_on:
+        # Assign, don't drop-and-pass-value=. Session state outranks value=
+        # and is what the frontend renders; dropping the key instead left the
+        # server returning True (so the filter applied and its sliders
+        # appeared) while the box itself still drew unticked, because the
+        # widget id had not changed. Assignment is legal *here* — the widget
+        # does not exist yet on this run — and illegal inside the button
+        # press that set the flag, which is why the flag exists at all.
+        st.session_state["log_filter_on"] = True
+
     # One control, not an expander wrapping a checkbox. Streamlit exposes no
     # open/closed state for an expander, so "switch filtering on when the
     # user opens the panel" cannot be detected — and opening a panel only to
@@ -3897,6 +3914,18 @@ with _transforms_slot:
             _vsig = _arg_fingerprint(_partial_spec)
             _vrank_key = f"flt_vrank::{_k}::{_vsig}"
             _vpct_key = f"flt_vpct::{_k}::{_vsig}"
+            # A one-click reduction from the cost screen asks for a variant
+            # cap here rather than seeding the key itself. It cannot compute
+            # this key: the signature is derived from the upstream filters as
+            # they stand *on this run*, and reconstructing it from a spec was
+            # off by enough that the seeded value landed under a key nothing
+            # reads — the reduction then did nothing at all, silently. Set it
+            # against the live key instead, before the widget exists.
+            _want_vrank = st.session_state.pop("_force_vrank", None)
+            if _want_vrank:
+                st.session_state[_vrank_key] = (
+                    int(_want_vrank[0]), min(int(_want_vrank[1]), _f_nvar))
+                st.session_state.pop(_vpct_key, None)
             # Both widgets are controlled purely via session_state (no
             # ``value=`` passed) so the callbacks can drive either one without
             # tripping Streamlit's "default value but also set via Session
@@ -3965,9 +3994,12 @@ with _transforms_slot:
 # time them (docs/miner_performance.md).
 _profile, _risk = _screen_log(log_bytes, log_kind, csv_columns,
                               filter_spec, file_hash)
-# Consent is keyed to the log *and* the filters, so reducing the log
-# re-asks with the new numbers rather than silently reusing an old "yes".
-_screen_fp = _arg_fingerprint(file_hash, filter_spec, noise_threshold)
+# Consent is keyed to the log and the filters — the two things the screen
+# actually measures. The noise threshold is deliberately NOT part of it:
+# it changes the mined tree, not the log's size or alphabet, so re-asking
+# after every threshold nudge would send an already-consented user back to
+# the gate instead of re-mining the log they already approved.
+_screen_fp = _arg_fingerprint(file_hash, filter_spec)
 
 # activities == cases == variants means every case is one distinct symbol:
 # the tell-tale of an activity column pointing at the case id. Checked here
@@ -4057,8 +4089,19 @@ if _risk.high and st.session_state.get("mine_ok_fp") != _screen_fp:
     # setting, so the choice is visible where filters live, survives a
     # refresh, and travels with an exported project.
     def _quick_filter(**spec) -> None:
+        # Merge onto the filters already in force, never replace them. Two
+        # reasons, and the second is not obvious: the variant slider's key
+        # embeds a fingerprint of the *upstream* filters, so seeding it from
+        # a spec that omits an active activity filter writes the value under
+        # a key the live widget never reads — the variant reduction silently
+        # does nothing, and the activity one is dropped from the spec that
+        # gets re-seeded. Applying "keep 50 activities" then "keep 2000
+        # variants" is exactly that case, and it reverted the alphabet.
+        merged = {k: v for k, v in (tuple(p) for p in (filter_spec or ()))}
+        merged.update(spec)
         pr = dict(st.session_state.get("_project_restore") or {})
-        _apply_filter_spec_to_state(tuple(sorted(spec.items())), file_hash, pr)
+        _apply_filter_spec_to_state(tuple(sorted(merged.items())), file_hash,
+                                    pr)
         # ``pr`` reaches widgets through value=/default=, which Streamlit
         # honours only on a widget's *first* render — after that the session
         # key wins and the restored value is ignored. Assigning the key
@@ -4071,6 +4114,15 @@ if _risk.high and st.session_state.get("mine_ok_fp") != _screen_fp:
         for _key in pr:
             st.session_state.pop(_key, None)
         st.session_state["_project_restore"] = pr
+        # Two settings travel as plain flags rather than through the restore
+        # slot, because their widgets cannot be reached that way: the toggle
+        # renders every run (so value= is ignored), and the variant slider's
+        # key depends on the upstream filters as they stand on the *next*
+        # run. Assigning plain keys here is legal; the sidebar consumes both
+        # before building the widgets in question.
+        st.session_state["_force_filter_on"] = True
+        if "variant_ranks" in spec:
+            st.session_state["_force_vrank"] = tuple(spec["variant_ranks"])
         # Deliberately NOT consenting to mine here. The re-run re-screens the
         # reduced log: if it now passes both thresholds the gate does not
         # appear and mining just proceeds, and if the *other* condition is
@@ -4090,22 +4142,6 @@ if _risk.high and st.session_state.get("mine_ok_fp") != _screen_fp:
             f"(of {_profile.activities:,})",
             dict(activity_ranks=(1, 50)),
         ))
-    if _quick:
-        st.markdown("**Reduce it in one click**")
-        _qcols = st.columns(len(_quick))
-        for _i, (_label, _spec) in enumerate(_quick):
-            if _qcols[_i].button(_label, key=f"quickfilter_{_i}",
-                                 width="stretch"):
-                _quick_filter(**_spec)
-        if len(_quick) > 1:
-            st.caption(
-                "Both apply here. Either one re-checks the log afterwards, "
-                "so you can apply the second as well before mining.")
-        else:
-            st.caption(
-                "The filter appears in the sidebar's **Log filters**, and "
-                "mining starts once the log is under the thresholds.")
-
     st.checkbox(
         "Skip replay-based metrics for this log",
         key="auto_metrics_off",
@@ -4114,12 +4150,33 @@ if _risk.high and st.session_state.get("mine_ok_fp") != _screen_fp:
              "mining. Leave this on for a first look; the metrics can be "
              "turned back on afterwards.",
     )
-    if st.button("Mine using my filters", type="primary",
-                 help="Mine the log as currently filtered — adjust the "
-                      "sidebar's Log filters first if you want to reduce it "
-                      "further."):
-        st.session_state["mine_ok_fp"] = _screen_fp
-        st.rerun()
+
+    # Every way forward on one row, all weighted the same: the reductions
+    # are not lesser options than mining as-is, and on a log this size they
+    # are usually the better one. A grey secondary button beside a primary
+    # would say the opposite.
+    _acts = _quick + [(("Mine using my filters"), None)]
+    _cols = st.columns(len(_acts))
+    for _i, (_label, _spec) in enumerate(_acts):
+        _help = ("Apply this to the sidebar's Log filters, then re-check "
+                 "the log." if _spec else
+                 "Mine the log as currently filtered — adjust the sidebar's "
+                 "Log filters first if you want to reduce it further.")
+        if _cols[_i].button(_label, key=f"gate_act_{_i}", type="primary",
+                            width="stretch", help=_help):
+            if _spec is None:
+                st.session_state["mine_ok_fp"] = _screen_fp
+                st.rerun()
+            _quick_filter(**_spec)
+
+    if len(_quick) > 1:
+        st.caption(
+            "Both reductions apply here. Either one re-checks the log "
+            "afterwards, so you can apply the second as well before mining.")
+    elif _quick:
+        st.caption(
+            "The reduction appears in the sidebar's **Log filters**, and "
+            "mining starts once the log is under the thresholds.")
     st.stop()
 
 # ---- Replay gate: metrics cost a second pass over the log ------------------
