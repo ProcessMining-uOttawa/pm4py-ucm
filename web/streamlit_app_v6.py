@@ -405,8 +405,8 @@ def _fit_note(fit: Optional[Dict[str, Any]]) -> None:
         # Reported as one number with the genuine misfits, a budget
         # exhaustion reads as evidence about the model, which it is not.
         _budget = fit.get("repair_budget_s")
-        _budget_txt = (f" (≤{_budget:.0f}s, scaled to how long this mine "
-                       f"took)" if _budget else "")
+        _budget_txt = (f" (≤{_budget:.0f}s, scaled to this log's size)"
+                       if _budget else "")
         parts.append(
             f"{unexplained:,} case(s) are **not counted**: they do not fit "
             "the model exactly, and aligning them to a nearest path ran out "
@@ -504,9 +504,18 @@ def _mine(
         # property of the model. Allowing repair roughly the time the mine
         # itself took keeps that proportionate, and the floor preserves the
         # library default on fast logs.
+        # Scale on the log, not on elapsed time: _log_and_tree is cached, so
+        # on the run that actually reaches this line the "mine" above was
+        # usually a cache hit of ~0s and an elapsed-based budget silently
+        # collapses to its floor. Distinct sequences is the stable quantity
+        # and the right one — the repair phase iterates over sequences that
+        # did not fit, so its work grows with them.
+        _repair_profile, _ = _screen_log(log_bytes, log_kind, csv_columns,
+                                         filter_spec, _file_hash)
         _elapsed = time.perf_counter() - _mine_started
-        _repair_budget = max(10.0, _elapsed)
-        _repair_per_seq = max(1.0, _elapsed / 20.0)
+        _repair_budget = min(120.0, max(10.0, _elapsed,
+                                        _repair_profile.seq_variants / 50.0))
+        _repair_per_seq = max(1.0, _repair_budget / 20.0)
         traversal = pm4py_ucm.compute_traversal_stats(
             tree, log, progress_callback=_progress, parses=_parses,
             max_repair_seconds=_repair_budget,
@@ -967,6 +976,38 @@ def _screen_log(log_bytes: bytes, log_kind: str, csv_columns,
                           _file_hash)
     profile = _complexity.profile_log(df)
     return profile, _complexity.screen_mining(profile)
+
+
+@st.cache_data(show_spinner="Estimating replay cost...")
+def _replay_estimate(log_bytes: bytes, log_kind: str, csv_columns,
+                     noise_threshold: float, filter_spec: Tuple,
+                     _file_hash: str) -> Dict[str, Any]:
+    """Time-box a replay probe and extrapolate its cost.
+
+    Replay is close to linear in cases, but the per-case constant varies by
+    ~500x across logs, so it has to be measured rather than predicted. The
+    probe is time-boxed rather than fixed-size: a fixed sample is most
+    expensive exactly on the logs where the warning matters. Logs cheap
+    enough simply finish inside the budget and come back ``complete`` —
+    which is most of them.
+
+    Returns plain numbers (not the clustering) so the cache stays small;
+    a completed probe means the real run will be about as quick.
+    """
+    df = _filtered_log_df(log_bytes, log_kind, csv_columns, filter_spec,
+                          _file_hash)
+    _log, tree = _log_and_tree(
+        log_bytes, log_kind, csv_columns, noise_threshold, filter_spec,
+        _file_hash,
+    )
+    est = _complexity.estimate_replay(df, tree, time_budget=5.0)
+    return {
+        "complete": est.complete,
+        "estimated_total_s": est.estimated_total_s,
+        "sampled_cases": est.sampled_cases,
+        "total_cases": est.total_cases,
+        "noise_rate": est.noise_rate,
+    }
 
 
 @st.cache_data(show_spinner=False)
@@ -3663,18 +3704,31 @@ with _transforms_slot:
     _flt: Dict[str, Any] = {}
     if rename_map:
         _flt["rename_map"] = _rename_spec
-    # Collapsed by default like the other advanced groups; rendered on the
-    # expander container so the block stays flat.
-    _flt_exp = st.expander("Log filters", expanded=False)
-    _filter_on = _flt_exp.checkbox(
-        "Filter the event log", value=_rv("log_filter_on", False),
+    # A filter tuned to one log's activity ranks means nothing on the next,
+    # so loading a different log clears the toggle: filtering starts off.
+    if st.session_state.get("_filter_log_fh") != file_hash:
+        st.session_state["_filter_log_fh"] = file_hash
+        st.session_state.pop("log_filter_on", None)
+
+    # One control, not an expander wrapping a checkbox. Streamlit exposes no
+    # open/closed state for an expander, so "switch filtering on when the
+    # user opens the panel" cannot be detected — and opening a panel only to
+    # tick the box inside it is two clicks for one intention. Making the
+    # disclosure control the toggle collapses that to one: the section is
+    # shut and filtering off, or open and filtering on.
+    _filter_on = st.checkbox(
+        "Log filters", value=_rv("log_filter_on", False),
         key="log_filter_on",
-        help="Pre-filter the log before mining. The range sliders have two "
-             "handles — keep the most or the least frequent, or a band in the "
-             "middle. Changing a filter re-mines. The filter is global: every "
-             "view (Model, Scenarios, Family, Compare, Dashboards) and its "
-             "exports work on the filtered log.",
+        help="Pre-filter the log before mining — opening this switches "
+             "filtering on. The range sliders have two handles — keep the "
+             "most or the least frequent, or a band in the middle. Changing "
+             "a filter re-mines. The filter is global: every view (Model, "
+             "Scenarios, Family, Compare, Dashboards) and its exports work "
+             "on the filtered log.",
     )
+    # The controls live in a plain container so every ``_flt_exp.<widget>``
+    # call below keeps working unchanged.
+    _flt_exp = st.container()
     if _filter_on:
         try:
             (_f_acts, _f_dmin, _f_dmax,
@@ -3969,6 +4023,90 @@ if _risk.high and st.session_state.get("mine_ok_fp") != _screen_fp:
         st.rerun()
     st.stop()
 
+# ---- Replay gate: metrics cost a second pass over the log ------------------
+# The model itself is cheap once mined; the replay-based metrics (coverage,
+# traversal counts) are a separate pass that on a big log dominates
+# everything. Unlike mining, its cost *can* be measured — replay is close
+# to linear in cases — so this probes rather than guesses, and only asks
+# when the answer is "this will take a while". Most logs finish inside the
+# 5s probe and are never interrupted.
+_replay_wanted = _wants_traversal(overlay_nodes, overlay_edges)
+_replay_fp = _arg_fingerprint(file_hash, filter_spec, noise_threshold)
+_replay_state = st.session_state.get("replay_choice")
+_replay_choice = (_replay_state.get("choice")
+                  if isinstance(_replay_state, dict)
+                  and _replay_state.get("fp") == _replay_fp else None)
+# The pre-mining screen's opt-out is a standing "no" until revisited here.
+if _replay_choice is None and st.session_state.get("auto_metrics_off"):
+    _replay_choice = "drop"
+_replay_ok = False
+
+if _replay_wanted:
+    if _replay_choice == "go":
+        _replay_ok = True
+    elif _replay_choice in ("drop", "postpone"):
+        # (C) Metrics were switched off, and a metric now needs them. Remind
+        # with the estimate rather than silently showing empty counts.
+        _est = _replay_estimate(log_bytes, log_kind, csv_columns,
+                                noise_threshold, filter_spec, file_hash)
+        _c1, _c2 = st.columns([3, 2])
+        _c1.info(
+            "Replay-based metrics are off for this log. Computing them "
+            f"should take about **{_est['estimated_total_s']:.0f}s**.",
+            icon=":material/query_stats:")
+        if _c2.button("Compute them now", key="replay_now",
+                      width="stretch"):
+            st.session_state["replay_choice"] = {"fp": _replay_fp,
+                                                 "choice": "go"}
+            st.session_state["auto_metrics_off"] = False
+            st.rerun()
+        if _c2.button("Leave them off", key="replay_leave_off",
+                      width="stretch"):
+            st.session_state["replay_choice"] = {"fp": _replay_fp,
+                                                 "choice": "drop"}
+            st.rerun()
+    else:
+        # (B) Undecided: measure before asking. A completed probe means the
+        # real run is about as quick, so it proceeds without interrupting.
+        _est = _replay_estimate(log_bytes, log_kind, csv_columns,
+                                noise_threshold, filter_spec, file_hash)
+        if _est["complete"]:
+            _replay_ok = True
+            st.session_state["replay_choice"] = {"fp": _replay_fp,
+                                                 "choice": "go"}
+        else:
+            _mins = _est["estimated_total_s"] / 60.0
+            _pretty = (f"{_est['estimated_total_s']:.0f} seconds"
+                       if _mins < 1.5 else f"about {_mins:.0f} minutes")
+            st.warning(
+                f"The replay-based metrics on this log are estimated to "
+                f"take **{_pretty}** "
+                f"(measured on {_est['sampled_cases']:,} of "
+                f"{_est['total_cases']:,} cases). Roughly "
+                f"{_est['noise_rate'] * 100:.0f}% of the sampled cases did "
+                "not fit the model. The model below is already mined — this "
+                "is only the coverage and traversal counts.",
+                icon=":material/timer:")
+            _b1, _b2, _b3 = st.columns(3)
+            if _b1.button("Compute them", width="stretch",
+                          key="replay_go"):
+                st.session_state["replay_choice"] = {"fp": _replay_fp,
+                                                     "choice": "go"}
+                st.rerun()
+            if _b2.button("Drop these metrics", width="stretch",
+                          key="replay_drop",
+                          help="Leave them out of this analysis. The model, "
+                               "scenarios and exports all still work."):
+                st.session_state["replay_choice"] = {"fp": _replay_fp,
+                                                     "choice": "drop"}
+                st.rerun()
+            if _b3.button("Not now", width="stretch", key="replay_later",
+                          help="Skip for the moment. You will be asked "
+                               "again when a metric needs them."):
+                st.session_state["replay_choice"] = {"fp": _replay_fp,
+                                                     "choice": "postpone"}
+                st.rerun()
+
 # ---- Mine UCM (for Model tab) ----------------------------------------------
 try:
     with st.status("Mining UCM...", expanded=True) as status:
@@ -3979,8 +4117,7 @@ try:
             _parse_table(log_bytes, log_kind, csv_columns, noise_threshold,
                          filter_spec, file_hash,
                          _progress=_ProgressUI(status))
-            if (_wants_traversal(overlay_nodes, overlay_edges)
-                and not st.session_state.get("auto_metrics_off")) else None
+            if _replay_ok else None
         )
         mined = _mine(
             log_bytes, log_kind, csv_columns,
@@ -4234,14 +4371,25 @@ if _view == "Model":
             return f"{now:,} / {_filter_totals[idx]:,}"
         return f"{now:,}"
 
-    m1, m2, m3, m4, m5 = st.columns(5)
+    # Sequence variants stay on the row after mining. They are the number
+    # that explains the cost the screen warned about, so dropping them the
+    # moment mining finishes hides the one figure a user would check when
+    # deciding whether to filter and re-mine. Cached, so this is free.
+    _post_profile, _ = _screen_log(log_bytes, log_kind, csv_columns,
+                                   filter_spec, file_hash)
+
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
     m1.metric(
         "Activities", _now_total(mined["n_activities"], 0),
         help="Selected / total when a log filter is active, else the count.")
     m2.metric("Cases", _now_total(mined["n_cases"], 1))
     m3.metric("Events", _now_total(mined["n_events"], 2))
-    m4.metric("Maps", mined["n_maps"])
-    m5.metric("Nodes", mined["n_nodes"])
+    m4.metric(
+        "Variants", f"{_post_profile.seq_variants:,}",
+        help="Distinct activity sequences in the log being mined — what "
+             "drives mining cost. Filter the log to bring it down.")
+    m5.metric("Maps", mined["n_maps"])
+    m6.metric("Nodes", mined["n_nodes"])
 
     # What the replay-based counts describe. Shown right under the counts
     # they qualify, so the coverage is read together with the numbers.
