@@ -108,10 +108,27 @@ param whose widget key is `flt_arank::<hash>` can build the right key for the
   scale (`"local"` / `"global"` / `"family"`). A project written before the
   3-way scale carried a boolean `overlay_heatmap_global`, migrated on load.
 - `filter_spec` — the **semantic** filter tuple (`activity_ranks`,
-  `exclude_activities`, `attr_expr`, `duration_pct`, `variant_ranks`, `time_*`,
-  `rename_map`). Storing the semantic spec (not raw widget positions) is robust;
-  `apply` reverse-seeds the filter widgets from it. Note `rename_map` already
-  lives here. `attr_expr` is a ƒ-language predicate string (the same grammar as a
+  `exclude_activities`, `attr_expr`, `duration_pct`, `variant_ranks`,
+  `variant_cap`, `activity_cap`, `time_*`, `rename_map`). Storing the semantic
+  spec (not raw widget positions) is robust; `apply` reverse-seeds the filter
+  widgets from it. Note `rename_map` already lives here.
+
+  `variant_cap` and `activity_cap` are V6's two **one-click reductions** from
+  the cost screen, and both follow one rule: *a one-click reduction records
+  what it selected, and never lives in a widget.* `variant_cap` is `(lo, hi,
+  base_spec)` — the **cases** that variants `lo…hi` selected on the log
+  filtered by `base_spec`, the spec in force when it was clicked.
+  `activity_cap` is a tuple of activity **names**.
+
+  Neither is stored as a rank range, for two independent reasons that each
+  caused a bug. A rank range is relative to a population, and any other filter
+  moves that population — re-reading "the top 2,000 variants" after an
+  activity reduction selected every remaining variant, restoring the cases it
+  had dropped. And Streamlit owns widget state and may discard it on a rerun
+  that changes nothing — answering the replay prompt was enough to reset the
+  activity slider to its full range, restoring the whole alphabet. Session
+  entries the app owns are immune to the second; naming the selection is
+  immune to the first. `attr_expr` is a ƒ-language predicate string (the same grammar as a
   custom dashboard metric) that keeps the cases it evaluates true for — e.g.
   `attr("Channel") == "Web" and duration() > 5`.
 - `family` — `selected_attrs`, `min_cases`, `max_values`, `bins`,

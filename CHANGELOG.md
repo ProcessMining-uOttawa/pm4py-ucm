@@ -43,6 +43,27 @@ measurements and which are time limits.
 
 ### Fixed
 
+- V6's two one-click reductions from the cost screen now hold. Both follow
+  one rule: **a one-click reduction records what it selected, and never lives
+  in a widget.** They travel as `variant_cap` (the *cases* the variant
+  reduction selected, on the log as it stood when clicked) and `activity_cap`
+  (the activity *names*). Each shows in the sidebar's **Log filters** with its
+  own *Remove* button, rides through a saved project, and is applied
+  identically by an exported script.
+
+  That rule replaces two encodings that each lost a reduction silently:
+
+  - A **rank range is relative to a population**, and any other filter moves
+    it. Applying the variant reduction first and the activity one second
+    re-read "keep the top 2,000" against a log that now had fewer than 2,000
+    distinct sequences, selecting all of them — the screen then passed and the
+    model and replay-based metrics were computed over every case, 7,233
+    instead of the 2,010 chosen.
+  - **Streamlit owns widget state** and may discard it on a rerun that changes
+    nothing. Answering the replay prompt — even just dropping the metrics —
+    reset the activity slider to its full range, putting the whole alphabet
+    back: on a 274-activity log the model reverted from 50 activities to 224
+    and the cost screen reappeared.
 - The jUCMNav stub-binding reference fixture is checked in. Its path pointed
   at a sandbox upload that never existed in this checkout, so three tests
   had skipped since they were written; the suite now reports no skips.
