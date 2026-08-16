@@ -434,6 +434,7 @@ def _mine(
     overlay_edges: Tuple[str, ...],
     _file_hash: str,
     filter_spec: Tuple = (),
+    compute_traversal: bool = True,
     _status=None,
     _progress=None,
     _parses=None,
@@ -484,7 +485,14 @@ def _mine(
     )
 
     traversal = None
-    if _wants_traversal(overlay_nodes, overlay_edges):
+    # ``compute_traversal`` is the caller's decision and overrides the
+    # metric selection. Without it this function re-derived the answer from
+    # the overlay tuples alone and replayed regardless — so the replay gate
+    # outside only stopped the *shared* parse table being pre-built, and
+    # compute_traversal_stats simply rebuilt one internally. The gate then
+    # cost time instead of saving it, and "drop these metrics" computed
+    # them anyway.
+    if compute_traversal and _wants_traversal(overlay_nodes, overlay_edges):
         # Replay-based counts. Costed per distinct activity sequence (and,
         # for non-fitting ones, per alignment), so this is far cheaper than
         # per case — but it is still the most expensive step of a mine, so
@@ -4108,7 +4116,9 @@ if _replay_wanted:
                 f"{_est['total_cases']:,} cases). Roughly "
                 f"{_est['noise_rate'] * 100:.0f}% of the sampled cases did "
                 "not fit the model. The model below is already mined — this "
-                "is only the coverage and traversal counts.",
+                "is only the metrics that need a replay (coverage, traversal "
+                "counts). Time metrics such as sojourn are read straight "
+                "from the log and are computed either way.",
                 icon=":material/timer:")
             _b1, _b2, _b3 = st.columns(3)
             if _b1.button("Compute them", width="stretch",
@@ -4147,7 +4157,9 @@ try:
             decomposition_spec, resource_attribute,
             effective_min_support, noise_threshold,
             overlay_nodes, overlay_edges,
-            file_hash, filter_spec, _status=status,
+            file_hash, filter_spec,
+            compute_traversal=_replay_ok,
+            _status=status,
             _parses=_shared_parses,
             _progress=_ProgressUI(status),
         )
