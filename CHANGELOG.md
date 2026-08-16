@@ -43,6 +43,19 @@ measurements and which are time limits.
 
 ### Fixed
 
+- V6's two one-click reductions now compose in either order. Applying the
+  variant reduction *first* and the activity one second silently threw the
+  first away: a variant **rank** range is relative to a population, and the
+  activity projection shrinks that population, so re-reading "keep the top
+  2,000" against a log that now had fewer than 2,000 distinct sequences
+  selected all of them. The screen then passed, and the model and the
+  replay-based metrics were computed over every case — on one log, 7,233
+  cases instead of the 2,010 that had been chosen. A one-click variant
+  reduction now travels as `variant_cap`, bound to the **cases** it selected
+  on the log as it stood when it was clicked, so no later filter can widen
+  it. It shows in the sidebar's **Log filters** with its own *Remove* button,
+  rides through saved projects, and the exported script applies it the same
+  way. (The reverse order, activities then variants, was already correct.)
 - The jUCMNav stub-binding reference fixture is checked in. Its path pointed
   at a sandbox upload that never existed in this checkout, so three tests
   had skipped since they were written; the suite now reports no skips.

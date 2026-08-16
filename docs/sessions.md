@@ -108,10 +108,16 @@ param whose widget key is `flt_arank::<hash>` can build the right key for the
   scale (`"local"` / `"global"` / `"family"`). A project written before the
   3-way scale carried a boolean `overlay_heatmap_global`, migrated on load.
 - `filter_spec` — the **semantic** filter tuple (`activity_ranks`,
-  `exclude_activities`, `attr_expr`, `duration_pct`, `variant_ranks`, `time_*`,
-  `rename_map`). Storing the semantic spec (not raw widget positions) is robust;
-  `apply` reverse-seeds the filter widgets from it. Note `rename_map` already
-  lives here. `attr_expr` is a ƒ-language predicate string (the same grammar as a
+  `exclude_activities`, `attr_expr`, `duration_pct`, `variant_ranks`,
+  `variant_cap`, `time_*`, `rename_map`). Storing the semantic spec (not raw
+  widget positions) is robust; `apply` reverse-seeds the filter widgets from
+  it. Note `rename_map` already lives here. `variant_cap` is `(lo, hi,
+  base_spec)` — a one-click variant reduction from V6's cost screen, which
+  keeps the **cases** that variants `lo…hi` selected on the log filtered by
+  `base_spec`. It is stored that way rather than as a `variant_ranks` range
+  because a rank range is relative to a population: an activity filter
+  applied afterwards shrinks that population, and re-reading the range
+  against it silently restores every case the reduction had dropped. `attr_expr` is a ƒ-language predicate string (the same grammar as a
   custom dashboard metric) that keeps the cases it evaluates true for — e.g.
   `attr("Channel") == "Web" and duration() > 5`.
 - `family` — `selected_attrs`, `min_cases`, `max_values`, `bins`,

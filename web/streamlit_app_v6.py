@@ -1076,6 +1076,10 @@ def _apply_log_filters(log, filter_spec):
     * ``rename_map`` (tuple of ``(original, new)`` pairs) — relabel activities
       FIRST, so every downstream step (and the mined model + exports) sees the
       new names;
+    * ``variant_cap`` ``(lo, hi, base_spec)`` — a one-click variant reduction
+      from the cost screen. Keeps the CASES that variants ``lo…hi`` selected
+      on the log filtered by ``base_spec`` (the spec in force when it was
+      clicked), so a filter applied afterwards cannot widen it back;
     * ``activity_ranks`` ``(lo, hi)`` — keep activities whose 1-based
       frequency rank falls in ``[lo, hi]`` (rank 1 = most frequent), so a
       range slider can keep the most, the least, or a middle band;
@@ -1103,6 +1107,30 @@ def _apply_log_filters(log, filter_spec):
     rename = spec.get("rename_map")
     if rename:
         df = _apply_rename(df, dict(rename))
+
+    # A one-click variant reduction from the cost screen, bound to the CASES
+    # it selected rather than to a rank range re-evaluated later. Ranks are
+    # relative to a population, and every filter above shrinks that
+    # population: on a log where projecting onto the top 50 activities
+    # collapses 7,223 distinct sequences to 1,200, a later re-read of "keep
+    # the top 2,000" selects all 1,200 — the reduction silently becomes a
+    # no-op and every case it had dropped comes back. ``base`` is the spec
+    # that was in force at the moment the reduction was clicked, so the
+    # selection is recomputed against exactly the log the user was looking
+    # at and then applied as a case filter, which survives any later filter.
+    # ``base`` never contains ``variant_cap`` (so this cannot recurse) nor
+    # ``rename_map`` (already applied to ``df`` just above).
+    vcap = spec.get("variant_cap")
+    if vcap:
+        lo, hi, base = vcap
+        base_df = _apply_log_filters(df, tuple(tuple(p) for p in base))
+        ranked = sorted(pm4py.get_variants(base_df).items(),
+                        key=lambda kv: kv[1], reverse=True)
+        selected = [k for k, _ in ranked[lo - 1:hi]]
+        if selected:
+            kept = pm4py.filter_variants(base_df, selected, retain=True)
+            df = df[df["case:concept:name"].isin(
+                set(kept["case:concept:name"]))]
 
     ranks = spec.get("activity_ranks")
     exclude = spec.get("exclude_activities")
@@ -1174,6 +1202,8 @@ def _filter_summary(filter_spec) -> str:
         return ""
     spec = dict(filter_spec)
     parts = []
+    if "variant_cap" in spec:
+        parts.append(f"top {spec['variant_cap'][1]:,} variants as applied")
     if "activity_ranks" in spec:
         lo, hi = spec["activity_ranks"]
         parts.append(f"activities {lo}–{hi}")
@@ -2603,6 +2633,9 @@ def _accept_log_bytes(name: str, payload: bytes) -> None:
     # The applied activity-rename map is keyed by the previous log's activity
     # names; drop it so a new log starts un-renamed.
     st.session_state.pop("rename_map_applied", None)
+    # Likewise the one-click variant reduction: it names case ids of the
+    # previous log, so it means nothing on the next one.
+    st.session_state.pop("_variant_cap", None)
     if kind == "csv":
         for k, _, _ in _CSV_AUTOPICK:
             st.session_state.pop(k, None)
@@ -2699,9 +2732,16 @@ def _apply_filter_spec_to_state(fspec, fh, pr):
         ss["rename_map_applied"] = {
             str(a): str(b) for a, b in (tuple(p) for p in spec["rename_map"])}
     if any(k in spec for k in ("activity_ranks", "exclude_activities",
-                               "variant_ranks", "time_from", "time_to",
-                               "duration_pct", "attr_expr")):
+                               "variant_ranks", "variant_cap", "time_from",
+                               "time_to", "duration_pct", "attr_expr")):
         pr["log_filter_on"] = True
+    if "variant_cap" in spec:
+        # A one-click variant reduction: a plain session entry, not a widget
+        # value — the sidebar merges it back into the spec each run. Coerced
+        # to tuples because a project round-trips through JSON as lists.
+        _lo, _hi, _base = spec["variant_cap"]
+        ss["_variant_cap"] = (int(_lo), int(_hi),
+                              tuple(tuple(p) for p in _base))
     if "activity_ranks" in spec:
         _lo, _hi = spec["activity_ranks"]
         pr[f"flt_arank::{fh}"] = (int(_lo), int(_hi))
@@ -3896,6 +3936,28 @@ with _transforms_slot:
         # widgets are keyed on a signature of those upstream filters, so
         # changing an upstream filter re-mints them (resetting to the full,
         # recomputed range) rather than leaving a now-out-of-range selection.
+
+        # A one-click variant reduction from the cost screen. It rides in the
+        # spec as a case selection frozen at the moment it was clicked (see
+        # ``_apply_log_filters``), NOT as a value seeded into the slider
+        # below: a rank range is relative to a population, so an activity
+        # filter applied afterwards shrinks that population and re-reading
+        # the cap against it silently widens the log back to every case.
+        # Added before ``_partial_spec`` so the slider's own population — and
+        # therefore its key — is computed on the already-reduced log.
+        _vcap = st.session_state.get("_variant_cap")
+        if _vcap:
+            _flt["variant_cap"] = (int(_vcap[0]), int(_vcap[1]),
+                                   tuple(tuple(p) for p in _vcap[2]))
+            _flt_exp.caption(
+                f"One-click reduction: the {int(_vcap[1]):,} most frequent "
+                "variants of the log as it stood when it was applied. It "
+                "keeps those cases, so filtering further cannot widen it.")
+            if _flt_exp.button("Remove the variant reduction",
+                               key=f"flt_vcapclear::{_k}", width="stretch"):
+                st.session_state.pop("_variant_cap", None)
+                st.rerun()
+
         _partial_spec = tuple(sorted(_flt.items()))
         try:
             _f_nvar, _f_vcum = _variant_filter_options(
@@ -3914,27 +3976,15 @@ with _transforms_slot:
             _vsig = _arg_fingerprint(_partial_spec)
             _vrank_key = f"flt_vrank::{_k}::{_vsig}"
             _vpct_key = f"flt_vpct::{_k}::{_vsig}"
-            # A one-click reduction from the cost screen asks for a variant
-            # cap here rather than seeding the key itself. It cannot compute
-            # this key: the signature is derived from the upstream filters as
-            # they stand *on this run*, and reconstructing it from a spec was
-            # off by enough that the seeded value landed under a key nothing
-            # reads — the reduction then did nothing at all, silently. Set it
-            # against the live key instead, before the widget exists.
-            # Durable, not popped. A one-click reduction cannot compute this
-            # key — the signature is derived from the upstream filters as
-            # they stand on this run — and a consume-once flag did not
-            # survive the hand-off reliably. Keeping the cap and re-applying
-            # it while the slider still sits at its full range is
-            # self-correcting: it lands whichever run the widget appears on,
-            # under whatever the live key is, and a deliberate move of the
-            # slider takes it off full range so the cap stops overriding.
-            _cap = st.session_state.get("_vrank_cap")
-            if _cap:
-                _cur = st.session_state.get(_vrank_key)
-                if _cur is None or tuple(_cur) == (1, _f_nvar):
-                    st.session_state[_vrank_key] = (1, min(int(_cap), _f_nvar))
-                    st.session_state.pop(_vpct_key, None)
+            # (A one-click reduction from the cost screen does NOT seed this
+            # slider. It used to, and that is what made it evaporate: this
+            # key embeds a fingerprint of the upstream filters, so applying
+            # an activity reduction afterwards re-minted the key and the cap
+            # was re-clamped to ``min(cap, variants-after-projection)``. When
+            # the projection dropped the variant count below the cap that
+            # clamp equalled the full range, the guard below dropped
+            # ``variant_ranks`` from the spec, and every case the reduction
+            # had removed came back. It now travels as ``variant_cap``.)
             # Both widgets are controlled purely via session_state (no
             # ``value=`` passed) so the callbacks can drive either one without
             # tripping Streamlit's "default value but also set via Session
@@ -4117,7 +4167,22 @@ if _risk.high and st.session_state.get("mine_ok_fp") != _screen_fp:
         # cap after an activity cap appeared to do nothing at all. The cap
         # travels via _vrank_cap instead, applied in the sidebar before the
         # widget exists, where writing that key is legal.
-        _seed = {k: v for k, v in merged.items() if k != "variant_ranks"}
+        # A variant reduction is recorded as ``variant_cap`` — the cases it
+        # selects on the log as it stands right now — rather than as a rank
+        # range the sidebar re-reads later. See ``_apply_log_filters``: a
+        # rank range is relative to a population, and an activity reduction
+        # applied afterwards shrinks that population, so re-reading the cap
+        # against it silently restored every case the reduction had dropped.
+        # ``base`` is this click's other filters, minus the rename (already
+        # applied before it) and minus any earlier cap (so it cannot nest).
+        if "variant_ranks" in spec:
+            _lo, _hi = spec["variant_ranks"]
+            _base = tuple(sorted(
+                (k, v) for k, v in merged.items()
+                if k not in ("variant_ranks", "variant_cap", "rename_map")))
+            st.session_state["_variant_cap"] = (int(_lo), int(_hi), _base)
+        merged.pop("variant_ranks", None)
+        _seed = {k: v for k, v in merged.items() if k != "variant_cap"}
         _apply_filter_spec_to_state(tuple(sorted(_seed.items())), file_hash,
                                     pr)
         # ``pr`` reaches widgets through value=/default=, which Streamlit
@@ -4132,15 +4197,11 @@ if _risk.high and st.session_state.get("mine_ok_fp") != _screen_fp:
         for _key in pr:
             st.session_state.pop(_key, None)
         st.session_state["_project_restore"] = pr
-        # Two settings travel as plain flags rather than through the restore
-        # slot, because their widgets cannot be reached that way: the toggle
-        # renders every run (so value= is ignored), and the variant slider's
-        # key depends on the upstream filters as they stand on the *next*
-        # run. Assigning plain keys here is legal; the sidebar consumes both
-        # before building the widgets in question.
+        # The filter toggle travels as a plain flag rather than through the
+        # restore slot: it renders every run, so value= is ignored. Assigning
+        # a plain key here is legal; the sidebar consumes it before building
+        # the checkbox.
         st.session_state["_force_filter_on"] = True
-        if "variant_ranks" in spec:
-            st.session_state["_vrank_cap"] = int(spec["variant_ranks"][1])
         # Deliberately NOT consenting to mine here. The re-run re-screens the
         # reduced log: if it now passes both thresholds the gate does not
         # appear and mining just proceeds, and if the *other* condition is

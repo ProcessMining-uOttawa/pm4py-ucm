@@ -120,6 +120,22 @@ def apply_log_filters(log, filter_spec):
     rename = spec.get("rename_map")
     if rename:
         df = apply_rename(df, dict(rename))
+    vcap = spec.get("variant_cap")
+    if vcap:
+        # A one-click variant reduction from the cost screen, bound to the
+        # CASES it selected on the log filtered by ``base`` (the spec in
+        # force when it was clicked). Not a rank range re-read here: ranks
+        # are relative to a population, and the activity filter below
+        # shrinks it, which would silently widen the log back out.
+        lo, hi, base = vcap
+        base_df = apply_log_filters(df, tuple(tuple(p) for p in base))
+        ranked = sorted(pm4py.get_variants(base_df).items(),
+                        key=lambda kv: kv[1], reverse=True)
+        selected = [k for k, _ in ranked[lo - 1:hi]]
+        if selected:
+            kept = pm4py.filter_variants(base_df, selected, retain=True)
+            df = df[df["case:concept:name"].isin(
+                set(kept["case:concept:name"]))]
     ranks = spec.get("activity_ranks")
     exclude = spec.get("exclude_activities")
     if ranks or exclude:
