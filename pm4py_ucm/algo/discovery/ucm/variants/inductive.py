@@ -17,6 +17,7 @@ each :class:`UCM.RespRef` is drawn inside the right component rectangle.
 
 from __future__ import annotations
 
+import warnings
 from typing import Any, Dict, Optional
 
 from .....objects.ucm.obj import UCM
@@ -46,6 +47,30 @@ def apply(log, parameters: Optional[Dict[str, Any]] = None) -> UCM:
         ``resource_parameters``
             Forwarded to
             :func:`pm4py_ucm.algo.discovery.resources.algorithm.apply`.
+        ``discovery_parameters``
+            Keyword arguments forwarded verbatim to
+            :func:`pm4py.discover_process_tree_inductive`. Ignored (with a
+            warning) when ``process_tree`` is supplied, since no mining
+            happens then. The two that callers usually want:
+
+            ``noise_threshold``
+                The inductive miner's filtering level, e.g.
+                ``{"noise_threshold": 0.2}``. Without this the miner
+                always runs at its 0.0 default, which is why callers
+                needing a threshold used to mine the tree themselves and
+                pass it in as ``process_tree``.
+            ``activity_key`` / ``timestamp_key`` / ``case_id_key``
+                For logs whose columns are not named ``concept:name``,
+                ``time:timestamp`` and ``case:concept:name``, so they no
+                longer have to be renamed before discovery.
+
+            Two of PM4Py's other parameters look like performance knobs
+            and are not: ``disable_fallthroughs=True`` returns a flower
+            model on the very logs where it speeds mining up, and
+            ``multi_processing=True`` can exhaust system memory on a wide
+            alphabet. Passing a ``DirectlyFollowsGraph`` as ``log``
+            (PM4Py's IMd) yields the same flower. See
+            ``docs/miner_performance.md`` for the measurements.
 
     Returns
     -------
@@ -78,6 +103,7 @@ def apply(log, parameters: Optional[Dict[str, Any]] = None) -> UCM:
         ("org:resource", "org:role", "org:group"),
     )
     res_params = dict(parameters.pop("resource_parameters", None) or {})
+    disc_params = dict(parameters.pop("discovery_parameters", None) or {})
 
     # When the caller passes a path to an XES file, materialise it once
     # up front. PM4Py's inductive miner and our resource miner both
@@ -89,7 +115,13 @@ def apply(log, parameters: Optional[Dict[str, Any]] = None) -> UCM:
     # Allow the caller to either pass a pre-built tree or a log.
     tree = parameters.pop("process_tree", None)
     if tree is None:
-        tree = pm4py.discover_process_tree_inductive(log)
+        tree = pm4py.discover_process_tree_inductive(log, **disc_params)
+    elif disc_params:
+        warnings.warn(
+            "discovery_parameters is ignored when process_tree is supplied: "
+            f"no mining happens, so {sorted(disc_params)} had no effect.",
+            stacklevel=2,
+        )
 
     # Mine performers when enabled (default: yes — with a fallback
     # attribute list — unless the caller passed ``resource_attribute=False``).
