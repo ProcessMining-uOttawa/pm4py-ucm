@@ -1,18 +1,25 @@
-"""The one-click variant reduction (``variant_cap``) survives a later filter.
+"""V6's one-click reductions record what they selected, and hold.
 
-V6's cost screen offers two one-click reductions — keep the 2,000 most
-frequent variants, keep the 50 most frequent activities — and says both apply.
-They did not. A variant *rank* range is relative to a population, so applying
-the activity reduction second shrank that population, and re-reading "keep the
-top 2,000" against a log that now had fewer than 2,000 distinct sequences
-selected all of them: the reduction became a no-op and every case it had
-dropped came back, silently, with the metrics then computed over the full case
-set.
+The cost screen offers two — keep the 2,000 most frequent variants, keep the
+50 most frequent activities — and says both apply. Two encodings each lost one
+silently:
 
-``variant_cap`` fixes that by binding the reduction to the **cases** it
-selected on the log as it stood when it was clicked. These tests pin that
-behaviour on a log shaped like the one that exposed it, where projecting onto
-the top activities collapses the variant count below the cap.
+* a **rank range is relative to a population**, and any other filter moves it.
+  Applying the variant reduction first and the activity one second re-read
+  "keep the top 2,000" against a log that now had fewer than 2,000 distinct
+  sequences and selected all of them — every case the reduction had dropped
+  came back, and the metrics were computed over the full case set;
+* **Streamlit owns widget state** and may discard it on a rerun that changes
+  nothing, so a reduction parked in a slider evaporated when the user merely
+  answered the replay prompt.
+
+Both now travel in the filter spec as what they selected — ``variant_cap``
+names the cases, ``activity_cap`` names the activities. These tests pin the
+first failure mode directly; the second is structural (nothing here touches
+Streamlit) and is pinned by the encoding itself.
+
+The fixture is shaped like the log that exposed it, where projecting onto the
+top activities collapses the variant count below the cap.
 
 The pipeline under test is the ``apply_log_filters`` the code exporter emits
 into every generated script — sliced out of ``codegen._HELPERS`` and exec'd,
@@ -159,6 +166,47 @@ def test_cap_composes_with_a_base_spec(log):
     ))
     _, cases_after, _ = _profile(narrowed)
     assert cases_after == cases_at_click
+
+
+def test_activity_cap_names_its_activities(log):
+    """``activity_cap`` keeps exactly the activities it names."""
+    keep = tuple(f"C{i}" for i in range(4))
+    out = apply_log_filters(log, (("activity_cap", keep),))
+    assert set(out["concept:name"].unique()) == set(keep)
+
+
+def test_activity_cap_does_not_re_rank_when_the_log_changes(log):
+    """The regression this pins is the mirror of the variant one.
+
+    A rank range would re-rank against whatever population is left. Naming
+    the activities means the same alphabet survives, whatever else moves.
+    """
+    ranked = list(log["concept:name"].value_counts().index)
+    keep = tuple(ranked[:6])
+
+    alone = apply_log_filters(log, (("activity_cap", keep),))
+    with_cases_dropped = apply_log_filters(log, (
+        ("activity_cap", keep),
+        ("variant_cap", (1, CAP, ())),
+    ))
+    assert set(alone["concept:name"].unique()) == set(keep)
+    assert set(with_cases_dropped["concept:name"].unique()) <= set(keep)
+    # The alphabet is pinned by name, so dropping cases cannot add one back.
+    assert not (set(with_cases_dropped["concept:name"].unique()) - set(keep))
+
+
+def test_both_caps_compose(log):
+    """Both one-click reductions in force at once, in either spec order."""
+    ranked = list(log["concept:name"].value_counts().index)
+    keep = tuple(ranked[:6])
+    a = apply_log_filters(log, (
+        ("activity_cap", keep), ("variant_cap", (1, CAP, ()))))
+    b = apply_log_filters(log, (
+        ("variant_cap", (1, CAP, ())), ("activity_cap", keep)))
+    assert _profile(a) == _profile(b)
+    # And the case selection is still the variant cap's, not the full log.
+    _, cases_full, _ = _profile(log)
+    assert _profile(a)[1] < cases_full
 
 
 def test_cap_accepts_the_lists_a_project_round_trip_returns(log):

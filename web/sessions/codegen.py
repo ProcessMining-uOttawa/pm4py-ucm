@@ -138,12 +138,18 @@ def apply_log_filters(log, filter_spec):
                 set(kept["case:concept:name"]))]
     ranks = spec.get("activity_ranks")
     exclude = spec.get("exclude_activities")
-    if ranks or exclude:
+    acap = spec.get("activity_cap")
+    if ranks or exclude or acap:
         counts = df["concept:name"].value_counts()  # descending frequency
         keep = set(counts.index)
         if ranks:
             lo, hi = ranks
             keep = set(counts.index[lo - 1:hi])
+        # The one-click activity reduction names its activities outright, for
+        # the same reason `variant_cap` names its cases: a rank range is
+        # relative to a population, and every other filter moves it.
+        if acap:
+            keep &= set(acap)
         keep -= set(exclude or ())
         df = pm4py.filter_event_attribute_values(
             df, "concept:name", keep, level="event", retain=True)

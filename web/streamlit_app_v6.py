@@ -1080,6 +1080,9 @@ def _apply_log_filters(log, filter_spec):
       from the cost screen. Keeps the CASES that variants ``lo…hi`` selected
       on the log filtered by ``base_spec`` (the spec in force when it was
       clicked), so a filter applied afterwards cannot widen it back;
+    * ``activity_cap`` (tuple of names) — the other one-click reduction,
+      recorded the same way: the activity NAMES it selected, not a rank
+      range to be re-read against whatever the log looks like later;
     * ``activity_ranks`` ``(lo, hi)`` — keep activities whose 1-based
       frequency rank falls in ``[lo, hi]`` (rank 1 = most frequent), so a
       range slider can keep the most, the least, or a middle band;
@@ -1134,12 +1137,18 @@ def _apply_log_filters(log, filter_spec):
 
     ranks = spec.get("activity_ranks")
     exclude = spec.get("exclude_activities")
-    if ranks or exclude:
+    acap = spec.get("activity_cap")
+    if ranks or exclude or acap:
         counts = df["concept:name"].value_counts()  # descending frequency
         keep = set(counts.index)
         if ranks:
             lo, hi = ranks
             keep = set(counts.index[lo - 1:hi])
+        # The one-click activity reduction names its activities outright, for
+        # the same reason ``variant_cap`` names its cases: a rank range is
+        # relative to a population, and every other filter moves it.
+        if acap:
+            keep &= set(acap)
         keep -= set(exclude or ())
         df = pm4py.filter_event_attribute_values(
             df, "concept:name", keep, level="event", retain=True)
@@ -1204,6 +1213,9 @@ def _filter_summary(filter_spec) -> str:
     parts = []
     if "variant_cap" in spec:
         parts.append(f"top {spec['variant_cap'][1]:,} variants as applied")
+    if "activity_cap" in spec:
+        parts.append(
+            f"top {len(spec['activity_cap']):,} activities as applied")
     if "activity_ranks" in spec:
         lo, hi = spec["activity_ranks"]
         parts.append(f"activities {lo}–{hi}")
@@ -1290,6 +1302,26 @@ def _log_filter_options(log_bytes: bytes, log_kind: str, csv_columns,
             None if pd.isna(dmin) else dmin.date().isoformat(),
             None if pd.isna(dmax) else dmax.date().isoformat(),
             int(df["case:concept:name"].nunique()), int(len(df)))
+
+
+@st.cache_data(show_spinner=False)
+def _ranked_activities(log_bytes: bytes, log_kind: str, csv_columns,
+                       filter_spec: Tuple, _file_hash: str):
+    """Activity names by descending frequency on the log **as ``filter_spec``
+    leaves it** — the ranking the cost screen's counts are quoting.
+
+    :func:`_log_filter_options` ranks on the renamed-but-unfiltered log, which
+    is right for a slider whose full range must span every activity. This one
+    is for the gate's one-click reduction, which has to record the names it is
+    actually offering ("the 50 most frequent activities **of 224**")."""
+    df = _load_log_df(log_bytes, log_kind, csv_columns, _file_hash)
+    if filter_spec:
+        df = _apply_log_filters(df, filter_spec)
+        if not isinstance(df, pd.DataFrame):
+            df = pm4py.convert_to_dataframe(df)
+    if df is None or len(df) == 0:
+        return ()
+    return tuple(df["concept:name"].value_counts().index)
 
 
 @st.cache_data(show_spinner=False)
@@ -2633,9 +2665,10 @@ def _accept_log_bytes(name: str, payload: bytes) -> None:
     # The applied activity-rename map is keyed by the previous log's activity
     # names; drop it so a new log starts un-renamed.
     st.session_state.pop("rename_map_applied", None)
-    # Likewise the one-click variant reduction: it names case ids of the
-    # previous log, so it means nothing on the next one.
+    # Likewise the two one-click reductions: they name case ids and activity
+    # names of the previous log, so they mean nothing on the next one.
     st.session_state.pop("_variant_cap", None)
+    st.session_state.pop("_activity_cap", None)
     if kind == "csv":
         for k, _, _ in _CSV_AUTOPICK:
             st.session_state.pop(k, None)
@@ -2732,9 +2765,13 @@ def _apply_filter_spec_to_state(fspec, fh, pr):
         ss["rename_map_applied"] = {
             str(a): str(b) for a, b in (tuple(p) for p in spec["rename_map"])}
     if any(k in spec for k in ("activity_ranks", "exclude_activities",
-                               "variant_ranks", "variant_cap", "time_from",
-                               "time_to", "duration_pct", "attr_expr")):
+                               "variant_ranks", "variant_cap", "activity_cap",
+                               "time_from", "time_to", "duration_pct",
+                               "attr_expr")):
         pr["log_filter_on"] = True
+    if "activity_cap" in spec:
+        # Like ``variant_cap``: a plain session entry, not a widget value.
+        ss["_activity_cap"] = tuple(str(a) for a in spec["activity_cap"])
     if "variant_cap" in spec:
         # A one-click variant reduction: a plain session entry, not a widget
         # value — the sidebar merges it back into the spec each run. Coerced
@@ -3828,6 +3865,22 @@ with _transforms_slot:
             _flt_exp.warning(f"Could not read filter options: {_f_exc}")
         _filter_totals = (len(_f_acts), _f_ncases, _f_nev)
         _k = file_hash
+
+        # The two one-click reductions from the cost screen. Both are plain
+        # session entries naming what they selected, merged into the spec
+        # here — see ``_quick_filter`` for why neither may live in a widget.
+        _acap = st.session_state.get("_activity_cap")
+        if _acap:
+            _flt["activity_cap"] = tuple(_acap)
+            _flt_exp.caption(
+                f"One-click reduction: the {len(_acap):,} most frequent "
+                "activities of the log as it stood when it was applied. It "
+                "names those activities, so no later filter re-ranks them.")
+            if _flt_exp.button("Remove the activity reduction",
+                               key=f"flt_acapclear::{_k}", width="stretch"):
+                st.session_state.pop("_activity_cap", None)
+                st.rerun()
+
         # Activities by frequency rank — a two-handled range slider.
         if len(_f_acts) > 1:
             _na = len(_f_acts)
@@ -4159,30 +4212,46 @@ if _risk.high and st.session_state.get("mine_ok_fp") != _screen_fp:
         merged = {k: v for k, v in (tuple(p) for p in (filter_spec or ()))}
         merged.update(spec)
         pr = dict(st.session_state.get("_project_restore") or {})
-        # Hand the seeder everything EXCEPT variant_ranks. It assigns the
-        # variant slider's session key directly, and that widget was already
-        # built earlier in this run — so the assignment raises
-        # StreamlitAPIException, which kills this handler before st.rerun()
-        # and makes the whole click a no-op. That is why applying a variant
-        # cap after an activity cap appeared to do nothing at all. The cap
-        # travels via _vrank_cap instead, applied in the sidebar before the
-        # widget exists, where writing that key is legal.
-        # A variant reduction is recorded as ``variant_cap`` — the cases it
-        # selects on the log as it stands right now — rather than as a rank
-        # range the sidebar re-reads later. See ``_apply_log_filters``: a
-        # rank range is relative to a population, and an activity reduction
-        # applied afterwards shrinks that population, so re-reading the cap
-        # against it silently restored every case the reduction had dropped.
-        # ``base`` is this click's other filters, minus the rename (already
-        # applied before it) and minus any earlier cap (so it cannot nest).
+        # ONE RULE FOR BOTH REDUCTIONS, and every bug in this gate came from
+        # breaking it: a one-click reduction records *what it selected* in a
+        # plain session entry, and never lives in a widget.
+        #
+        # Two independent reasons, each of which bit once:
+        #   * a rank range is relative to a population, and any other filter
+        #     moves that population — re-reading "the top 2,000 variants"
+        #     after an activity reduction selected every remaining variant,
+        #     so the cases it had dropped came back;
+        #   * Streamlit owns widget state and may discard it on a rerun that
+        #     changes nothing — answering the replay prompt was enough to
+        #     reset the activity slider to its full range, which put the
+        #     whole alphabet back.
+        # Session entries we own are immune to the second, and naming the
+        # selection is immune to the first.
         if "variant_ranks" in spec:
             _lo, _hi = spec["variant_ranks"]
+            # ``base`` is this click's other filters, minus the rename
+            # (already applied before it) and minus any earlier cap (so it
+            # cannot nest).
             _base = tuple(sorted(
                 (k, v) for k, v in merged.items()
                 if k not in ("variant_ranks", "variant_cap", "rename_map")))
             st.session_state["_variant_cap"] = (int(_lo), int(_hi), _base)
+        if "activity_ranks" in spec:
+            _lo, _hi = spec["activity_ranks"]
+            # Ranked on the log the gate is quoting — i.e. with the filters
+            # already in force, including a variant reduction applied a
+            # moment ago ("the 50 most frequent activities of 224").
+            _ranked = _ranked_activities(
+                log_bytes, log_kind, csv_columns,
+                tuple(sorted(
+                    (k, v) for k, v in merged.items()
+                    if k != "activity_ranks")),
+                file_hash)
+            st.session_state["_activity_cap"] = tuple(_ranked[_lo - 1:_hi])
         merged.pop("variant_ranks", None)
-        _seed = {k: v for k, v in merged.items() if k != "variant_cap"}
+        merged.pop("activity_ranks", None)
+        _seed = {k: v for k, v in merged.items()
+                 if k not in ("variant_cap", "activity_cap")}
         _apply_filter_spec_to_state(tuple(sorted(_seed.items())), file_hash,
                                     pr)
         # ``pr`` reaches widgets through value=/default=, which Streamlit
