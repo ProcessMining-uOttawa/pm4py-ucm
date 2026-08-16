@@ -4109,7 +4109,16 @@ if _risk.high and st.session_state.get("mine_ok_fp") != _screen_fp:
         merged = {k: v for k, v in (tuple(p) for p in (filter_spec or ()))}
         merged.update(spec)
         pr = dict(st.session_state.get("_project_restore") or {})
-        _apply_filter_spec_to_state(tuple(sorted(merged.items())), file_hash,
+        # Hand the seeder everything EXCEPT variant_ranks. It assigns the
+        # variant slider's session key directly, and that widget was already
+        # built earlier in this run — so the assignment raises
+        # StreamlitAPIException, which kills this handler before st.rerun()
+        # and makes the whole click a no-op. That is why applying a variant
+        # cap after an activity cap appeared to do nothing at all. The cap
+        # travels via _vrank_cap instead, applied in the sidebar before the
+        # widget exists, where writing that key is legal.
+        _seed = {k: v for k, v in merged.items() if k != "variant_ranks"}
+        _apply_filter_spec_to_state(tuple(sorted(_seed.items())), file_hash,
                                     pr)
         # ``pr`` reaches widgets through value=/default=, which Streamlit
         # honours only on a widget's *first* render — after that the session
