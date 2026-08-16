@@ -3551,6 +3551,18 @@ if log_kind == "csv":
         "" if role_col == _NONE_OPT else role_col,
         "" if resource_col == _NONE_OPT else resource_col,
     )
+    # Auto-detection runs once per file hash, so a hand-picked (or mistaken)
+    # choice sticks for that file and re-loading it will not undo it. Offered
+    # before the branch below, which stops the script while a mapping is
+    # still unapplied — the state a bad selection leaves you in.
+    if _src_exp.button("↺ Reset to auto-detected columns",
+                       key="reset_csv_map",
+                       help="Re-run column auto-detection for this file and "
+                            "discard the current selection."):
+        st.session_state.pop("csv_seeded_for_hash", None)
+        st.session_state.pop("applied_csv_columns", None)
+        st.rerun()
+
     applied_csv_columns = st.session_state.get("applied_csv_columns")
     if applied_csv_columns is None:
         _src_exp.info("Review the column mapping above, then click "
@@ -3938,6 +3950,30 @@ _profile, _risk = _screen_log(log_bytes, log_kind, csv_columns,
 # re-asks with the new numbers rather than silently reusing an old "yes".
 _screen_fp = _arg_fingerprint(file_hash, filter_spec, noise_threshold)
 
+# activities == cases == variants means every case is one distinct symbol:
+# the tell-tale of an activity column pointing at the case id. Checked here
+# rather than inside the gate below, because the gate is skipped once the
+# user has consented to mine this log — which is exactly when a mis-mapped
+# log would otherwise sail through showing plausible, wrong counts and no
+# warning at all. The column selectors are seeded once per file hash, so a
+# wrong choice is sticky for that file and re-loading it will not reset it.
+_degenerate = (_profile.cases > 1
+               and _profile.activities == _profile.cases
+               == _profile.seq_variants)
+if _degenerate:
+    _cols_txt = ""
+    if log_kind == "csv" and csv_columns:
+        _cols_txt = (f" Currently reading case from `{csv_columns[0]}`, "
+                     f"activity from `{csv_columns[1]}`.")
+    st.error(
+        f"**All three of activities, cases and sequences are "
+        f"{_profile.cases:,}.** That almost always means the *activity "
+        f"column is mapped to the case id* — each case then looks like a "
+        f"unique one-step sequence, and every count below is wrong."
+        f"{_cols_txt} Fix it under **Log source & columns** in the sidebar.",
+        icon=":material/error:",
+    )
+
 if _risk.high and st.session_state.get("mine_ok_fp") != _screen_fp:
     st.subheader("Mine a Use Case Map model")
     _full = _profile
@@ -3979,21 +4015,8 @@ if _risk.high and st.session_state.get("mine_ok_fp") != _screen_fp:
             "Change these under **Log source & columns** in the sidebar."
         )
 
-    # activities == cases == variants means every case is a single distinct
-    # symbol: the tell-tale of an activity column pointing at the case id.
-    # Worth catching here, because as a "complex log" warning it is very
-    # convincing and completely wrong.
-    if (_profile.cases > 1
-            and _profile.activities == _profile.cases == _profile.seq_variants):
-        st.error(
-            f"All three counts are {_profile.cases:,}, which almost always "
-            "means the **activity column is mapped to the case id** — each "
-            "case then looks like a unique one-step sequence. Check the "
-            "activity column under **Log source & columns** before reading "
-            "anything below.",
-            icon=":material/error:",
-        )
-
+    # (The degenerate-mapping check runs above, outside this gate, so it is
+    # not silenced once the user has consented to mine this log.)
     st.warning(_risk.reason, icon=":material/hourglass_top:")
     st.markdown(
         "**Reducing the log is the only remedy that keeps the model "
@@ -4390,6 +4413,15 @@ if _view == "Model":
              "drives mining cost. Filter the log to bring it down.")
     m5.metric("Maps", mined["n_maps"])
     m6.metric("Nodes", mined["n_nodes"])
+
+    # Every count above is only as good as the column mapping, and a wrong
+    # mapping yields plausible numbers rather than an error — so keep the
+    # mapping visible here, not only on the pre-mining screen.
+    if log_kind == "csv" and csv_columns:
+        st.caption(
+            f"Read from — case: `{csv_columns[0]}` · "
+            f"activity: `{csv_columns[1]}` · timestamp: `{csv_columns[2]}`."
+        )
 
     # What the replay-based counts describe. Shown right under the counts
     # they qualify, so the coverage is read together with the numbers.
