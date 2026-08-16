@@ -19,6 +19,8 @@ diagnosis is identified, and no log content left the machine.
 | Is there a fast path that keeps the model? | **No.** `disable_fallthroughs=True` and IMd produce structurally identical flower models. |
 | Does `multi_processing=True` help? | **No — it is dangerous.** It exhausted system memory on a 274-activity log. |
 | Can replay cost be predicted? | Not from structure. **Yes from a short sample**, within 0.79x–1.39x on every log tested. |
+| Does the per-trace state budget drop fitting traces? | **No.** Noise was flat across a 25x increase; only the cost of failing grew (15s → 155s). Leave it at 200 000. |
+| Is any budget disproportionate? | **Yes — the alignment-repair one.** A flat 10s regardless of whether the mine took 0.1s or 253s. |
 
 ## The logs
 
@@ -222,6 +224,59 @@ BPI 2012, the one pathological log, is also the only one with fitness below
 100%. Traces that do not fit exhaust the search budget before returning
 `nofit`, so they cost full price. That is consistent with the 81 ms/case
 but is a single data point.
+
+### The per-trace state budget is not what drops traces
+
+`choice_signature.DEFAULT_MAX_REPLAY_STATES` (200 000) bounds the
+backtracking search per trace; traces that exceed it are reported `NOFIT`.
+A flat constant looks suspicious next to a log whose traces are 5x longer
+than another's, so it was worth checking whether it silently discards
+traces that would otherwise fit.
+
+It does not. Registry A filtered to its top 400 variants (469 cases, 171
+activities, median sequence length 70) mined in 253 s, then replayed at
+four budgets:
+
+| budget | NOFIT | replay time |
+|---|---|---|
+| 200 000 | 4 / 400 (1.0%) | 15.2 s |
+| 1 000 000 | 4 / 400 (1.0%) | 36.6 s |
+| 5 000 000 | 4 / 400 (1.0%) | 155.0 s |
+
+Noise is **flat across a 25x increase** — those four sequences genuinely do
+not fit the tree. What grows is the cost of *failing*: fitting sequences
+succeed quickly, so the extra time is almost entirely the four doomed
+sequences each spending their full allowance before being abandoned. **The
+budget governs how expensive it is to discover that a trace does not fit,
+not how many fit.** Raising it, or scaling it with trace length, would buy
+no fitness and make failures several times slower.
+
+Measured on a filtered slice, not the full log, whose tree is larger and
+probably more ambiguous — so this does not prove the budget never binds.
+
+What the exercise did expose is that the two outcomes were
+indistinguishable: a truncated search and a refuted trace both returned
+`NOFIT`, so a timeout was reported as a fitness result. `replay()` now
+accepts a `stats` out-parameter recording `budget_exhausted`, which
+surfaces as `ClusteringResult.budget_exhausted_case_ids` (a subset of
+`noise_case_ids`), and `cluster()` finally takes `max_replay_states` — the
+constant's docstring had long advised raising it with no public way to.
+
+### The alignment-repair budget *is* disproportionate
+
+A separate budget governs the traversal statistics:
+`compute_traversal_stats(max_repair_seconds=10.0,
+max_repair_seconds_per_sequence=1.0)`. Cases that neither fit exactly nor
+get aligned within it are reported as `unexplained_cases`.
+
+Ten seconds is the same allowance whether the mine took 0.1 s or 253 s.
+On a hard log almost every non-fitting case is therefore abandoned, and the
+coverage figure reports a time limit as though it were a property of the
+model. V6 scales it to the work already done — repair gets roughly the
+time the mine itself took, floored at the library default so fast logs are
+unaffected — and states the budget in the UI so an "unexplained" count
+reads as the budget decision it is. The library defaults are unchanged;
+this is app policy, since only the app knows how long the mine took.
 
 ### Sampling predicts it well
 

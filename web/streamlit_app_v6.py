@@ -79,6 +79,7 @@ import json as _json
 import os
 import re
 import tempfile
+import time
 import traceback
 import uuid
 import zipfile
@@ -400,10 +401,18 @@ def _fit_note(fit: Optional[Dict[str, Any]]) -> None:
             "an activity the model treats as mandatory that can read "
             "higher than the events actually observed.")
     if unexplained:
+        # Say plainly that this is a time limit, not a verdict on the log.
+        # Reported as one number with the genuine misfits, a budget
+        # exhaustion reads as evidence about the model, which it is not.
+        _budget = fit.get("repair_budget_s")
+        _budget_txt = (f" (≤{_budget:.0f}s, scaled to how long this mine "
+                       f"took)" if _budget else "")
         parts.append(
-            f"{unexplained:,} case(s) are not counted — they do not fit the "
-            "model, and aligning them to a nearest path did not finish "
-            "within the time budget.")
+            f"{unexplained:,} case(s) are **not counted**: they do not fit "
+            "the model exactly, and aligning them to a nearest path ran out "
+            f"of time{_budget_txt}. That is a time limit, not a finding — "
+            "the count would likely shrink on a re-run of a smaller or "
+            "filtered log.")
     if ratio < 0.7:
         parts.append(
             "A lower **noise threshold** keeps more of the behaviour and "
@@ -446,6 +455,7 @@ def _mine(
         if _status is not None:
             _status.update(label=label)
 
+    _mine_started = time.perf_counter()
     log, tree = _log_and_tree(
         log_bytes, log_kind, csv_columns, noise_threshold, filter_spec,
         _file_hash, _status=_status,
@@ -485,8 +495,22 @@ def _mine(
         # hung one — the alignment stage in particular is bounded, but
         # that is only reassuring if you can see it advancing.
         _phase("Replaying the log on the model...")
+        # Scale the alignment-repair budget to the work already done. The
+        # library default is a flat 10s total / 1s per sequence, which is
+        # generous on a log that mined in 0.1s and absurdly stingy on one
+        # that took four minutes — the same budget either way, so on a hard
+        # log almost every non-fitting case is abandoned as "unexplained"
+        # and the coverage figure reports a timeout as if it were a
+        # property of the model. Allowing repair roughly the time the mine
+        # itself took keeps that proportionate, and the floor preserves the
+        # library default on fast logs.
+        _elapsed = time.perf_counter() - _mine_started
+        _repair_budget = max(10.0, _elapsed)
+        _repair_per_seq = max(1.0, _elapsed / 20.0)
         traversal = pm4py_ucm.compute_traversal_stats(
             tree, log, progress_callback=_progress, parses=_parses,
+            max_repair_seconds=_repair_budget,
+            max_repair_seconds_per_sequence=_repair_per_seq,
         )
 
     if overlay_nodes or overlay_edges:
@@ -540,6 +564,9 @@ def _mine(
             "unexplained_cases": traversal.unexplained_cases,
             "fitting_ratio": traversal.fitting_ratio,
             "coverage": traversal.coverage,
+            # What the repair phase was allowed, so an "unexplained" count
+            # can be read as the budget decision it is.
+            "repair_budget_s": _repair_budget,
         }
     return out
 
@@ -851,6 +878,11 @@ def _synthesize(
         "n_sequence_variants": clustering.sequence_variant_count,
         "compression_ratio": clustering.compression_ratio,
         "fitness_percentage": clustering.fitness_percentage,
+        # Cases whose replay was truncated by the state budget rather than
+        # refuted by the tree. Normally zero; when it is not, the fitness
+        # figure understates the model and the remedy is a bigger budget,
+        # not a different model.
+        "n_budget_exhausted": len(clustering.budget_exhausted_case_ids),
         "n_noise": len(clustering.noise_case_ids),
         "n_scenarios": sum(len(g.scenarios) for g in ucm.scenario_groups),
         "n_groups": len(ucm.scenario_groups),
@@ -4587,10 +4619,21 @@ if _view == "Scenarios":
         m5.metric("Scenarios", synth["n_scenarios"])
 
         if synth["n_noise"]:
-            st.warning(
-                f"{synth['n_noise']} non-conforming case(s) bucketed "
-                f"as noise (excluded from variants)."
-            )
+            _gave_up = synth.get("n_budget_exhausted", 0)
+            _msg = (f"{synth['n_noise']} non-conforming case(s) bucketed "
+                    f"as noise (excluded from variants).")
+            if _gave_up:
+                # Separate the two reasons: only one of them says anything
+                # about the model. A truncated search reported alongside
+                # genuine misfits makes a timeout look like a finding.
+                _msg += (
+                    f" **{_gave_up} of those hit the replay search budget "
+                    "rather than being refuted by the model** — their "
+                    "signature was never determined, so the fitness above "
+                    "understates the model. Raising `max_replay_states` "
+                    "would judge them, at the cost of slower failures."
+                )
+            st.warning(_msg)
 
         st.subheader("Variants")
         st.dataframe(synth["variants_df"], width="stretch")
