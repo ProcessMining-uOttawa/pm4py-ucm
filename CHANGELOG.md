@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Queued for **0.7.11**. The theme is knowing what a log will cost before
+spending time on it, and being honest about which reported numbers are
+measurements and which are time limits.
+
+### Added
+
+- `pm4py_ucm.algo.complexity`: `profile_log()`, `screen_mining()` and
+  `estimate_replay()`. Mining cost can be ranked but not timed, so the
+  screen returns a reason rather than a duration; replay is close to linear
+  in cases, so it is measured with a time-boxed probe and extrapolated
+  (within 0.79x–1.39x on every log tested).
+- `discovery_parameters` on `discover_ucm_inductive()`, forwarded to
+  `pm4py.discover_process_tree_inductive`. This exposes `noise_threshold`,
+  previously unreachable — every caller mined the tree itself and injected
+  it — and the `activity_key` / `timestamp_key` / `case_id_key` overrides
+  for logs that are not XES-named.
+- `max_replay_states` on `clustering.cluster()`, and `stats` on
+  `choice_signature.replay()`. A truncated search and a trace the tree
+  cannot produce both return `NOFIT`; they are now distinguishable, and the
+  truncated ones surface as `ClusteringResult.budget_exhausted_case_ids`.
+- Web front-end **V6**: screens a log's cost before mining, offers one-click
+  reductions (keep the 2000 most frequent variants / the 50 most frequent
+  activities), and gates the replay-based metrics behind a measured
+  estimate. **Not deployed** — `streamlit_app.py` still shims V5.
+- `docs/miner_performance.md`: the measurements across twelve logs behind
+  all of the above.
+
+### Changed
+
+- `scikit-learn` is now a runtime dependency. The data-driven encoding has
+  always imported it but it was declared nowhere, so an install from an
+  index produced a package whose data-driven path raised, and CI silently
+  skipped the ten tests guarded by `importorskip`.
+
+### Fixed
+
+- The jUCMNav stub-binding reference fixture is checked in. Its path pointed
+  at a sandbox upload that never existed in this checkout, so three tests
+  had skipped since they were written; the suite now reports no skips.
+
+### Notes
+
+- No miner setting is a fast path: `disable_fallthroughs=True` and PM4Py's
+  DFG-based IMd return structurally identical flower models on every log
+  measured, and `multi_processing=True` exhausted system memory on a
+  274-activity log. V6 therefore offers log reduction and never a flag.
+
 ## [0.7.10] — 2026-08-01
 
 Two changes to the data-driven path, one about speed and reproducibility
