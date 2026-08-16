@@ -1008,7 +1008,10 @@ def _replay_estimate(log_bytes: bytes, log_kind: str, csv_columns,
         log_bytes, log_kind, csv_columns, noise_threshold, filter_spec,
         _file_hash,
     )
-    est = _complexity.estimate_replay(df, tree, time_budget=5.0)
+    # 10s, not 5: below that the prompt costs more attention than it saves,
+    # since reading it and deciding takes about that long anyway. A log whose
+    # replay fits inside the budget is simply computed and never interrupts.
+    est = _complexity.estimate_replay(df, tree, time_budget=10.0)
     return {
         "complete": est.complete,
         "estimated_total_s": est.estimated_total_s,
@@ -1515,6 +1518,7 @@ def _mine_family(
     overlay_edges: Tuple[str, ...],
     _file_hash: str,
     filter_spec: Tuple = (),
+    compute_traversal: bool = True,
     _status=None,
     _progress=None,
 ) -> Dict[str, Any]:
@@ -1584,7 +1588,14 @@ def _mine_family(
         # combined/umbrella assemblies re-convert the trees and are
         # not annotated.)
         _phase("Computing performance overlays...")
-        _cell_traversal = _wants_traversal(overlay_nodes, overlay_edges)
+        # Honour the same replay decision the Model view took. The parse
+        # *table* cannot be shared — each cell mines its own tree from its
+        # own sub-log, and a parse is specific to (tree, sequence) — but the
+        # user's answer to "is a replay worth it on this log" applies to
+        # every cell, and a family replays once per cell, so ignoring it
+        # here would be the more expensive place to get it wrong.
+        _cell_traversal = (compute_traversal
+                           and _wants_traversal(overlay_nodes, overlay_edges))
         fam_cases = family.log_df["case:concept:name"].astype(str)
         for cell in family.cells:
             cell_df = family.log_df[
@@ -4041,6 +4052,60 @@ if _risk.high and st.session_state.get("mine_ok_fp") != _screen_fp:
         "reduction buys before committing to it."
     )
 
+    # One-click reductions for the two conditions that trip the screen. They
+    # write into the sidebar's own filter widgets rather than a private
+    # setting, so the choice is visible where filters live, survives a
+    # refresh, and travels with an exported project.
+    def _quick_filter(**spec) -> None:
+        pr = dict(st.session_state.get("_project_restore") or {})
+        _apply_filter_spec_to_state(tuple(sorted(spec.items())), file_hash, pr)
+        # ``pr`` reaches widgets through value=/default=, which Streamlit
+        # honours only on a widget's *first* render — after that the session
+        # key wins and the restored value is ignored. Assigning the key
+        # instead is refused outright ("cannot be modified after the widget
+        # ... is instantiated"), since these run inside a button press, after
+        # the sidebar has rendered. Dropping the key is the way through: the
+        # next run rebuilds the widget as if fresh, so value= applies. It is
+        # the same idiom this file already uses to clear the filter toggle
+        # when a different log is loaded.
+        for _key in pr:
+            st.session_state.pop(_key, None)
+        st.session_state["_project_restore"] = pr
+        # Deliberately NOT consenting to mine here. The re-run re-screens the
+        # reduced log: if it now passes both thresholds the gate does not
+        # appear and mining just proceeds, and if the *other* condition is
+        # still tripped the gate returns to offer that one too.
+        st.rerun()
+
+    _quick: List = []
+    if _profile.seq_variants > 2500:
+        _quick.append((
+            f"Keep the 2,000 most frequent variants "
+            f"(of {_profile.seq_variants:,})",
+            dict(variant_ranks=(1, 2000)),
+        ))
+    if _profile.activities > 60:
+        _quick.append((
+            f"Keep the 50 most frequent activities "
+            f"(of {_profile.activities:,})",
+            dict(activity_ranks=(1, 50)),
+        ))
+    if _quick:
+        st.markdown("**Reduce it in one click**")
+        _qcols = st.columns(len(_quick))
+        for _i, (_label, _spec) in enumerate(_quick):
+            if _qcols[_i].button(_label, key=f"quickfilter_{_i}",
+                                 width="stretch"):
+                _quick_filter(**_spec)
+        if len(_quick) > 1:
+            st.caption(
+                "Both apply here. Either one re-checks the log afterwards, "
+                "so you can apply the second as well before mining.")
+        else:
+            st.caption(
+                "The filter appears in the sidebar's **Log filters**, and "
+                "mining starts once the log is under the thresholds.")
+
     st.checkbox(
         "Skip replay-based metrics for this log",
         key="auto_metrics_off",
@@ -4049,7 +4114,10 @@ if _risk.high and st.session_state.get("mine_ok_fp") != _screen_fp:
              "mining. Leave this on for a first look; the metrics can be "
              "turned back on afterwards.",
     )
-    if st.button("Mine anyway", type="primary"):
+    if st.button("Mine using my filters", type="primary",
+                 help="Mine the log as currently filtered — adjust the "
+                      "sidebar's Log filters first if you want to reduce it "
+                      "further."):
         st.session_state["mine_ok_fp"] = _screen_fp
         st.rerun()
     st.stop()
@@ -4188,6 +4256,10 @@ _family_base_fp = _arg_fingerprint(
     file_hash, log_kind, csv_columns, noise_threshold, decomposition_spec,
     resource_attribute, effective_min_support, overlay_nodes, overlay_edges,
     filter_spec,
+    # The replay decision changes what a family contains (per-cell traversal
+    # counts present or absent), so a family mined under the old answer must
+    # not read as fresh after the answer changes.
+    _replay_ok,
 )
 if st.session_state.get("family_base_fp") not in (None, _family_base_fp):
     st.session_state.pop("family_result", None)
@@ -5166,7 +5238,9 @@ if _view == "Family":
                             noise_threshold, decomposition_spec,
                             resource_attribute, effective_min_support,
                             overlay_nodes, overlay_edges,
-                            file_hash, filter_spec, _status=status,
+                            file_hash, filter_spec,
+                            compute_traversal=_replay_ok,
+                            _status=status,
                             _progress=_ProgressUI(status),
                         )
                         status.update(label="Done.", state="complete")
