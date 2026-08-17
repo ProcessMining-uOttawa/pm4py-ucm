@@ -111,6 +111,15 @@ def apply_rename(df, rename_map):
             lambda v: rename_map.get(v, v))})
 
 
+def as_hashable(value):
+    """Deep-convert lists to tuples. A project stores `filter_spec` as JSON,
+    which turns every tuple into a list; a one-level conversion fixes the
+    (key, value) pairs but leaves each value a list."""
+    if isinstance(value, (list, tuple)):
+        return tuple(as_hashable(v) for v in value)
+    return value
+
+
 def apply_log_filters(log, filter_spec):
     """Apply the pre-mining rename + log filters (mirrors the web app)."""
     if not filter_spec:
@@ -128,7 +137,7 @@ def apply_log_filters(log, filter_spec):
         # are relative to a population, and the activity filter below
         # shrinks it, which would silently widen the log back out.
         lo, hi, base = vcap
-        base_df = apply_log_filters(df, tuple(tuple(p) for p in base))
+        base_df = apply_log_filters(df, as_hashable(base))
         ranked = sorted(pm4py.get_variants(base_df).items(),
                         key=lambda kv: kv[1], reverse=True)
         selected = [k for k, _ in ranked[lo - 1:hi]]
