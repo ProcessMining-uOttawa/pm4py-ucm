@@ -1065,6 +1065,24 @@ def _apply_rename(df, rename_map):
             lambda v: rename_map.get(v, v))})
 
 
+def _as_hashable(value):
+    """Deep-convert lists to tuples, so a value that has been through JSON is
+    hashable again.
+
+    A saved project round-trips ``filter_spec`` through JSON, which turns every
+    tuple into a list — and ``filter_spec`` is documented as hashable because
+    it is part of a ``@st.cache_data`` key and is fingerprinted with ``repr``.
+    A one-level ``tuple(tuple(p) for p in ...)`` is not enough: it fixes the
+    ``(key, value)`` pairs but leaves each value a list, so a resumed
+    ``variant_cap`` whose ``base_spec`` was non-empty came back unhashable and
+    with a different repr from the one that was saved — which silently changed
+    every fingerprint derived from it, so the cost screen re-asked for consent
+    it had already been given."""
+    if isinstance(value, (list, tuple)):
+        return tuple(_as_hashable(v) for v in value)
+    return value
+
+
 def _apply_log_filters(log, filter_spec):
     """Apply the sidebar activity rename + log filters to a DataFrame log
     before mining.
@@ -1126,7 +1144,7 @@ def _apply_log_filters(log, filter_spec):
     vcap = spec.get("variant_cap")
     if vcap:
         lo, hi, base = vcap
-        base_df = _apply_log_filters(df, tuple(tuple(p) for p in base))
+        base_df = _apply_log_filters(df, _as_hashable(base))
         ranked = sorted(pm4py.get_variants(base_df).items(),
                         key=lambda kv: kv[1], reverse=True)
         selected = [k for k, _ in ranked[lo - 1:hi]]
@@ -2777,8 +2795,7 @@ def _apply_filter_spec_to_state(fspec, fh, pr):
         # value — the sidebar merges it back into the spec each run. Coerced
         # to tuples because a project round-trips through JSON as lists.
         _lo, _hi, _base = spec["variant_cap"]
-        ss["_variant_cap"] = (int(_lo), int(_hi),
-                              tuple(tuple(p) for p in _base))
+        ss["_variant_cap"] = (int(_lo), int(_hi), _as_hashable(_base))
     if "activity_ranks" in spec:
         _lo, _hi = spec["activity_ranks"]
         pr[f"flt_arank::{fh}"] = (int(_lo), int(_hi))
@@ -4001,7 +4018,7 @@ with _transforms_slot:
         _vcap = st.session_state.get("_variant_cap")
         if _vcap:
             _flt["variant_cap"] = (int(_vcap[0]), int(_vcap[1]),
-                                   tuple(tuple(p) for p in _vcap[2]))
+                                   _as_hashable(_vcap[2]))
             _flt_exp.caption(
                 f"One-click reduction: the {int(_vcap[1]):,} most frequent "
                 "variants of the log as it stood when it was applied. It "

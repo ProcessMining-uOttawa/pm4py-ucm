@@ -44,16 +44,23 @@ from sessions import codegen  # noqa: E402
 
 
 def _emitted_filter_pipeline():
-    """``apply_rename`` + ``apply_log_filters`` as the exporter emits them."""
+    """The filter helpers as the exporter emits them, exec'd into a namespace.
+
+    They live in the ``_HELPERS`` template string rather than as module
+    functions, so slice them out — which also means these tests run the source
+    a user's exported script or notebook actually runs.
+    """
     src = codegen._HELPERS
     start = src.index("def apply_rename(")
     end = src.index("def resource_params(")
     ns = {"pd": pd, "pm4py": pm4py}
     exec(compile(src[start:end], "<codegen._HELPERS>", "exec"), ns)
-    return ns["apply_log_filters"]
+    return ns
 
 
-apply_log_filters = _emitted_filter_pipeline()
+_EMITTED = _emitted_filter_pipeline()
+apply_log_filters = _EMITTED["apply_log_filters"]
+as_hashable = _EMITTED["as_hashable"]
 
 N_CORE = 8
 N_NOISE = 6
@@ -221,3 +228,76 @@ def test_cap_accepts_the_lists_a_project_round_trip_returns(log):
         ("variant_cap", (1, CAP, [["activity_ranks", [1, N_CORE + 2]]])),
     ))
     assert _profile(as_tuples) == _profile(as_lists)
+
+
+# ---------------------------------------------------------------------------
+# Resuming a saved project.
+#
+# `filter_spec` is documented as a *hashable* tuple of pairs: it is part of a
+# `@st.cache_data` key and is fingerprinted with `repr`. JSON turns every tuple
+# into a list on the way back in, and a one-level conversion is not enough —
+# it fixes the pairs but leaves each pair's value a list, so a resumed
+# `variant_cap` with a non-empty `base_spec` came back unhashable and with a
+# different repr from the one that was saved, silently changing every
+# fingerprint derived from it.
+# ---------------------------------------------------------------------------
+
+def test_as_hashable_converts_all_the_way_down():
+    nested = [["activity_ranks", [1, 50]], ["exclude_activities", ["X"]]]
+    out = as_hashable(nested)
+    assert out == (("activity_ranks", (1, 50)),
+                   ("exclude_activities", ("X",)))
+    hash(out)  # the point of the exercise
+    assert as_hashable("Submit") == "Submit"   # scalars pass through
+    assert as_hashable(3) == 3
+
+
+def _restore_fn():
+    """``_apply_filter_spec_to_state`` sliced out of the Streamlit script.
+
+    The script cannot be imported (its module body calls Streamlit), so run
+    the function against a stub ``session_state``. This is the only headless
+    cover for the resume path, and it is where the coercion bug showed up.
+    """
+    import types
+    src = (_ROOT / "web" / "streamlit_app_v6.py").read_text(encoding="utf-8")
+    slice_ = (
+        src[src.index("def _as_hashable("):src.index("def _apply_log_filters(")]
+        + "\n\n"
+        + src[src.index("def _apply_filter_spec_to_state("):
+              src.index("def _apply_project_config(")]
+    )
+    st = types.SimpleNamespace(session_state={})
+    ns = {"st": st, "date": __import__("datetime").date,
+          "_arg_fingerprint": lambda *a: repr(a)}
+    exec(compile(slice_, "<streamlit_app_v6 slice>", "exec"), ns)
+    return st, ns["_apply_filter_spec_to_state"]
+
+
+def test_resuming_a_project_restores_both_caps_hashably():
+    st, restore = _restore_fn()
+    pr = {}
+    restore([                       # exactly what JSON hands back
+        ["variant_cap", [1, 2000, [["activity_ranks", [1, 50]]]]],
+        ["activity_cap", ["Submit", "Review", "Approve"]],
+    ], "fh", pr)
+
+    assert pr.get("log_filter_on") is True, "the filter panel must come back on"
+    assert st.session_state["_activity_cap"] == ("Submit", "Review", "Approve")
+    assert st.session_state["_variant_cap"] == (
+        1, 2000, (("activity_ranks", (1, 50)),))
+    # Both must be usable in a spec that is hashed and repr-fingerprinted.
+    hash(st.session_state["_variant_cap"])
+    hash(st.session_state["_activity_cap"])
+
+
+def test_resuming_a_project_saved_before_the_caps_existed():
+    """Older projects carry rank ranges and no caps; they must still resume."""
+    st, restore = _restore_fn()
+    pr = {}
+    restore([["activity_ranks", [1, 50]], ["variant_ranks", [1, 2000]]],
+            "fh", pr)
+    assert pr.get("log_filter_on") is True
+    assert pr.get("flt_arank::fh") == (1, 50)
+    assert "_activity_cap" not in st.session_state
+    assert "_variant_cap" not in st.session_state
