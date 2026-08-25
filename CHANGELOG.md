@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The web app's sidebar carries icons throughout — Material Symbols
+  (`:material/…:`), matching the icons the cost screen already uses,
+  inheriting the text colour so they work in both themes, and rendering
+  identically on every platform. The five views are iconed too (`route`,
+  `movie`, `groups`, `balance`, `insights`) via the radio's `format_func`,
+  so the stored value stays `"Model"` / `"Scenarios"` / … and a project
+  saved with an `active_view` still resumes.
+- **Advanced — boundary rules & sizes** is renamed **Advanced decomposition**,
+  and **Notation (Model tab)** is now just **Notation** — the app has views,
+  not tabs.
+- **Views** and **Notation** are now section subheaders rather than a
+  hand-rolled uppercase rail caption and a widget label respectively, so
+  every sidebar section is styled alike.
+
+### Fixed
+
+- Loading an event log no longer leaves the previously resumed project
+  showing as selected. Streamlit keeps a `file_uploader`'s file attached
+  until the widget is rebuilt, so after resuming a project and then loading
+  a different log, the **Resume a saved project** panel went on naming the
+  old project — and showing its notes — beside a log that project knows
+  nothing about. The panel now clears when a different log arrives, but not
+  while a project is still in flight (a bundle's own log, or the log a
+  settings-only project is waiting for), and re-loading the same project
+  afterwards works rather than being silently ignored.
+
 ## [0.7.11] — 2026-08-17
 
 The theme is knowing what a log will cost before spending time on it, and

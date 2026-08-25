@@ -2661,6 +2661,21 @@ def _accept_log_bytes(name: str, payload: bytes) -> None:
     new_hash = hashlib.sha256(payload).hexdigest()[:16]
     if new_hash == st.session_state.get("log_hash"):
         return
+    # Loading a different log retires the project that was resumed earlier,
+    # but Streamlit's file_uploader keeps its file attached until the widget
+    # is rebuilt — so the "Resume a saved project" panel went on naming the
+    # old project, and showing its notes, beside a log that project knows
+    # nothing about. Bump the nonce in the uploader's key so the next run
+    # builds a fresh, empty one, and drop the id that suppresses re-loading
+    # the same file (otherwise re-uploading that project later is ignored).
+    #
+    # NOT while a project is in flight: then this log IS the project's — a
+    # bundle's own log, or the log a settings-only project was waiting for.
+    if "pending_project" not in st.session_state:
+        st.session_state.pop("project_notes", None)
+        st.session_state.pop("project_loaded_id", None)
+        st.session_state["project_uploader_nonce"] = (
+            st.session_state.get("project_uploader_nonce", 0) + 1)
     name_lower = name.lower()
     if name_lower.endswith(".csv"):
         kind = "csv"
@@ -3099,7 +3114,7 @@ with st.sidebar:
         f'rel="noopener">Daniel Amyot</a>, uOttawa, 2026</div>',
         unsafe_allow_html=True,
     )
-    st.header("Inductive miner")
+    st.header(":material/conversion_path: Inductive miner")
     st.session_state.setdefault("cfg_noise", 0.2)   # default; a project overrides
     noise_threshold = st.slider(
         "Noise threshold", min_value=0.0, max_value=1.0,
@@ -3118,7 +3133,7 @@ with st.sidebar:
     # A container reserves the position now and is filled in below.
     _transforms_slot = st.container()
 
-    st.subheader("Decomposition")
+    st.subheader(":material/call_split: Decomposition")
     from pm4py_ucm.objects.ucm.conversion.decomposition import AUTO_DIM
     # Fixed-dimension pre-sets (max / min leaves per map). "auto" fits both to
     # the tree shape (suggest_decomposition); "Custom" is hand-set.
@@ -3145,7 +3160,8 @@ with st.sidebar:
         _is_auto = decomposition_preset == "auto"
         _is_custom = decomposition_preset == "Custom"
         _on: Dict[str, Any] = {}
-        with st.expander("Advanced — boundary rules & sizes", expanded=False):
+        with st.expander("Advanced decomposition", expanded=False,
+                     icon=":material/tune:"):
             # Which operators become plug-in boundaries — all on by default,
             # fixed keys so a toggle persists across a dropdown change.
             for key, help_txt in [
@@ -3220,7 +3236,8 @@ with st.sidebar:
     # rendered on their expander container (calling widgets on it, rather than
     # a `with` block, keeps the surrounding code flat). They still execute
     # every run, so their values are always available below.
-    _perf_exp = st.expander("Performers", expanded=False)
+    _perf_exp = st.expander("Performers", expanded=False,
+                            icon=":material/group:")
     _RES_BUILTIN = ["org:role", "org:resource"]
     _RES_OTHER = "Other..."
     resource_choice = _perf_exp.selectbox(
@@ -3246,7 +3263,8 @@ with st.sidebar:
         disabled=_min_support_disabled,
     )
 
-    _ovl_exp = st.expander("Performance overlay", expanded=False)
+    _ovl_exp = st.expander("Performance overlay", expanded=False,
+                           icon=":material/speed:")
     from pm4py_ucm.algo.performance import (
         EDGE_METRICS as _EDGE_METRICS,
         NODE_METRICS as _NODE_METRICS,
@@ -3456,9 +3474,13 @@ with st.sidebar:
     overlay_heatmap_global = overlay_heat_scope in ("global", "family")
 
     st.divider()
+    # A subheader + collapsed widget label, the same shape as Views below, so
+    # this reads as a section heading like Decomposition rather than as a
+    # widget caption. The label is kept (not blank) for screen readers.
+    st.subheader(":material/shapes: Notation")
     notation = st.radio(
-        "Notation (Model tab)",
-        options=["UCM", "BPMN"], index=1, key="cfg_notation",
+        "Notation", options=["UCM", "BPMN"], index=1, key="cfg_notation",
+        label_visibility="collapsed",
     )
 
 
@@ -3469,10 +3491,14 @@ samples = _list_samples()
 # log" gate so a fresh session can load one. A bundle brings its own log; a
 # settings file re-uses the current log or asks for a re-supplied one.
 if _SESSIONS_OK:
-    _load_exp = st.expander("↻ Resume a saved project", expanded=False)
+    _load_exp = st.expander("Resume a saved project", expanded=False,
+                            icon=":material/restore:")
     _lp_up = _load_exp.file_uploader(
         "Load project (.ucmproj.json / .ucmproj.zip)", type=["json", "zip"],
-        key="project_uploader",
+        # Keyed on a nonce so loading a different log can retire the
+        # selection (see _accept_log_bytes) — a file_uploader cannot be
+        # emptied any other way.
+        key=f"project_uploader::{st.session_state.get('project_uploader_nonce', 0)}",
         help="Restores the whole session: miner settings, filters, renaming, "
              "performers, overlays, family and scenario settings, and the "
              "open view.")
@@ -3505,7 +3531,8 @@ if _SESSIONS_OK:
 _log_ready = ("log_bytes" in st.session_state) and (
     st.session_state.get("log_kind") != "csv"
     or st.session_state.get("applied_csv_columns") is not None)
-_src_exp = st.expander("📁 Log source & columns", expanded=not _log_ready)
+_src_exp = st.expander("Log source & columns", expanded=not _log_ready,
+                       icon=":material/folder_open:")
 src_tabs = (
     _src_exp.tabs(["Sample log", "Upload your own"])
     if samples else (None, _src_exp.container())
@@ -3808,10 +3835,10 @@ with _transforms_slot:
             log_bytes, log_kind, csv_columns, file_hash))
     except Exception:
         _orig_acts = []
-    _rn_label = (f"✎ Rename activities ({len(rename_map)})"
-                 if rename_map else "✎ Rename activities…")
+    _rn_label = (f"Rename activities ({len(rename_map)})"
+                 if rename_map else "Rename activities…")
     if _orig_acts and st.button(_rn_label, width="stretch",
-                                key="open_rename"):
+                                key="open_rename", icon=":material/edit:"):
         # A fresh editor key per open (seeded from the applied map), so a
         # prior open's cell edits never linger under the new one.
         st.session_state["rename_open_id"] = (
@@ -3859,7 +3886,7 @@ with _transforms_slot:
     # disclosure control the toggle collapses that to one: the section is
     # shut and filtering off, or open and filtering on.
     _filter_on = st.checkbox(
-        "Log filters", value=_rv("log_filter_on", False),
+        ":material/filter_alt: Log filters", value=_rv("log_filter_on", False),
         key="log_filter_on",
         help="Pre-filter the log before mining — opening this switches "
              "filtering on. The range sliders have two handles — keep the "
@@ -4496,6 +4523,14 @@ st.session_state["family_base_fp"] = _family_base_fp
 
 # ---- Rail: the log card and the VIEWS list ---------------------------------
 _VIEWS = ["Model", "Scenarios", "Family", "Compare", "Dashboards"]
+# Display only — see the radio below.
+_VIEW_ICONS = {
+    "Model": ":material/route:",
+    "Scenarios": ":material/movie:",
+    "Family": ":material/groups:",
+    "Compare": ":material/balance:",
+    "Dashboards": ":material/insights:",
+}
 
 with st.sidebar:
     st.markdown("---")
@@ -4523,12 +4558,7 @@ with st.sidebar:
         f'</div>',
         unsafe_allow_html=True,
     )
-    st.markdown(
-        '<div style="font-weight:700;font-size:10px;letter-spacing:.08em;'
-        'color:var(--pm-faint);text-transform:uppercase;margin-bottom:2px">'
-        'Views</div>',
-        unsafe_allow_html=True,
-    )
+    st.subheader(":material/preview: Views")
     # A view switch requested from elsewhere in the page (Pin to
     # dashboard) arrives as `goto_view` and is consumed HERE, before the
     # radio exists. Streamlit forbids writing a widget's own key once the
@@ -4541,6 +4571,11 @@ with st.sidebar:
             st.session_state["view"] = _requested
     _view = st.radio(
         "Views", _VIEWS, label_visibility="collapsed", key="view",
+        # ``format_func`` decorates the label without touching the value, so
+        # ``_view`` stays "Model" / "Scenarios" / … for the comparisons
+        # below, for ``goto_view``, and for ``active_view`` in a saved
+        # project — old projects included.
+        format_func=lambda _v: f"{_VIEW_ICONS.get(_v, '')} {_v}".strip(),
     )
 
     # ---- Project — save the whole session (see docs/sessions.md) ----------
@@ -4548,7 +4583,8 @@ with st.sidebar:
     # two downloads: a small settings file (config only) and a self-contained
     # bundle (config + the event log). Loading a project to *resume* is the
     # next step; here we only save/share.
-    _proj_exp = st.expander("Project", expanded=False)
+    _proj_exp = st.expander("Project", expanded=False,
+                            icon=":material/save:")
     # The dashboards snapshot is produced by the bridge in the main area (always
     # mounted); the Save UI just reads it.
     _dash_snapshot = (st.session_state.get("dashboards_snapshot")
