@@ -336,18 +336,25 @@ class TestTypeDefaults:
 
 class TestUnsupportedConstructs:
 
-    def test_a_stub_is_reported_rather_than_silently_skipped(self):
-        u = UCM(name="stub")
+    def test_a_waiting_place_is_reported_rather_than_silently_skipped(self):
+        u = UCM(name="wp")
         m = u.add_map(name="m")
         sp = m.add_node(UCM.StartPoint(name="start"))
-        stub = m.add_node(UCM.Stub(name="Stub"))
+        wp = m.add_node(UCM.WaitingPlace(name="Wait"))
         ep = m.add_node(UCM.EndPoint(name="end"))
-        m.add_connection(sp, stub)
-        m.add_connection(stub, ep)
+        m.add_connection(sp, wp)
+        m.add_connection(wp, ep)
         _scenario(u, starts=[sp], ends=[ep])
         # Skipping it quietly would report a clean run of a model half of
         # which was never executed.
         assert "unsupported_node" in _kinds(st.check_traversal(u))
+
+    def test_an_unbound_stub_is_reported(self):
+        """A stub with no plug-in cannot be executed, and must say so."""
+        u, _m, _sp, stub, _ep = _stub_model(bind=False)
+        kinds = _kinds(st.check_traversal(u))
+        assert "unbound_stub" in kinds
+        assert "end_point_not_reached" in kinds
 
 
 # ---------------------------------------------------------------------------
@@ -436,3 +443,102 @@ class TestVisitRecord:
         assert a & b, "both share the start and the fork"
         # The union is what a coverage highlight over {A, B} would paint.
         assert (a | b) == (a - b) | (b - a) | (a & b)
+
+
+# ---------------------------------------------------------------------------
+# Stubs: a decomposed model is a root map plus plug-ins, and jUCMNav
+# traverses into them. Before 0.8.0 a stub was reported unsupported, so a
+# decomposed model — which is what `decomposition="auto"` produces — could
+# not be simulated at all.
+# ---------------------------------------------------------------------------
+
+def _stub_model(bind: bool = True, dynamic: bool = False,
+                preconditions=(None,)):
+    """Root map `start -> stub -> end`, with one plug-in per precondition.
+
+    Each plug-in is `start -> P<i> -> end`, bound in on the stub's entry arc
+    and out on its exit arc — the shape `decomposition="auto"` emits.
+    """
+    u = UCM(name="stubbed")
+    root = u.add_map(name="root")
+    sp = root.add_node(UCM.StartPoint(name="start"))
+    stub = root.add_node(UCM.Stub(name="Stub", dynamic=dynamic))
+    ep = root.add_node(UCM.EndPoint(name="end"))
+    c_in = root.add_connection(sp, stub)
+    c_out = root.add_connection(stub, ep)
+    if bind:
+        for i, pre in enumerate(preconditions):
+            plug = u.add_map(name=f"plug{i}")
+            p_sp = plug.add_node(UCM.StartPoint(name=f"pstart{i}"))
+            p_r = plug.add_node(UCM.RespRef(
+                name=f"P{i}", resp_def=u.get_or_add_responsibility(f"P{i}")))
+            p_ep = plug.add_node(UCM.EndPoint(name=f"pend{i}"))
+            plug.add_connection(p_sp, p_r)
+            plug.add_connection(p_r, p_ep)
+            binding = UCM.PluginBinding(stub=stub, plugin=plug)
+            binding.add_in(c_in, p_sp)
+            binding.add_out(p_ep, c_out)
+            if pre is not None:
+                binding.precondition = UCM.Condition(expression=pre)
+            stub.bindings.append(binding)
+    _scenario(u, starts=[sp], ends=[ep])
+    return u, root, sp, stub, ep
+
+
+class TestStubs:
+
+    def test_a_decomposed_model_traverses_cleanly(self):
+        u, *_ = _stub_model()
+        assert st.check_traversal(u) == []
+
+    def test_the_plugin_body_actually_executed(self):
+        """The point of descending: work inside the plug-in must run."""
+        result = st.traverse_all(_stub_model()[0])[0]
+        assert result.responsibilities == ["P0"]
+
+    def test_the_path_resumes_on_the_parent_map(self):
+        """A plug-in end point is a return, not a terminus."""
+        result = st.traverse_all(_stub_model()[0])[0]
+        assert "end" in result.reached_end_points      # the root's end point
+        assert result.ok
+
+    def test_coverage_spans_both_maps(self):
+        """Highlighting a decomposed model needs elements from every map."""
+        u, *_ = _stub_model()
+        result = st.traverse_all(u)[0]
+        visited_ids = {i for _t, i in result.visited}
+        root_ids = {el.id for el in u.maps[0].nodes} | {
+            c.id for c in u.maps[0].connections}
+        plug_ids = {el.id for el in u.maps[1].nodes} | {
+            c.id for c in u.maps[1].connections}
+        assert visited_ids & root_ids, "root map covered"
+        assert visited_ids & plug_ids, "plug-in map covered"
+
+    def test_the_stub_itself_is_counted(self):
+        u, _root, _sp, stub, _ep = _stub_model()
+        result = st.traverse_all(u)[0]
+        assert ("Stub", stub.id) in result.visited
+
+    def test_a_dynamic_stub_picks_the_plugin_whose_precondition_holds(self):
+        u, *_ = _stub_model(dynamic=True,
+                            preconditions=("x == 1", "x == 2"))
+        var = u.get_or_add_variable("x", type="integer")
+        sc = u.scenario_groups[0].scenarios[0]
+        sc.add_initialization(var, "2")
+        result = st.traverse_scenario(u, sc)
+        assert result.responsibilities == ["P1"]
+
+    def test_a_dynamic_stub_with_no_true_precondition_is_reported(self):
+        u, *_ = _stub_model(dynamic=True,
+                            preconditions=("x == 8", "x == 9"))
+        var = u.get_or_add_variable("x", type="integer")
+        sc = u.scenario_groups[0].scenarios[0]
+        sc.add_initialization(var, "1")
+        assert "no_plugin_selected" in _kinds(
+            st.traverse_scenario(u, sc).problems)
+
+    def test_a_static_stub_with_several_plugins_is_reported(self):
+        """Static means exactly one; several is a modelling error, not a
+        choice to make silently."""
+        u, *_ = _stub_model(dynamic=False, preconditions=(None, None))
+        assert "multiple_plugins_enabled" in _kinds(st.check_traversal(u))
