@@ -140,6 +140,56 @@ def stack_svgs(panels: List[Tuple[str, str]], *, id_prefix: str = "",
     return "\n".join(out)
 
 
+_TITLE_RE = re.compile(r"(<title>)(.*?)(</title>)", re.S)
+
+
+def _tooltip_names(ucm: "UCM", by_element_id: Dict[int, str]) -> Dict[str, str]:
+    """Re-key hover text from ``id(element)`` to the graphviz object name.
+
+    The classic renderer names a node ``n<id(node)>`` and an edge
+    ``n<id(source)>&#45;&gt;n<id(target)>``, and graphviz writes that name
+    into the SVG's ``<title>``. Matching on it is how a tooltip finds its
+    element after rendering.
+    """
+    out: Dict[str, str] = {}
+    for m in ucm.maps:
+        for node in getattr(m, "nodes", []):
+            text = by_element_id.get(id(node))
+            if text:
+                out[f"n{id(node)}"] = text
+        for c in getattr(m, "connections", []):
+            text = by_element_id.get(id(c))
+            if text:
+                out[f"n{id(c.source)}&#45;&gt;n{id(c.target)}"] = text
+    return out
+
+
+def _inject_tooltips(svg: str, tips: Dict[str, str]) -> str:
+    """Replace graphviz's ``<title>`` text with the caller's hover text.
+
+    graphviz only honours its own ``tooltip`` attribute when the element
+    also carries a ``URL`` — it becomes the generated anchor's
+    ``xlink:title`` — so an element without a link gets no hover text that
+    way. What it *does* always emit is a ``<title>`` holding the internal
+    object name, which browsers show on hover: unhelpful at best, since
+    that name embeds a memory address. Rewriting it is both how the
+    tooltip arrives and a small improvement on what was there.
+
+    Only titles with an entry in ``tips`` are touched; everything else is
+    left exactly as graphviz wrote it.
+    """
+    if not tips:
+        return svg
+
+    def repl(mo):
+        text = tips.get(mo.group(2))
+        if text is None:
+            return mo.group(0)
+        return f"{mo.group(1)}{escape(text)}{mo.group(3)}"
+
+    return _TITLE_RE.sub(repl, svg)
+
+
 def _stub_cond_text(cond) -> str:
     """A dynamic-stub binding's guard, as short display text: the logical
     expression unless it is the default ``true``, else the label."""
@@ -188,7 +238,8 @@ def model_to_svg(ucm: "UCM", style: str = "ucm", *,
                  edge_metric: Optional[str] = None,
                  heatmap_global: bool = False,
                  node_span: Optional[Tuple[float, float]] = None,
-                 edge_span: Optional[Tuple[float, float]] = None) -> str:
+                 edge_span: Optional[Tuple[float, float]] = None,
+                 coverage: Optional[dict] = None) -> str:
     """One model as a single inline SVG string.
 
     A single-map model renders directly. A decomposed (multi-map) model
@@ -215,13 +266,26 @@ def model_to_svg(ucm: "UCM", style: str = "ucm", *,
     # family-wide range); ``None`` lets ``heatmap_global`` (or the per-map
     # default) decide. Threaded to every map of a decomposed model so each
     # panel shares the imposed scale.
+    # Scenario coverage highlight: ``{"colors": …, "tooltips": …}`` keyed by
+    # ``id(element)``, as built by
+    # :func:`pm4py_ucm.algo.scenario_coverage.coverage_render` /
+    # :func:`~pm4py_ucm.algo.scenario_coverage.comparison_render`. Supplying
+    # it turns the heat-map off in the renderer: the two compete for the
+    # same colour channel, so only one can be read at a time.
+    _cov = {
+        "coverage_colors": (coverage or {}).get("colors") or {},
+        "coverage_tooltips": (coverage or {}).get("tooltips") or {},
+    }
     _heat = {"heatmap_node": heat_node, "heatmap_edge": heat_edge,
              "heatmap_global": bool(heatmap_global),
              "node_span": node_span if heatmap else None,
-             "edge_span": edge_span if heatmap else None}
+             "edge_span": edge_span if heatmap else None,
+             **_cov}
+    _tips = _tooltip_names(ucm, _cov["coverage_tooltips"])
     if len(ucm.maps) <= 1:
         gviz = _visualizer.apply(ucm, parameters={"style": style, **_heat})
-        return svg_body(gviz.pipe(format="svg").decode("utf-8"))
+        return _inject_tooltips(
+            svg_body(gviz.pipe(format="svg").decode("utf-8")), _tips)
 
     stub_links: Dict[int, Any] = {}
     menus: List[Any] = []
@@ -283,4 +347,6 @@ def model_to_svg(ucm: "UCM", style: str = "ucm", *,
                              **_heat})
         name = ucm_map.name or f"Map{idx}"
         panels.append((name, svg_body(gviz.pipe(format="svg").decode("utf-8"))))
-    return _inject_stub_menus(stack_svgs(panels, id_prefix=id_prefix), menus)
+    return _inject_tooltips(
+        _inject_stub_menus(stack_svgs(panels, id_prefix=id_prefix), menus),
+        _tips)

@@ -58,6 +58,12 @@ from .algo.scenario_traversal import (  # noqa: E402
     check_traversal,
     required_max_hit_count,
 )
+from .algo.scenario_coverage import (  # noqa: E402
+    Coverage,
+    Comparison,
+    coverage,
+    compare,
+)
 from .objects.ucm.obj import UCM
 
 __all__ = [
@@ -92,6 +98,10 @@ __all__ = [
     "traverse_all",
     "check_traversal",
     "required_max_hit_count",
+    "Coverage",
+    "Comparison",
+    "coverage",
+    "compare",
     "suggest_decomposition",
     "suggest_loop_iterations",
     "rank_partition_attributes",

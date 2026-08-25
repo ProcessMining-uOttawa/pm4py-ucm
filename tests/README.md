@@ -1,6 +1,6 @@
 # Test suite
 
-**1074 tests** across **33 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
+**1091 tests** across **34 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
 
 > Regenerate this file with `python tests/gen_readme.py` after adding or removing tests. Purposes are the first sentence of each module's docstring; edit the docstring, not this table.
 
@@ -20,6 +20,9 @@
 | | _Discovery & conversion subtotal_ | | **120** |
 | **Resources & performers** | [`test_resources.py`](test_resources.py) | Tests for resource mining and performer binding. | 22 |
 | **Scenario synthesis** | [`test_scenario_synthesis.py`](test_scenario_synthesis.py) | End-to-end smoke tests for variant clustering + scenario synthesis. | 59 |
+| **Scenario simulation & coverage** | [`test_scenario_coverage.py`](test_scenario_coverage.py) | Coverage over a set of scenarios, and the A/B comparison. | 17 |
+|  | [`test_scenario_traversal.py`](test_scenario_traversal.py) | Offline simulation of jUCMNav's scenario traversal. | 40 |
+| | _Scenario simulation & coverage subtotal_ | | **57** |
 | **Model families** | [`test_family.py`](test_family.py) | Tests for attribute-based model families. | 49 |
 |  | [`test_family_stats.py`](test_family_stats.py) | Tests for the family statistics layer and the HTML report. | 32 |
 |  | [`test_partition_advisor.py`](test_partition_advisor.py) | Tests for the deterministic partition advisor (docs/ai_insights.md §4.1b). | 8 |
@@ -46,7 +49,6 @@
 |  | [`test_sessions_registry.py`](test_sessions_registry.py) | Tests for the Session Parameter Registry (``web/sessions/registry.py``). | 10 |
 | | _Sessions (save / share / resume) subtotal_ | | **50** |
 | **Progress / infrastructure** | [`test_progress.py`](test_progress.py) | Tests for the progress-reporting layer and the vectorized DataFrame resource miner. | 15 |
-| **Other** | [`test_scenario_traversal.py`](test_scenario_traversal.py) | Offline simulation of jUCMNav's scenario traversal. | 40 |
-| | **Total** | | **1074** |
+| | **Total** | | **1091** |
 
 See the repository [`README.md`](../README.md#testing) for how to run the suite, and [`docs/metrics.md`](../docs/metrics.md) for the metric definitions the validation tests enforce.

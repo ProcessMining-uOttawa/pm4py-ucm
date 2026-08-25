@@ -12,6 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The jUCMNav scenario simulator (`pm4py_ucm.algo.scenario_traversal`) is
   now public API, exported from `pm4py_ucm`. It has existed since 0.7.x but
   was reachable only by importing the module directly.
+- Scenario **coverage** and **A/B comparison**
+  (`pm4py_ucm.algo.scenario_coverage`, exported as `coverage`, `compare`,
+  `Coverage`, `Comparison`): what fraction of the whole model a set of
+  scenarios walks, which elements it never touched, a per-element-kind
+  breakdown, and for two scenarios the A-only / B-only / both partition
+  with a Jaccard agreement. `coverage_render()` and `comparison_render()`
+  turn either into colours and hover text for the diagram; the renderer
+  drops the performance heat-map while a coverage highlight is on, since
+  the two compete for the same colour channel.
+- Diagram elements carry meaningful **hover text**. graphviz emits a
+  `<title>` holding its internal object name on every node and edge — a
+  memory address, shown on hover — and honours its own `tooltip=` only on
+  elements that also have a link. A coverage render now rewrites those
+  titles, so every element says what it is and whether these scenarios
+  walked it, and none exposes an address.
 - The scenario simulator traverses **stubs**, so a decomposed model — a root
   map plus plug-ins, which is what `decomposition="auto"` produces — can be
   simulated at all. A token entering a stub is handed to the bound plug-in's
