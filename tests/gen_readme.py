@@ -56,6 +56,10 @@ AREAS: dict[str, list[str]] = {
     "Scenario synthesis": [
         "test_scenario_synthesis.py",
     ],
+    "Scenario simulation & coverage": [
+        "test_scenario_traversal.py",
+        "test_scenario_coverage.py",
+    ],
     "Model families": [
         "test_family.py",
         "test_family_stats.py",

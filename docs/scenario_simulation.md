@@ -209,14 +209,38 @@ get the "before" numbers:
 Coverage on the decomposed model: 55.9% for one scenario, 98.8% for the
 union of all 24, with a single scenario touching 5 of the 6 maps.
 
-### Stage 3 — coverage and rendering
+### Stage 3 — coverage and rendering — **done**
 
-* Coverage over a set of scenarios: elements and connections walked, as a
-  fraction of the whole model.
-* A coverage **colour source** in `classic.apply`, alongside the existing
-  metric-driven one and mutually exclusive with it.
-* Per-element `tooltip=` carrying the hover statistics.
-* A/B: red / blue / purple, from the two scenarios' visited sets.
+* `pm4py_ucm.algo.scenario_coverage`: `coverage(ucm, results)` and
+  `compare(ucm, a, b)`, exported as `coverage` / `compare` / `Coverage` /
+  `Comparison`. Coverage carries `.fraction`, `.uncovered`, per-key hit
+  counts, and `.by_kind()` — a single percentage hides that a scenario can
+  walk every responsibility while leaving most connections untouched.
+  Comparison carries the three-way partition plus `.neither` and
+  `.agreement` (Jaccard).
+* `coverage_render()` / `comparison_render()` translate a coverage result
+  into `{"colors": …, "tooltips": …}` keyed by `id(element)`. The keying
+  boundary lives here: coverage works in model ids so it can leave the
+  process, the renderer works in object identity because that is what
+  graphviz names are built from.
+* `classic.apply` takes `coverage_colors` / `coverage_tooltips` and
+  **drops the heat-map when they are present** — the two compete for the
+  same channel.
+* `model_to_svg(..., coverage=…)` passes it through, on both the
+  single-map and the stacked multi-map path.
+
+**A correction to this note.** It claimed graphviz's `tooltip=` "emits an
+SVG `<title>`, which browsers render as a native hover tooltip". That is
+wrong: graphviz honours `tooltip` only when the element *also* carries a
+`URL`, because the tooltip becomes the generated anchor's `xlink:title`.
+An element without a link gets nothing.
+
+What graphviz *does* always emit is a `<title>` holding its internal object
+name — which embeds a memory address and is shown on hover on every diagram
+the project renders. The hover text is therefore injected by rewriting
+those titles, which is both how it arrives and a small improvement on what
+was there: after a coverage render, no element exposes an address, and the
+uncovered ones say "not covered" rather than nothing.
 
 ### Stage 4 — the Scenarios-view section
 

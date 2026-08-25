@@ -531,6 +531,26 @@ def _segment_metric_value(c: "UCM.NodeConnection",
         arc = preds[0]
 
 
+#: Stroke width for a covered element. Heavy enough that a highlighted
+#: path reads as one continuous line at a glance, without the value-driven
+#: variation the heat-map uses — coverage is a yes/no, not a magnitude.
+_COVERAGE_PENWIDTH = 2.6
+
+
+def _tint(hex_color: str, amount: float = 0.82) -> str:
+    """A pale wash of ``hex_color``, for filling a covered box.
+
+    The full-strength colour stays on the contour, so a covered node reads
+    as emphasised rather than blacked out and its label stays legible.
+    """
+    h = hex_color.lstrip("#")
+    if len(h) != 6:
+        return hex_color
+    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+    mix = lambda c: int(round(c + (255 - c) * amount))
+    return f"#{mix(r):02x}{mix(g):02x}{mix(b):02x}"
+
+
 def _heat_normalize(values, span=None):
     """Map each raw value to ``t`` in ``[0, 1]``.
 
@@ -657,6 +677,20 @@ def apply(ucm: UCM, parameters: Optional[Dict[str, Any]] = None) -> Digraph:
     # activities (``heatmap_node``) and edges (``heatmap_edge``).
     heatmap_node = parameters.get("heatmap_node")
     heatmap_edge = parameters.get("heatmap_edge")
+    # Scenario coverage: an explicit colour (and hover text) per element,
+    # keyed by ``id(element)``. Computed by
+    # :mod:`pm4py_ucm.algo.scenario_coverage`, which owns the semantics —
+    # the renderer only paints what it is handed.
+    #
+    # Coverage and the heat-map are MUTUALLY EXCLUSIVE, and coverage wins
+    # when both are supplied. They compete for the same channel: the
+    # heat-map already paints nodes and edges on a red ramp, so overlaying
+    # a red-for-A highlight on it would leave neither readable.
+    coverage_colors = parameters.get("coverage_colors") or {}
+    coverage_tooltips = parameters.get("coverage_tooltips") or {}
+    if coverage_colors:
+        heatmap_node = None
+        heatmap_edge = None
     # ``heatmap_global``: scale against the WHOLE model's min/max (so a value
     # reads the same in every map) rather than each map's own range. Computed
     # here over all maps and handed to every ``_emit_map`` as an explicit span;
@@ -787,6 +821,8 @@ def apply(ucm: UCM, parameters: Optional[Dict[str, Any]] = None) -> Digraph:
                           stub_links=stub_links,
                           heatmap_node=heatmap_node,
                           heatmap_edge=heatmap_edge,
+                          coverage_colors=coverage_colors,
+                          coverage_tooltips=coverage_tooltips,
                           node_span=node_span, edge_span=edge_span)
     else:
         if not ucm.maps:
@@ -795,6 +831,8 @@ def apply(ucm: UCM, parameters: Optional[Dict[str, Any]] = None) -> Digraph:
         _emit_map(g, ucm.maps[idx], style_table, style_name,
                   show_conditions=show_conditions, stub_links=stub_links,
                   heatmap_node=heatmap_node, heatmap_edge=heatmap_edge,
+                  coverage_colors=coverage_colors,
+                  coverage_tooltips=coverage_tooltips,
                   node_span=node_span, edge_span=edge_span)
 
     return g
@@ -811,6 +849,8 @@ def _emit_map(
     heatmap_edge: "Optional[Tuple[str, bool]]" = None,
     node_span: "Optional[Tuple[float, float]]" = None,
     edge_span: "Optional[Tuple[float, float]]" = None,
+    coverage_colors: Optional[Dict[int, str]] = None,
+    coverage_tooltips: Optional[Dict[int, str]] = None,
 ) -> None:
     """Render a single :class:`UCM.UCMmap` into the given graphviz graph.
 
@@ -914,6 +954,24 @@ def _emit_map(
             attrs["URL"] = href
             if tooltip:
                 attrs["tooltip"] = tooltip
+        # Scenario coverage overrides the node's own colours. Applied last
+        # so it wins over both the base style and any heat-map emphasis —
+        # though the two never co-occur, since ``apply`` drops the heat-map
+        # when coverage is present.
+        cov_color = (coverage_colors or {}).get(id(node))
+        if cov_color:
+            attrs["color"] = cov_color
+            attrs["penwidth"] = str(_COVERAGE_PENWIDTH)
+            if attrs.get("style", "").find("filled") >= 0:
+                attrs["fillcolor"] = _tint(cov_color)
+            else:
+                attrs["fontcolor"] = cov_color
+        # graphviz turns ``tooltip`` into an SVG <title>, which browsers
+        # render as a native hover tooltip — no JavaScript needed. Only set
+        # when a stub link has not already claimed it.
+        cov_tip = (coverage_tooltips or {}).get(id(node))
+        if cov_tip and "tooltip" not in attrs:
+            attrs["tooltip"] = cov_tip
         g_target.node(node_id(node), **attrs)
 
     # Find root ComponentRefs (no parent), and emit clusters top-down.
@@ -1021,4 +1079,15 @@ def _emit_map(
                 style_name, _HEAT_EDGE_PW[STYLE_BPMN])
             edge_attrs["color"] = _heat_color(t, edge_heat_time)
             edge_attrs["penwidth"] = f"{pmin + t * (pmax - pmin):.2f}"
+        # Scenario coverage, applied after the heat-map for the same reason
+        # as on nodes — the two never co-occur, and coverage wins.
+        cov_color = (coverage_colors or {}).get(id(c))
+        if cov_color:
+            edge_attrs["color"] = cov_color
+            edge_attrs["penwidth"] = str(_COVERAGE_PENWIDTH)
+        cov_tip = (coverage_tooltips or {}).get(id(c))
+        if cov_tip:
+            # An arc's hover text needs both ends set: graphviz puts the
+            # edge tooltip on the line, and labeltooltip on its label.
+            edge_attrs["edgetooltip"] = cov_tip
         g.edge(node_id(c.source), node_id(c.target), **edge_attrs)
