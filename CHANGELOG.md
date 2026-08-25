@@ -19,8 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Advanced — boundary rules & sizes** is renamed **Advanced decomposition**,
   and **Notation (Model tab)** is now just **Notation** — the app has views,
   not tabs.
-- The **Views** heading is a real subheader instead of the file's only
-  hand-rolled uppercase rail caption, so it matches **Decomposition**.
+- **Views** and **Notation** are now section subheaders rather than a
+  hand-rolled uppercase rail caption and a widget label respectively, so
+  every sidebar section is styled alike.
 
 ### Fixed
 

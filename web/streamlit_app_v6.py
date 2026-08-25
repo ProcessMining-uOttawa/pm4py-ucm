@@ -3474,9 +3474,13 @@ with st.sidebar:
     overlay_heatmap_global = overlay_heat_scope in ("global", "family")
 
     st.divider()
+    # A subheader + collapsed widget label, the same shape as Views below, so
+    # this reads as a section heading like Decomposition rather than as a
+    # widget caption. The label is kept (not blank) for screen readers.
+    st.subheader(":material/shapes: Notation")
     notation = st.radio(
-        ":material/shapes: Notation",
-        options=["UCM", "BPMN"], index=1, key="cfg_notation",
+        "Notation", options=["UCM", "BPMN"], index=1, key="cfg_notation",
+        label_visibility="collapsed",
     )
 
 
