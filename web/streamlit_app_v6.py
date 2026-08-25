@@ -3475,7 +3475,7 @@ with st.sidebar:
 
     st.divider()
     notation = st.radio(
-        ":material/shapes: Notation (Model tab)",
+        ":material/shapes: Notation",
         options=["UCM", "BPMN"], index=1, key="cfg_notation",
     )
 
@@ -4521,11 +4521,11 @@ st.session_state["family_base_fp"] = _family_base_fp
 _VIEWS = ["Model", "Scenarios", "Family", "Compare", "Dashboards"]
 # Display only — see the radio below.
 _VIEW_ICONS = {
-    "Model": "🗺️",
-    "Scenarios": "🎬",
-    "Family": "👨‍👩‍👧‍👦",
-    "Compare": "⚖️",
-    "Dashboards": "📊",
+    "Model": ":material/route:",
+    "Scenarios": ":material/movie:",
+    "Family": ":material/groups:",
+    "Compare": ":material/balance:",
+    "Dashboards": ":material/insights:",
 }
 
 with st.sidebar:

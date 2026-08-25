@@ -9,15 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- The web app's sidebar sections carry icons. Material Symbols
-  (`:material/…:`) throughout rather than emoji, matching the icons the cost
-  screen already uses, inheriting the text colour so they work in both
-  themes, and rendering identically on every platform. The five views are
-  prefixed with emoji (🗺️ Model, 🎬 Scenarios,
-  👨‍👩‍👧‍👦 Family, ⚖️ Compare, 📊 Dashboards) via the radio's
-  `format_func`, so the stored value stays `"Model"` / `"Scenarios"` / … and
-  a project saved with an `active_view` still resumes.
-- **Advanced — boundary rules & sizes** is renamed **Advanced decomposition**.
+- The web app's sidebar carries icons throughout — Material Symbols
+  (`:material/…:`), matching the icons the cost screen already uses,
+  inheriting the text colour so they work in both themes, and rendering
+  identically on every platform. The five views are iconed too (`route`,
+  `movie`, `groups`, `balance`, `insights`) via the radio's `format_func`,
+  so the stored value stays `"Model"` / `"Scenarios"` / … and a project
+  saved with an `active_view` still resumes.
+- **Advanced — boundary rules & sizes** is renamed **Advanced decomposition**,
+  and **Notation (Model tab)** is now just **Notation** — the app has views,
+  not tabs.
 - The **Views** heading is a real subheader instead of the file's only
   hand-rolled uppercase rail caption, so it matches **Decomposition**.
 
