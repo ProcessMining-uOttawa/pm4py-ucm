@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The jUCMNav scenario simulator (`pm4py_ucm.algo.scenario_traversal`) is
+  now public API, exported from `pm4py_ucm`. It has existed since 0.7.x but
+  was reachable only by importing the module directly.
+- `ScenarioTraversalResult.visits` records the net hit count of every
+  element a scenario entered — connections as well as nodes — keyed by
+  `(type name, model id)` so the record can be compared across runs,
+  serialised, and matched against a rendered diagram. `.visited` is the
+  subset that actually executed (blocking decrements, so a recorded element
+  can sit at zero and must not count as covered), and `.visit_labels`
+  carries a label per key. This is the basis of the coverage highlighting
+  and A/B comparison planned for 0.8.0 — see
+  [`docs/scenario_simulation.md`](docs/scenario_simulation.md).
+
 ## [0.7.12] — 2026-08-25
 
 **V6 is now the deployed app.** `streamlit_app.py` shims it, so

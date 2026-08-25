@@ -43,6 +43,21 @@ from .api import (
     suggest_decomposition,
     suggest_loop_iterations,
 )
+
+# Scenario simulation. Note the neighbouring ``compute_traversal_stats``
+# above: despite the shared word, the two are unrelated. That one replays
+# the *event log* over a model to produce the performance overlay's
+# traversal counts; these run a model's *scenarios* the way jUCMNav does,
+# and know nothing about a log.
+from .algo.scenario_traversal import (  # noqa: E402
+    ScenarioTraversalResult,
+    TraversalProblem,
+    NoScenariosError,
+    traverse_scenario,
+    traverse_all,
+    check_traversal,
+    required_max_hit_count,
+)
 from .objects.ucm.obj import UCM
 
 __all__ = [
@@ -69,6 +84,14 @@ __all__ = [
     "write_family_report",
     "annotate_performance",
     "compute_traversal_stats",
+    # Scenario simulation — unrelated to compute_traversal_stats above.
+    "ScenarioTraversalResult",
+    "TraversalProblem",
+    "NoScenariosError",
+    "traverse_scenario",
+    "traverse_all",
+    "check_traversal",
+    "required_max_hit_count",
     "suggest_decomposition",
     "suggest_loop_iterations",
     "rank_partition_attributes",
