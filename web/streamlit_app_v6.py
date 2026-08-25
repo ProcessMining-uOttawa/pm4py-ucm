@@ -2661,6 +2661,21 @@ def _accept_log_bytes(name: str, payload: bytes) -> None:
     new_hash = hashlib.sha256(payload).hexdigest()[:16]
     if new_hash == st.session_state.get("log_hash"):
         return
+    # Loading a different log retires the project that was resumed earlier,
+    # but Streamlit's file_uploader keeps its file attached until the widget
+    # is rebuilt — so the "Resume a saved project" panel went on naming the
+    # old project, and showing its notes, beside a log that project knows
+    # nothing about. Bump the nonce in the uploader's key so the next run
+    # builds a fresh, empty one, and drop the id that suppresses re-loading
+    # the same file (otherwise re-uploading that project later is ignored).
+    #
+    # NOT while a project is in flight: then this log IS the project's — a
+    # bundle's own log, or the log a settings-only project was waiting for.
+    if "pending_project" not in st.session_state:
+        st.session_state.pop("project_notes", None)
+        st.session_state.pop("project_loaded_id", None)
+        st.session_state["project_uploader_nonce"] = (
+            st.session_state.get("project_uploader_nonce", 0) + 1)
     name_lower = name.lower()
     if name_lower.endswith(".csv"):
         kind = "csv"
@@ -3472,7 +3487,10 @@ if _SESSIONS_OK:
     _load_exp = st.expander("↻ Resume a saved project", expanded=False)
     _lp_up = _load_exp.file_uploader(
         "Load project (.ucmproj.json / .ucmproj.zip)", type=["json", "zip"],
-        key="project_uploader",
+        # Keyed on a nonce so loading a different log can retire the
+        # selection (see _accept_log_bytes) — a file_uploader cannot be
+        # emptied any other way.
+        key=f"project_uploader::{st.session_state.get('project_uploader_nonce', 0)}",
         help="Restores the whole session: miner settings, filters, renaming, "
              "performers, overlays, family and scenario settings, and the "
              "open view.")

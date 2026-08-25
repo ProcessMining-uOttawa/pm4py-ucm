@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Loading an event log no longer leaves the previously resumed project
+  showing as selected. Streamlit keeps a `file_uploader`'s file attached
+  until the widget is rebuilt, so after resuming a project and then loading
+  a different log, the **Resume a saved project** panel went on naming the
+  old project — and showing its notes — beside a log that project knows
+  nothing about. The panel now clears when a different log arrives, but not
+  while a project is still in flight (a bundle's own log, or the log a
+  settings-only project is waiting for), and re-loading the same project
+  afterwards works rather than being silently ignored.
+
 ## [0.7.11] — 2026-08-17
 
 The theme is knowing what a log will cost before spending time on it, and
