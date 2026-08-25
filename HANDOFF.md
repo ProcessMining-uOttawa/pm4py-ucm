@@ -62,8 +62,8 @@ commits plus `92e1c63`, `59daa44` and `2066c1d`.
 - **Issue #97** — the four sites that pre-mine a tree to set a noise
   threshold are now redundant. V2/V3/V5 are deliberately left alone; new
   code should use `discovery_parameters`.
-- **V6 is not deployed.** `streamlit_app.py` still shims V5. Repointing it is
-  a deliberate decision, not part of this release unless you want it to be.
+- ~~**V6 is not deployed.**~~ Done in 0.7.12: `streamlit_app.py` shims V6,
+  so https://pm4py-ucm.streamlit.app/ serves the cost screen.
 - **`activities > 50` in `screen_mining` is untested** in the region that
   matters. It fires only on logs the variant clause already catches, and no
   log measured sits between 46 and 274 activities. A wide-but-regular log

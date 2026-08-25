@@ -16,11 +16,10 @@ Since v0.7.0 the deployed app is **V5** (the workspace shell + Dashboards,
 with a global pre-mining log filter and activity renaming), a strict
 superset of the earlier four-tab V3 and workspace V4 apps.
 
-**V6** (`streamlit_app_v6.py`, new in 0.7.11) adds a cost screen ahead of
-mining — see [The cost screen (V6)](#the-cost-screen-v6). It is a superset
-of V5 but is **not deployed**: `streamlit_app.py` still runs V5. Repointing
-the deployment is a deliberate decision, not an automatic consequence of the
-release.
+Since v0.7.12 the deployed app is **V6** (`streamlit_app_v6.py`), a superset
+of V5 that adds a cost screen ahead of mining — see
+[The cost screen (V6)](#the-cost-screen-v6). `streamlit_app.py` shims it, so
+the public URL serves it.
 
 ## Run locally
 
@@ -36,7 +35,7 @@ python -m venv .venv
 
 pip install -r web/requirements.txt
 streamlit run web/streamlit_app_v5.py     # V5 — the deployed app
-# streamlit run web/streamlit_app_v6.py   # V6 — adds the cost screen (not deployed)
+# streamlit run web/streamlit_app_v6.py   # V6 — the deployed app (adds the cost screen)
 # streamlit run web/streamlit_app_v3.py   # V3 — the earlier four-tab app
 ```
 
@@ -97,8 +96,8 @@ loaded log:
 
   ![Dashboards view](PM4Py-UCM-Dashboard.png)
 
-**`streamlit_app_v6.py`** (**V6**) is V5 plus the cost screen below. It is
-not deployed — run it locally. The earlier workspace **V4** app
+**`streamlit_app_v6.py`** (**V6**) is V5 plus the cost screen below, and is
+what the deployment serves. The earlier workspace **V4** app
 (`streamlit_app_v4.py`) and four-tab **V3** app (`streamlit_app_v3.py`) are
 strict subsets of V5 and stay in git history.
 **`streamlit_app_v2.py` is the FROZEN V2
@@ -612,7 +611,7 @@ version-controllable pipeline; see [`docs/code_export.md`](../docs/code_export.m
 
 1. Push this repo to GitHub.
 2. At <https://share.streamlit.io>, "New app" → pick the repo and branch.
-3. Set **Main file path** to `web/streamlit_app_v5.py` for the latest
+3. Set **Main file path** to `web/streamlit_app_v6.py` for the latest
    app (or `web/streamlit_app_v2.py` for the frozen V2 scenarios
    app). Streamlit Cloud picks up `web/requirements.txt`
    automatically (sits next to the main file). The existing primary
@@ -677,9 +676,9 @@ packages.txt                   # apt: graphviz  (Streamlit Cloud reads this at r
 .streamlit/
   config.toml                  # upload-size cap, telemetry off
 web/
-  streamlit_app.py             # entry point (shims V5 — the deployed app)
-  streamlit_app_v5.py          # V5 — workspace shell + Dashboards
-  streamlit_app_v6.py          # V6 — V5 + the pre-mining cost screen (not deployed)
+  streamlit_app.py             # entry point (shims V6 — the deployed app)
+  streamlit_app_v5.py          # V5 — workspace shell + Dashboards (superseded)
+  streamlit_app_v6.py          # V6 — V5 + the pre-mining cost screen (deployed)
   requirements.txt             # streamlit + pm4py + `-e .` (the package itself)
   PM4Py-UCM-Model.png          # per-feature screenshots used in the READMEs
   PM4Py-UCM-Scenarios.png
