@@ -348,3 +348,91 @@ class TestUnsupportedConstructs:
         # Skipping it quietly would report a clean run of a model half of
         # which was never executed.
         assert "unsupported_node" in _kinds(st.check_traversal(u))
+
+
+# ---------------------------------------------------------------------------
+# The visit record: what highlighting and coverage are built on.
+#
+# `hits` is kept internally by object identity, which is right for counting
+# but meaningless outside the process. `visits` re-keys it by model id so a
+# caller can compare two runs, serialise the result, or match it against a
+# rendered diagram.
+# ---------------------------------------------------------------------------
+
+class TestVisitRecord:
+
+    def test_every_element_on_the_path_is_recorded(self):
+        result = st.traverse_all(_linear_model())[0]
+        kinds = sorted(t for t, _ in result.visited)
+        # Both nodes and connections: a path is both.
+        assert kinds == ["EndPoint", "NodeConnection", "NodeConnection",
+                         "RespRef", "StartPoint"]
+
+    def test_a_linear_path_hits_each_element_once(self):
+        result = st.traverse_all(_linear_model())[0]
+        assert set(result.visits.values()) == {1}
+
+    def test_keys_are_model_ids_not_memory_addresses(self):
+        """The key must survive leaving the process — id() would not."""
+        u = _linear_model()
+        result = st.traverse_all(u)[0]
+        ids = {i for _t, i in result.visited}
+        model_ids = {el.id for m in u.maps
+                     for coll in (m.nodes, m.connections) for el in coll}
+        assert ids <= model_ids
+
+    def test_labels_accompany_every_visited_key(self):
+        result = st.traverse_all(_linear_model())[0]
+        assert all(result.visit_labels.get(k) for k in result.visited)
+
+    def test_a_loop_body_is_counted_per_iteration(self):
+        """Coverage is a set, but the counts still say how hard it worked."""
+        result = st.traverse_all(_counted_loop(iterations=3))[0]
+        assert result.ok
+        assert max(result.visits.values()) > 1
+
+    def test_visited_excludes_elements_that_never_executed(self):
+        """Blocking decrements, so a recorded key can sit at zero.
+
+        Counting those as covered would overstate coverage on exactly the
+        models where it matters most — the ones that deadlock.
+        """
+        result = st.traverse_all(_deadlocking_model())[0]
+        assert not result.ok
+        assert all(result.visits[k] > 0 for k in result.visited)
+        assert result.visited <= set(result.visits)
+
+    def test_the_record_is_stable_across_runs(self):
+        """Two runs of one scenario must agree, or A/B is meaningless."""
+        u = _linear_model()
+        first = st.traverse_all(u)[0].visited
+        second = st.traverse_all(u)[0].visited
+        assert first == second
+
+    def test_two_scenarios_partition_into_a_only_b_only_and_both(self):
+        """The A/B comparison mode, at the data level.
+
+        Two scenarios down opposite branches of one fork: the shared
+        approach is `both`, and each branch is exclusive to its side. All
+        three parts must be non-empty, or the three-colour rendering has
+        nothing to distinguish.
+        """
+        u = _fork_model("x == 1", "x == 2")
+        sc_a = u.scenario_groups[0].scenarios[0]
+        # A second scenario, same start, taking the other branch.
+        var = u.get_or_add_variable("x", type="integer")
+        other_end = next(n for m in u.maps for n in m.nodes
+                         if getattr(n, "name", "") == "other")
+        start = next(n for m in u.maps for n in m.nodes
+                     if getattr(n, "name", "") == "start")
+        sc_b = _scenario(u, name="b", inits=[(var, "2")],
+                         starts=[start], ends=[other_end])
+
+        a = st.traverse_scenario(u, sc_a).visited
+        b = st.traverse_scenario(u, sc_b).visited
+
+        assert a - b, "A took a branch B did not"
+        assert b - a, "B took a branch A did not"
+        assert a & b, "both share the start and the fork"
+        # The union is what a coverage highlight over {A, B} would paint.
+        assert (a | b) == (a - b) | (b - a) | (a & b)

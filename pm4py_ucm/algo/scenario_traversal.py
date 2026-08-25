@@ -234,10 +234,35 @@ class ScenarioTraversalResult:
     #: :func:`required_max_hit_count`.
     peak_hit_count: int = 0
     peak_hit_element: str = ""
+    #: Net hit count per element the traversal entered, keyed by
+    #: ``(type name, model id)``. "Net" because a node that blocks is
+    #: un-counted when it re-enters the waiting list, exactly as jUCMNav's
+    #: ``decrementHitCount`` does — so this is the number of times the
+    #: element actually executed, not the number of times it was tried.
+    #: Covers connections as well as nodes, since a path is both.
+    #:
+    #: Keyed by the model id rather than object identity so the record can
+    #: be compared, serialised and matched against a rendered diagram. Ids
+    #: are unique per ``(type, id)`` pair within a model; the type is part
+    #: of the key because nodes and connections share one id counter.
+    visits: Dict[Tuple[str, int], int] = field(default_factory=dict)
+    #: Human-readable label per key in :attr:`visits`, for tooltips and
+    #: problem reports.
+    visit_labels: Dict[Tuple[str, int], str] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
         return not self.problems
+
+    @property
+    def visited(self) -> "set":
+        """The keys in :attr:`visits` that actually executed.
+
+        A key can sit at zero: blocking decrements, so an element that was
+        entered and then evicted without ever completing is recorded but
+        did not run. Coverage must not count it.
+        """
+        return {k for k, c in self.visits.items() if c > 0}
 
 
 # ---------------------------------------------------------------------------
@@ -306,6 +331,11 @@ class _Traversal:
         #: Human-readable label per counted element, for reporting which
         #: one is closest to jUCMNav's ceiling.
         self.hit_labels: Dict[Tuple[str, int], str] = {}
+        #: The element behind each counted key. ``hits`` is keyed by object
+        #: identity (a memory address, which is right for counting but
+        #: meaningless outside this process), so keep the object itself in
+        #: order to publish a model-id-keyed record at the end.
+        self.hit_elements: Dict[Tuple[str, int], Any] = {}
         self.to_visit: List[Any] = []        # stack of PathNode
         self.wait_list: List[Any] = []       # queue of PathNode
         self.consecutive_reblocks = 0
@@ -321,6 +351,7 @@ class _Traversal:
 
     def track(self, el) -> None:
         key = _elem_key(el)
+        self.hit_elements.setdefault(key, el)
         if key not in self.hit_labels:
             name = getattr(el, "name", "") or ""
             ident = getattr(el, "id", None)
@@ -511,8 +542,27 @@ class _Traversal:
             key, count = max(self.hits.items(), key=lambda kv: kv[1])
             self.result.peak_hit_count = count
             self.result.peak_hit_element = self.hit_labels.get(key, "")
+        self._publish_visits()
         self._verify_end_points()
         return self.result
+
+    def _publish_visits(self) -> None:
+        """Re-key the internal hit counts by model id for the caller.
+
+        An element whose ``id`` is unset cannot be addressed from outside
+        this process, so it is dropped rather than published under a key
+        that would collide with every other id-less element of its type.
+        Mined and imported models set every id; this guards hand-built
+        ones.
+        """
+        for key, count in self.hits.items():
+            el = self.hit_elements.get(key)
+            ident = getattr(el, "id", None)
+            if ident is None:
+                continue
+            pub = (type(el).__name__, int(ident))
+            self.result.visits[pub] = self.result.visits.get(pub, 0) + count
+            self.result.visit_labels[pub] = self.hit_labels.get(key, "")
 
     def _verify_end_points(self) -> None:
         for ep in self.scenario.end_points:

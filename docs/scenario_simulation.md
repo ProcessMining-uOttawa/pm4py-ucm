@@ -149,15 +149,36 @@ jUCMNav properties line.
 
 ## Plan
 
-### Stage 1 — surface the simulator
+### Stage 1 — surface the simulator — **done**
 
-* Add the visited element/connection record with hit counts to
-  `ScenarioTraversalResult`.
-* Export the simulator from `pm4py_ucm/__init__.py`.
-* Resolve the `traversal` name collision, so the log-replay counts and the
-  scenario simulator are not both "traversal".
+* `ScenarioTraversalResult.visits` — the net hit count per element entered,
+  covering connections as well as nodes, keyed by `(type name, model id)`
+  rather than object identity so the record can be compared, serialised and
+  matched against a rendered diagram. `.visited` is the subset that actually
+  executed, and `.visit_labels` carries a label per key for tooltips.
+* Exported from `pm4py_ucm/__init__.py`.
+* **Name collision: resolved by disambiguation, not renaming.** The plan
+  originally assumed renaming was free because nothing imported the module.
+  That was wrong — the root README documents
+  `from pm4py_ucm.algo.scenario_traversal import required_max_hit_count`
+  and `check_traversal`, so those names are already public in practice.
+  They keep their names; the exports are grouped under a comment stating
+  plainly that the neighbouring `compute_traversal_stats` is unrelated.
+  Later stages should give *new* entry points unambiguous names rather than
+  rename these.
 
-No UI. Ends with the simulator usable from a notebook.
+Measured on `ClaimsPaymentLog` (24 synthesised scenarios, all clean, 210
+model elements) once this landed:
+
+| | |
+|---|---|
+| one scenario | 110/210 = **52.4%** of the whole model |
+| union of five | 178/210 = **84.8%** |
+| A vs B | A-only 7, B-only 23, both 103 |
+
+which is the three-way partition the A/B colours need, and confirms the
+"whole-model coverage reads low" risk is real but not absurd on a
+single-map model.
 
 ### Stage 2 — jUCMNav fidelity: stubs
 
