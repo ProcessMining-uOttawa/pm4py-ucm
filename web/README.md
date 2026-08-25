@@ -250,7 +250,7 @@ practical starting point**; useful range is roughly 0.1 – 0.4.
   `balance_ratio` by hand.
 
 All modes decompose on **every** operator kind. Switching to any non-off mode
-reveals an **Advanced — boundary rules & sizes** expander with the four toggles
+reveals an **Advanced decomposition** expander with the four toggles
 (`on_root_sequence`, `on_parallel`, `on_alternative`, `on_loop`) — all on by
 default — if you ever want to exclude one; under **Custom** the size inputs are
 editable there, and `auto` / the pre-sets show their values as a caption. Click
