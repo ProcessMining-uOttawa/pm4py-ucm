@@ -7,8 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.12] — 2026-08-25
+
+**V6 is now the deployed app.** `streamlit_app.py` shims it, so
+https://pm4py-ucm.streamlit.app/ serves the pre-mining cost screen that
+0.7.11 added but did not deploy. The rest of the release is the sidebar
+polish and two fixes that had to land first.
+
 ### Changed
 
+- The deployment serves **V6** instead of V5: `streamlit_app.py` runs
+  `streamlit_app_v6.py`. Everything V5 did is still there — V6 is a strict
+  superset — plus the cost screen, its two one-click log reductions, and the
+  replay gate.
 - The web app's sidebar carries icons throughout — Material Symbols
   (`:material/…:`), matching the icons the cost screen already uses,
   inheriting the text colour so they work in both themes, and rendering
