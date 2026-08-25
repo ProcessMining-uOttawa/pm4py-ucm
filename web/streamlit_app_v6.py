@@ -909,6 +909,52 @@ def _synthesize(
 
 
 @st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False)
+def _simulate_scenarios(synth_fingerprint: str, _ucm):
+    """Run every scenario on the synthesized model, jUCMNav-style.
+
+    Cached on the synthesis fingerprint; ``_ucm`` is the unhashable payload
+    carried on the synthesis result, same convention as
+    :func:`_scenario_jucm`. Returns ``(results, error)`` — a model with no
+    scenarios raises rather than returning "nothing wrong", and that
+    distinction is worth keeping all the way to the UI.
+    """
+    from pm4py_ucm.algo import scenario_traversal as _st
+    try:
+        return _st.traverse_all(_ucm), ""
+    except _st.NoScenariosError as exc:
+        return [], str(exc)
+    except Exception as exc:                     # pragma: no cover - env
+        return [], f"{type(exc).__name__}: {exc}"
+
+
+@st.cache_data(show_spinner=False)
+def _simulation_svg(synth_fingerprint: str, style: str, mode: str,
+                    picks: Tuple[str, ...], _ucm, _results):
+    """The model rendered with a coverage or A/B highlight.
+
+    Keyed on what the user chose, not on the (unhashable) results — those
+    are derived from the same fingerprint, so the key is complete.
+    """
+    from pm4py_ucm.algo import scenario_coverage as _sc
+    by_name = {r.scenario: r for r in _results}
+    chosen = [by_name[n] for n in picks if n in by_name]
+    if not chosen:
+        return None, None
+    if mode == "compare" and len(chosen) == 2:
+        cmp = _sc.compare(_ucm, chosen[0], chosen[1])
+        render = _sc.comparison_render(_ucm, cmp)
+        payload = cmp
+    else:
+        cov = _sc.coverage(_ucm, chosen)
+        render = _sc.coverage_render(_ucm, cov)
+        payload = cov
+    try:
+        return _svgmod.model_to_svg(_ucm, style, coverage=render), payload
+    except Exception:                            # pragma: no cover - env
+        return None, payload
+
+
 def _scenario_jucm(synth_fingerprint: str, _ucm) -> bytes:
     """The synthesized model as ``.jucm`` bytes — download-only, built on
     request. Cached on ``synth_fingerprint``; ``_ucm`` is the unhashable
@@ -5237,6 +5283,146 @@ if _view == "Scenarios":
                     "_condition_mining.csv is only emitted in "
                     "data-driven mode._"
                 )
+
+        # ---- Simulation ------------------------------------------------
+        # Bottom of the Scenarios view rather than a view of its own: the
+        # scenarios are defined right above, and "Compare" already means
+        # comparing family members. See docs/scenario_simulation.md.
+        st.divider()
+        st.subheader(":material/play_circle: Simulation")
+        st.caption(
+            "Runs each scenario the way jUCMNav does — a token per enabled "
+            "start point, an OR-fork picking the branch whose guard holds, "
+            "an AND-join waiting for every arm — then colours what the "
+            "selected scenarios walked. Hover any element for its detail."
+        )
+
+        _sim_results, _sim_err = _simulate_scenarios(
+            _synth_fp, synth["ucm"])
+        if _sim_err:
+            st.warning(f"Nothing to simulate: {_sim_err}")
+        elif not _sim_results:
+            st.info("No scenarios on this model.")
+        else:
+            _clean = [r for r in _sim_results if r.ok]
+            _broken = [r for r in _sim_results if not r.ok]
+            s1, s2, s3 = st.columns(3)
+            s1.metric("Scenarios run", len(_sim_results))
+            s2.metric("Ran cleanly", len(_clean))
+            s3.metric("With problems", len(_broken),
+                      delta=None if not _broken else "see below",
+                      delta_color="inverse")
+
+            if _broken:
+                with st.expander(
+                        f":material/error: {len(_broken)} scenario(s) "
+                        "reported problems", expanded=False):
+                    st.caption(
+                        "The same kinds jUCMNav lists in its Problems view. "
+                        "`infinite_loop` is measured against jUCMNav's "
+                        "*maximum hit count* preference, which is a setting "
+                        "rather than a property of the model."
+                    )
+                    st.dataframe(
+                        pd.DataFrame([
+                            {"scenario": pr.scenario, "kind": pr.kind,
+                             "element": pr.node_type, "name": pr.node_name,
+                             "detail": pr.detail}
+                            for r in _broken for pr in r.problems
+                        ]), width="stretch")
+
+            _names = [r.scenario for r in _sim_results]
+            _mode = st.radio(
+                "Highlight", options=["Coverage", "Compare A vs B"],
+                horizontal=True, key="sim_mode",
+                help="**Coverage** paints what any of the selected scenarios "
+                     "walked. **Compare A vs B** paints one scenario red, "
+                     "the other blue, and what both walked purple.",
+            )
+
+            if _mode == "Coverage":
+                _picks = st.multiselect(
+                    "Scenarios to highlight", options=_names,
+                    default=_names[:1], key="sim_cov_picks",
+                    help="Coverage is a set: an element a loop enters nine "
+                         "times is covered once.",
+                )
+                _picks = tuple(_picks)
+                _sim_mode_key = "coverage"
+            else:
+                ab1, ab2 = st.columns(2)
+                _a = ab1.selectbox("A (red)", options=_names, index=0,
+                                   key="sim_a")
+                _b = ab2.selectbox(
+                    "B (blue)", options=_names,
+                    index=1 if len(_names) > 1 else 0, key="sim_b")
+                _picks = (_a, _b)
+                _sim_mode_key = "compare"
+                if _a == _b:
+                    st.info(
+                        "A and B are the same scenario, so everything it "
+                        "walked is shared — pick two to see a difference.")
+
+            if not _picks:
+                st.info("Select at least one scenario to highlight.")
+            else:
+                _svg_cov, _payload = _simulation_svg(
+                    _synth_fp, style, _sim_mode_key, _picks,
+                    synth["ucm"], _sim_results)
+
+                if _sim_mode_key == "coverage" and _payload is not None:
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Model covered",
+                              f"{_payload.fraction * 100:.1f}%")
+                    c2.metric("Elements",
+                              f"{len(_payload.covered):,} / "
+                              f"{len(_payload.total):,}")
+                    c3.metric("Never walked", f"{len(_payload.uncovered):,}")
+                    st.caption(
+                        "Against the **whole model**, every map included. A "
+                        "single scenario reads low because it walks one path "
+                        "through a model that contains every path."
+                    )
+                    with st.expander("Coverage by element kind",
+                                     expanded=False):
+                        st.caption(
+                            "One percentage hides that a scenario can walk "
+                            "every responsibility while leaving most "
+                            "connections untouched."
+                        )
+                        st.dataframe(pd.DataFrame([
+                            {"element": k, "covered": v[0], "total": v[1],
+                             "%": f"{(v[0] / v[1] * 100) if v[1] else 0:.0f}%"}
+                            for k, v in _payload.by_kind().items()
+                        ]), width="stretch")
+                elif _payload is not None:
+                    d1, d2, d3, d4 = st.columns(4)
+                    d1.metric("Only A", f"{len(_payload.a_only):,}")
+                    d2.metric("Only B", f"{len(_payload.b_only):,}")
+                    d3.metric("Both", f"{len(_payload.both):,}")
+                    d4.metric("Agreement",
+                              f"{_payload.agreement * 100:.0f}%")
+                    st.caption(
+                        "Agreement is the share of everything either "
+                        "scenario walked that **both** walked. "
+                        f"{len(_payload.neither):,} element(s) were walked "
+                        "by neither."
+                    )
+
+                if overlay_heatmap:
+                    st.info(
+                        "The performance overlay's heat-map is suspended "
+                        "while a highlight is on — both colour the same "
+                        "elements, so only one can be read at a time.",
+                        icon=":material/palette:")
+
+                if _svg_cov:
+                    _svg_viewer(_svg_cov, height=620, key="sim_svg")
+                else:
+                    st.warning(
+                        "Could not render the highlighted model — check "
+                        "that the graphviz binary is on PATH."
+                    )
 
 # ===== Family view ========================================================
 if _view == "Family":
