@@ -61,7 +61,8 @@ real log:
    real numbers, written side by side for jUCMNav.
 
 Requires `pm4py` (for reading XES). The data-driven sections and the
-capstone additionally require `scikit-learn`.
+capstone use `scikit-learn`, which since 0.7.11 installs with the package
+rather than being an undeclared import.
 
 ## Model-families notebook
 

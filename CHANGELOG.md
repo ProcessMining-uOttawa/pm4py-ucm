@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Queued for **0.7.11**. The theme is knowing what a log will cost before
-spending time on it, and being honest about which reported numbers are
-measurements and which are time limits.
+## [0.7.11] — 2026-08-17
+
+The theme is knowing what a log will cost before spending time on it, and
+being honest about which reported numbers are measurements and which are
+time limits.
 
 ### Added
 

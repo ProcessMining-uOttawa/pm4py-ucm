@@ -16,6 +16,12 @@ Since v0.7.0 the deployed app is **V5** (the workspace shell + Dashboards,
 with a global pre-mining log filter and activity renaming), a strict
 superset of the earlier four-tab V3 and workspace V4 apps.
 
+**V6** (`streamlit_app_v6.py`, new in 0.7.11) adds a cost screen ahead of
+mining — see [The cost screen (V6)](#the-cost-screen-v6). It is a superset
+of V5 but is **not deployed**: `streamlit_app.py` still runs V5. Repointing
+the deployment is a deliberate decision, not an automatic consequence of the
+release.
+
 ## Run locally
 
 Requires Python 3.9+ and the [Graphviz](https://graphviz.org/download/) `dot`
@@ -30,6 +36,7 @@ python -m venv .venv
 
 pip install -r web/requirements.txt
 streamlit run web/streamlit_app_v5.py     # V5 — the deployed app
+# streamlit run web/streamlit_app_v6.py   # V6 — adds the cost screen (not deployed)
 # streamlit run web/streamlit_app_v3.py   # V3 — the earlier four-tab app
 ```
 
@@ -37,9 +44,9 @@ Streamlit opens `http://localhost:8501`.
 
 The web-specific deps (`streamlit`, `pm4py`, `scikit-learn`) live in
 `web/requirements.txt` so they stay out of the package's own dev workflow
-(`pip install -e ".[dev]"`). `scikit-learn` is only needed by the
-data-driven scenario condition mining (the option greys out when it is
-missing).
+(`pip install -e ".[dev]"`). `scikit-learn` is also a runtime dependency of
+the package itself as of 0.7.11; it is needed by the data-driven scenario
+condition mining (the option greys out when it is missing).
 
 ## The app and its views
 
@@ -90,12 +97,64 @@ loaded log:
 
   ![Dashboards view](PM4Py-UCM-Dashboard.png)
 
-The earlier workspace **V4** app (`streamlit_app_v4.py`) and four-tab **V3**
-app (`streamlit_app_v3.py`) are strict subsets of V5 and stay in git history.
+**`streamlit_app_v6.py`** (**V6**) is V5 plus the cost screen below. It is
+not deployed — run it locally. The earlier workspace **V4** app
+(`streamlit_app_v4.py`) and four-tab **V3** app (`streamlit_app_v3.py`) are
+strict subsets of V5 and stay in git history.
 **`streamlit_app_v2.py` is the FROZEN V2
 app** (model + scenarios) — served at
 https://pm4py-ucm-scenarios.streamlit.app/ for a paper under review; do
 not modernise it. **V1** (model-only) was retired at v0.5.1.
+
+## The cost screen (V6)
+
+On a log with a large alphabet or near-unique cases the miner can run for
+minutes, or not finish. V6 screens the log **before** mining and, when it
+looks expensive, stops to say so rather than spending the time silently.
+
+The verdict is a **reason, not an ETA** — the statistics that rank logs
+correctly cannot time them. The panel shows activities / cases / events /
+variants (as *kept / original* once a filter is on) and what tripped the
+screen. Reducing the log is the only remedy that keeps the model usable;
+faster miner settings return a flower model with every activity and no
+control flow, which leaves nothing to cluster or synthesize from.
+
+### The two one-click reductions
+
+The gate offers the two reductions that address the two conditions it
+screens for:
+
+* **Keep the N most frequent variants** — drops rare *behaviour*, keeping
+  every activity. Usually the bigger win, because the number of distinct
+  sequences drives the cost.
+* **Keep the N most frequent activities** — drops rare *activities*; they
+  disappear from the model and the alphabet shrinks.
+
+Both apply, in either order, and each re-checks the log afterwards so you
+can apply the second before mining. Each appears in the sidebar's **Log
+filters** with its own *Remove* button, survives a refresh, and travels in a
+saved project.
+
+Each reduction is recorded as **what it selected** — the variant one keeps
+the *cases* it picked on the log as it stood when you clicked it, the
+activity one names the *activities*. They are deliberately not stored as
+"top N by rank", because a rank is relative to a population and every other
+filter moves it: re-reading "the top 2,000 variants" after an activity
+reduction had collapsed the log to fewer than 2,000 selected all of them,
+silently restoring every case the reduction had dropped.
+
+### The replay gate
+
+The model itself is cheap once mined; the replay-based metrics (coverage,
+traversal counts) are a second pass that on a big log dominates everything.
+Unlike mining, that cost *can* be measured, so V6 probes rather than
+guesses. Most logs finish inside the probe and are never interrupted; when
+they do not, you are told the estimate and can compute the metrics, drop
+them, or defer. Time metrics such as sojourn are read straight from the log
+and are computed either way.
+
+Answering the prompt changes only the metrics — the mined model and the log
+filters stay exactly as they were.
 
 ## Using the app
 
@@ -618,7 +677,9 @@ packages.txt                   # apt: graphviz  (Streamlit Cloud reads this at r
 .streamlit/
   config.toml                  # upload-size cap, telemetry off
 web/
-  streamlit_app.py             # entry point
+  streamlit_app.py             # entry point (shims V5 — the deployed app)
+  streamlit_app_v5.py          # V5 — workspace shell + Dashboards
+  streamlit_app_v6.py          # V6 — V5 + the pre-mining cost screen (not deployed)
   requirements.txt             # streamlit + pm4py + `-e .` (the package itself)
   PM4Py-UCM-Model.png          # per-feature screenshots used in the READMEs
   PM4Py-UCM-Scenarios.png
