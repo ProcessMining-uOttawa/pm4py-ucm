@@ -406,6 +406,32 @@ and per-fork condition-mining accuracy in data-driven mode). A single
 you ask, since this view shows no model on screen. Works on flat and
 decomposed models alike.
 
+#### Simulation (bottom of the Scenarios view)
+
+Once scenarios are synthesised, the section at the bottom of this view runs
+each one the way jUCMNav does — a token per enabled start point, an OR-fork
+picking the branch whose guard holds, an AND-fork spawning a token per arm,
+an AND-join waiting for every one — and reports the same problem kinds
+jUCMNav lists in its Problems view. A decomposed model is traversed into its
+plug-in maps, so a stub is descended rather than skipped.
+
+Two highlight modes over the mined model:
+
+* **Coverage** — pick any number of scenarios; the elements they walked are
+  coloured, with the share of the **whole model** they cover, how many
+  elements were never walked, and a breakdown per element kind. Coverage is
+  a set, so a loop that enters an element nine times covers it once. A single
+  scenario reads low by design: it walks one path through a model containing
+  every path.
+* **Compare A vs B** — pick two scenarios; what only **A** walked is red,
+  only **B** blue, and what **both** walked purple, with the three counts, an
+  agreement figure, and how many elements neither touched.
+
+Every element carries hover text saying what it is and whether these
+scenarios walked it. The performance overlay's heat-map is suspended while a
+highlight is on — both colour the same elements, so only one can be read at
+a time — and the app says so rather than letting it appear to vanish.
+
 ### 6 · Family
 
 A **💡 Suggested attributes** table ranks the case attributes by

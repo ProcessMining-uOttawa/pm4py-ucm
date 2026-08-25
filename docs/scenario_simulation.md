@@ -242,12 +242,29 @@ those titles, which is both how it arrives and a small improvement on what
 was there: after a coverage render, no element exposes an address, and the
 uncovered ones say "not covered" rather than nothing.
 
-### Stage 4 — the Scenarios-view section
+### Stage 4 — the Scenarios-view section — **done**
 
-* Multi-select scenarios → highlight + coverage summary.
-* A/B mode → two selectors, three colours, coverage for each and for the
-  intersection.
-* Heat-map / coverage mutual exclusion in the sidebar.
+A **Simulation** section at the bottom of the Scenarios view, appearing
+once scenarios have been synthesised:
+
+* every scenario is run, with a run/clean/problems summary and a table of
+  the problems jUCMNav would list;
+* **Coverage** mode — multi-select scenarios, then percentage of the whole
+  model, covered/total, never-walked count, and a by-element-kind
+  breakdown;
+* **Compare A vs B** mode — two selectors, the A-only / B-only / both
+  counts, the agreement, and how many elements neither walked;
+* the highlighted model rendered inline, every element hoverable;
+* a notice when the performance overlay's heat-map is suspended. That
+  notice earns its place: the heat-map defaults **on** whenever overlay
+  metrics are picked, so without it the user would watch their heat-map
+  vanish with no explanation.
+
+Verified in the running app on `ClaimsPaymentLog`: 18 scenarios, all clean;
+coverage mode 54.7% (128/234); A/B `v1_QuickAssessment` vs
+`v2_AnalyzeClaim` giving 7 / 23 / 121 at 80% agreement with 83 walked by
+neither; and inside the viewer, an SVG carrying all three colours and 254
+hover titles.
 
 ### Stage 5 — persistence and export
 

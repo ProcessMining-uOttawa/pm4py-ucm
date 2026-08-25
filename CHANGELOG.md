@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The jUCMNav scenario simulator (`pm4py_ucm.algo.scenario_traversal`) is
   now public API, exported from `pm4py_ucm`. It has existed since 0.7.x but
   was reachable only by importing the module directly.
+- A **Simulation** section at the bottom of the web app's Scenarios view.
+  It runs every synthesised scenario the way jUCMNav does and reports what
+  jUCMNav's Problems view would; **Coverage** mode highlights what a
+  selected set of scenarios walked, with the percentage of the whole model
+  and a per-element-kind breakdown; **Compare A vs B** highlights one
+  scenario red, the other blue and what both walked purple, with the
+  three-way counts and an agreement figure. Every element is hoverable. The
+  performance heat-map is suspended while a highlight is on, with a notice
+  saying so — it defaults on whenever overlay metrics are picked, so it
+  would otherwise appear to vanish unexplained.
 - Scenario **coverage** and **A/B comparison**
   (`pm4py_ucm.algo.scenario_coverage`, exported as `coverage`, `compare`,
   `Coverage`, `Comparison`): what fraction of the whole model a set of
