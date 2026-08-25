@@ -3114,7 +3114,7 @@ with st.sidebar:
         f'rel="noopener">Daniel Amyot</a>, uOttawa, 2026</div>',
         unsafe_allow_html=True,
     )
-    st.header("⛏️ Inductive miner")
+    st.header(":material/conversion_path: Inductive miner")
     st.session_state.setdefault("cfg_noise", 0.2)   # default; a project overrides
     noise_threshold = st.slider(
         "Noise threshold", min_value=0.0, max_value=1.0,
@@ -4554,7 +4554,7 @@ with st.sidebar:
         f'</div>',
         unsafe_allow_html=True,
     )
-    st.subheader("👁️ Views")
+    st.subheader(":material/preview: Views")
     # A view switch requested from elsewhere in the page (Pin to
     # dashboard) arrives as `goto_view` and is consumed HERE, before the
     # radio exists. Streamlit forbids writing a widget's own key once the

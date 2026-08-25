@@ -10,10 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The web app's sidebar sections carry icons. Material Symbols
-  (`:material/…:`) rather than emoji, matching the icons the cost screen
-  already uses and inheriting the text colour so they work in both themes —
-  with two emoji the maintainer picked, ⛏️ for the miner and 👁️ for Views.
-  The five views are prefixed too (🗺️ Model, 🎬 Scenarios,
+  (`:material/…:`) throughout rather than emoji, matching the icons the cost
+  screen already uses, inheriting the text colour so they work in both
+  themes, and rendering identically on every platform. The five views are
+  prefixed with emoji (🗺️ Model, 🎬 Scenarios,
   👨‍👩‍👧‍👦 Family, ⚖️ Compare, 📊 Dashboards) via the radio's
   `format_func`, so the stored value stays `"Model"` / `"Scenarios"` / … and
   a project saved with an `active_view` still resumes.
