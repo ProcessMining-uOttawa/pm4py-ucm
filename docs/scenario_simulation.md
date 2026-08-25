@@ -57,7 +57,7 @@ The bookkeeping already exists internally — `_Traversal` counts hits per
 `_elem_key(el)` — it is simply not surfaced. This is the cheapest item on
 the list, and everything else depends on it.
 
-### 2. Stubs are unsupported, so decomposed models cannot be simulated
+### 2. Stubs are unsupported, so decomposed models cannot be simulated — **closed in Stage 2**
 
 Today `_UNSUPPORTED` contains `Stub`, `WaitingPlace`, `Timer`, `Connect`,
 `FailurePoint` and `Anything`. `Stub` being in that tuple means a decomposed
@@ -180,15 +180,34 @@ which is the three-way partition the A/B colours need, and confirms the
 "whole-model coverage reads low" risk is real but not absurd on a
 single-map model.
 
-### Stage 2 — jUCMNav fidelity: stubs
+### Stage 2 — jUCMNav fidelity: stubs — **done**
 
-* Traverse into plug-in maps: a token entering a stub continues in the bound
-  plug-in and returns to the stub's out-path.
-* Decide and document the semantics for a **dynamic** stub with several
-  plug-ins, which is where matching jUCMNav exactly matters most.
-* Keep `unsupported_node` reporting for everything still out of scope.
-* State the deviations from jUCMNav explicitly in the module docstring
-  rather than leaving them implicit.
+* `Stub` is out of `_UNSUPPORTED`. A token entering a stub is handed to the
+  bound plug-in's start point; a plug-in end point is treated as a *return*
+  and the path resumes on the stub's out-arc, so coverage spans every map.
+* **Static** stub: exactly one plug-in, and several bound is reported
+  (`multiple_plugins_enabled`) rather than silently picked.
+* **Dynamic** stub: every binding whose precondition holds is entered, a
+  binding without a precondition counting as true; none holding is reported
+  (`no_plugin_selected`). Recorded as an assumption, not a validated match —
+  the generators emit only static stubs, so there was nothing to check it
+  against.
+* Two ambiguities are reported rather than guessed, both impossible in a
+  generated model: `ambiguous_plugin_return` (one end point bound by several
+  stubs — the scheduler carries nodes rather than tokens, so which caller to
+  return to cannot be recovered) and `ambiguous_plugin_entry`.
+
+Measured on `ClaimsPaymentLog` mined with `decomposition="auto"` — 6 maps,
+247 elements, 24 scenarios — by restoring the old `_UNSUPPORTED` tuple to
+get the "before" numbers:
+
+| | clean | responsibilities run by scenario 1 | problems |
+|---|---|---|---|
+| before | 0/24 | 1 | 24 x `unsupported_node`, 24 x `end_point_not_reached` |
+| after | **24/24** | **16** | none |
+
+Coverage on the decomposed model: 55.9% for one scenario, 98.8% for the
+union of all 24, with a single scenario touching 5 of the 6 maps.
 
 ### Stage 3 — coverage and rendering
 

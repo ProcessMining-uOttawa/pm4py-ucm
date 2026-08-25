@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The jUCMNav scenario simulator (`pm4py_ucm.algo.scenario_traversal`) is
   now public API, exported from `pm4py_ucm`. It has existed since 0.7.x but
   was reachable only by importing the module directly.
+- The scenario simulator traverses **stubs**, so a decomposed model — a root
+  map plus plug-ins, which is what `decomposition="auto"` produces — can be
+  simulated at all. A token entering a stub is handed to the bound plug-in's
+  start point, and a plug-in end point is a *return*: the path resumes on the
+  stub's out-arc, so a scenario's coverage spans every map it walked. On
+  `ClaimsPaymentLog` mined with decomposition, all 24 scenarios now run clean
+  where before every one of them reported `unsupported_node` and stopped
+  after a single responsibility. A static stub bound to several plug-ins, a
+  dynamic stub with no true precondition, and the two binding ambiguities
+  that only hand-authored models can produce are all reported rather than
+  guessed.
 - `ScenarioTraversalResult.visits` records the net hit count of every
   element a scenario entered — connections as well as nodes — keyed by
   `(type name, model id)` so the record can be compared across runs,

@@ -33,6 +33,23 @@ Unsupported node kinds are reported rather than skipped
 (``unsupported_node``): a simulator that quietly ignores a construct it
 cannot execute would report success on models it never really ran, which
 is the exact failure this module exists to prevent.
+
+**Stubs.** A decomposed model is a root map plus plug-in maps joined by
+stubs, and the traversal descends into them: a token entering a stub is
+handed to the bound plug-in's start point, and a plug-in end point is a
+*return* — the path resumes on the stub's out-arc. Deviations from
+jUCMNav worth stating plainly:
+
+* a **static** stub must have exactly one plug-in; several is reported
+  (``multiple_plugins_enabled``) rather than chosen between;
+* a **dynamic** stub enters every binding whose precondition holds, a
+  binding without a precondition counting as true. That reading is an
+  assumption: the generators emit only static stubs, so it has not been
+  validated against jUCMNav;
+* an end point bound by several stubs is reported
+  (``ambiguous_plugin_return``) rather than guessed. The scheduler
+  carries nodes, not tokens, so which caller to return to cannot be
+  recovered at that point. Decomposition never produces this shape.
 """
 from __future__ import annotations
 
@@ -270,7 +287,12 @@ class ScenarioTraversalResult:
 # ---------------------------------------------------------------------------
 
 _PASS_THROUGH = (UCM.EmptyPoint, UCM.DirectionArrow, UCM.OrJoin)
-_UNSUPPORTED = (UCM.Stub, UCM.WaitingPlace, UCM.Timer, UCM.Connect,
+#: Node kinds the traversal cannot execute. Reported, never skipped — a
+#: simulator that quietly ignored a construct would return "no problems" on
+#: a model it never really ran. None of these is produced by the generators
+#: (checked across ``objects/ucm/conversion`` and ``algo/discovery``); they
+#: reach us only from a hand-authored or imported ``.jucm``.
+_UNSUPPORTED = (UCM.WaitingPlace, UCM.Timer, UCM.Connect,
                 UCM.FailurePoint, UCM.Anything)
 
 def _elem_key(el) -> Tuple[str, int]:
@@ -336,6 +358,14 @@ class _Traversal:
         #: meaningless outside this process), so keep the object itself in
         #: order to publish a model-id-keyed record at the end.
         self.hit_elements: Dict[Tuple[str, int], Any] = {}
+        #: ``end point -> [(binding, stub exit connection)]``. A plug-in's
+        #: end point is not a terminus: the path resumes on the parent map.
+        self.out_index: Dict[int, List[Tuple[Any, Any]]] = {}
+        #: The connection a node was last entered through. A stub with
+        #: several in-bindings needs it to know which plug-in start point
+        #: the arriving token maps to.
+        self.entry_conn: Dict[int, Any] = {}
+        self._build_stub_index()
         self.to_visit: List[Any] = []        # stack of PathNode
         self.wait_list: List[Any] = []       # queue of PathNode
         self.consecutive_reblocks = 0
@@ -343,6 +373,69 @@ class _Traversal:
         self.reached: List[Any] = []
         self.result = ScenarioTraversalResult(scenario=scenario.name)
         self._cache: Dict[str, Any] = {}
+
+    # -- stub plumbing --------------------------------------------------
+
+    def _build_stub_index(self) -> None:
+        """Index every plug-in end point by where it returns to.
+
+        Built once up front rather than searched per end point: the
+        traversal reaches end points often, and the binding graph does not
+        change while a scenario runs.
+        """
+        for m in self.ucm.maps:
+            for node in getattr(m, "nodes", []):
+                if not isinstance(node, UCM.Stub):
+                    continue
+                for binding in node.bindings:
+                    for ob in binding.out_bindings:
+                        ep = getattr(ob, "end_point", None)
+                        exit_conn = getattr(ob, "stub_exit", None)
+                        if ep is None or exit_conn is None:
+                            continue
+                        self.out_index.setdefault(id(ep), []).append(
+                            (binding, exit_conn))
+
+    def _select_bindings(self, stub) -> List[Any]:
+        """Which plug-ins this token enters.
+
+        A **static** stub has exactly one plug-in. A **dynamic** stub
+        chooses by precondition, and jUCMNav may run several concurrently —
+        so every binding whose precondition holds is entered, and a
+        binding with no precondition counts as always true.
+
+        Neither kind is produced by the generators today (decomposition
+        emits static stubs with a single binding), so the dynamic reading
+        here is a documented assumption rather than something validated
+        against jUCMNav.
+        """
+        bindings = list(getattr(stub, "bindings", []))
+        if not bindings:
+            self.problem("unbound_stub", stub,
+                         "no plug-in is bound, so the path stops here")
+            return []
+        if not stub.dynamic:
+            if len(bindings) > 1:
+                self.problem("multiple_plugins_enabled", stub,
+                             f"{len(bindings)} plug-ins bound to a static "
+                             "stub, which selects exactly one")
+                return []
+            return bindings
+        chosen = []
+        for b in bindings:
+            expr = getattr(getattr(b, "precondition", None), "expression", "")
+            if not expr:
+                chosen.append(b)
+                continue
+            try:
+                if bool(self.guard(expr)(self.values)):
+                    chosen.append(b)
+            except ExpressionError as exc:
+                self.problem("expression_error", stub, str(exc))
+        if not chosen:
+            self.problem("no_plugin_selected", stub,
+                         "no plug-in precondition held")
+        return chosen
 
     # -- bookkeeping ----------------------------------------------------
 
@@ -396,6 +489,7 @@ class _Traversal:
 
     def visit_connection(self, conn) -> None:
         self.track(conn)
+        self.entry_conn[id(conn.target)] = conn
         self.to_visit.append(conn.target)
 
     def next_visit(self):
@@ -433,6 +527,48 @@ class _Traversal:
             if node not in self.reached:
                 self.reached.append(node)
                 self.result.reached_end_points.append(node.name)
+            # A plug-in's end point is a return, not a terminus: the path
+            # resumes on the parent map's out-arc from the stub.
+            returns = self.out_index.get(id(node), [])
+            if len(returns) > 1:
+                # The same end point bound by several stubs. Which arc to
+                # resume on depends on which stub the token came through,
+                # and the scheduler carries nodes rather than tokens, so
+                # that cannot be recovered here. Report rather than pick:
+                # guessing would silently attribute the rest of the run to
+                # an arbitrary caller. Decomposition never produces this.
+                self.problem("ambiguous_plugin_return", node,
+                             f"end point is bound by {len(returns)} stubs; "
+                             "cannot tell which one to return to")
+                return
+            if returns:
+                self.visit_connection(returns[0][1])
+            return
+
+        if isinstance(node, UCM.Stub):
+            entered = self.entry_conn.get(id(node))
+            for binding in self._select_bindings(node):
+                ins = list(binding.in_bindings)
+                if len(ins) > 1 and entered is not None:
+                    ins = [ib for ib in ins
+                           if getattr(ib, "stub_entry", None) is entered] or ins
+                if not ins:
+                    self.problem("unbound_stub", node,
+                                 f"plug-in {getattr(binding.plugin, 'name', '')!r} "
+                                 "has no in-binding for this entry")
+                    continue
+                if len(ins) > 1:
+                    self.problem("ambiguous_plugin_entry", node,
+                                 f"{len(ins)} in-bindings match this entry")
+                    continue
+                start = getattr(ins[0], "start_point", None)
+                if start is None:
+                    self.problem("unbound_stub", node,
+                                 "in-binding names no start point")
+                    continue
+                # Hand the token to the plug-in's start point directly:
+                # there is no connection between the two maps to walk.
+                self.to_visit.append(start)
             return
 
         if isinstance(node, UCM.RespRef):
