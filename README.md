@@ -1053,7 +1053,9 @@ public helpers. Narrative guides live alongside the code in
 [`dashboards.md`](docs/dashboards.md),
 [`model_families.md`](docs/model_families.md),
 [`miner_performance.md`](docs/miner_performance.md) (what mining and replay
-actually cost, measured across twelve logs).
+actually cost, measured across twelve logs),
+[`scenario_simulation.md`](docs/scenario_simulation.md) (design note for the
+0.8.0 scenario simulator, coverage highlighting and A/B comparison).
 
 ## Testing
 
