@@ -66,6 +66,11 @@ AREAS: dict[str, list[str]] = {
         "test_traversal.py",
         "test_metric_validation.py",
     ],
+    "Cost screening & log reduction": [
+        "test_complexity.py",
+        "test_replay_budget.py",
+        "test_quick_reductions.py",
+    ],
     "Layout": [
         "test_layout.py",
         "test_graphviz_layout.py",

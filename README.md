@@ -204,6 +204,11 @@ other discovery entry points raise `ModuleNotFoundError` without it.
 Install the `[pm4py]` extra unless you are only building or reading models
 by hand.
 
+`scikit-learn` is a **runtime dependency** as of 0.7.11 and installs with the
+core package. The data-driven scenario strategy has always imported it, but
+it was previously declared nowhere — so an install from an index produced a
+package whose data-driven path raised on first use.
+
 From a local checkout, the same extras work with an editable install:
 
 ```bash
@@ -253,6 +258,56 @@ m.add_connection(checkout, end)
 write_ucm(ucm, "online_shop.jucm")  # open in jUCMNav
 ```
 
+### Screen what a log will cost before mining it
+
+On a log with a large alphabet or near-unique cases the inductive miner can
+run for minutes, or not finish at all — one 543k-event log with 274
+activities did not complete in 900s. `pm4py_ucm.algo.complexity` answers
+"is this worth starting?" in a single pass, before any mining:
+
+```python
+import pandas as pd
+from pm4py_ucm.algo import complexity
+
+profile = complexity.profile_log(df)          # one pass, no mining
+print(profile.as_dict())
+# {'events': 543283, 'cases': 7734, 'activities': 274,
+#  'seq_variants': 7665, 'variant_ratio': 0.9911, ...}
+
+risk = complexity.screen_mining(profile)
+if risk.high:
+    print(risk.reason)                        # a reason, not an ETA
+    print(risk.triggers)                      # what tripped it
+```
+
+`variant_ratio` is the tell: distinct sequences per case, approaching `1.0`
+when almost every case is unique, which is the shape that makes the miner's
+fall-through search expensive.
+
+**The verdict is deliberately a reason, not a duration.** The statistics
+that rank logs correctly cannot time them, so `MiningRisk` carries no
+prediction. Replay is different — it is close to linear in cases, so it
+*can* be measured, with a time-boxed probe that extrapolates:
+
+```python
+est = complexity.estimate_replay(df, tree, time_budget=5.0)
+if est.complete:
+    clustering = est.clustering       # the probe finished; nothing left to run
+else:
+    print(f"about {est.estimated_total_s:.0f}s for {est.total_cases:,} cases")
+    print(f"{est.noise_rate:.0%} of sampled cases did not fit the model")
+```
+
+Across twelve logs the extrapolation landed within 0.79×–1.39× of the real
+time. The measurements behind all of this — including why no miner setting
+is a fast path — are in [`docs/miner_performance.md`](docs/miner_performance.md).
+
+**The remedy is reducing the log, not a faster miner.** On logs like these,
+`disable_fallthroughs=True` and PM4Py's DFG-based IMd return structurally
+identical flower models — every activity, no control flow — which leaves
+nothing to cluster or synthesize scenarios from. Keeping the most frequent
+variants or the most frequent activities is what actually helps.
+
 ### Mine a UCM from an event log
 
 ```python
@@ -270,8 +325,24 @@ pm4py_ucm.write_ucm(ucm, "log.jucm")
 
 `discover_ucm_inductive` is a thin wrapper around
 `pm4py.discover_process_tree_inductive` followed by the bundled
-process-tree → UCM converter, so all of PM4Py's tuning parameters for the
-inductive miner are available via the `parameters` dict.
+process-tree → UCM converter. PM4Py's own tuning parameters for the
+inductive miner are forwarded through a **`discovery_parameters`** entry in
+the `parameters` dict — most usefully `noise_threshold`, which trades model
+detail against how much of the log the model can reproduce:
+
+```python
+ucm = pm4py_ucm.discover_ucm_inductive(
+    log,
+    parameters={"discovery_parameters": {"noise_threshold": 0.0}},
+)
+```
+
+`noise_threshold` defaults to `0.2`. Raising it filters more infrequent
+behaviour out of the model; `0.0` keeps everything, which on a noisy log
+produces a busier model that fits far more cases. The same entry carries
+`activity_key` / `timestamp_key` / `case_id_key` for logs whose columns are
+not XES-named. (Before 0.7.11 these were unreachable — callers had to mine
+the process tree themselves and inject it.)
 
 The PNG renderer supports two visual styles:
 
@@ -579,6 +650,25 @@ Loop iteration counts are coarsened to `{0, 1, ≥2}` by default to keep
 the variant count small; pass `coarsen_loops=False` to distinguish
 every iteration count.
 
+**Traces that don't fit, and traces that ran out of search.** Replaying a
+trace the tree cannot produce yields `NOFIT` — and so did a trace whose
+search hit its state budget, which made a time limit look like a finding.
+Since 0.7.11 the two are distinguishable: `cluster()` takes
+`max_replay_states`, `choice_signature.replay()` takes a `stats` dict, and
+the cases that merely ran out of budget surface separately as
+`ClusteringResult.budget_exhausted_case_ids`:
+
+```python
+from pm4py_ucm.algo.discovery.variants import clustering
+
+result = clustering.cluster(log, tree, max_replay_states=200_000)
+gave_up = result.budget_exhausted_case_ids      # a time limit, not a misfit
+```
+
+That distinction matters when reporting fitness: a case in `gave_up` would
+likely fit given more search, so counting it as non-fitting understates the
+model. Anything reported off the back of it should say so.
+
 ### Reading a variant expression
 
 Each variant is summarised as a compact **partial-order expression**
@@ -794,6 +884,7 @@ pm4py_ucm/
 │   ├── importer/variants/jucm.py          # jUCMNav .jucm → UCM
 │   └── layout/layouter.py                 # auto-layout for jUCMNav graphical view
 ├── algo/
+│   ├── complexity.py                      # cost screening: profile / risk / replay estimate
 │   ├── performance.py                     # frequency/time overlays on activities + edges
 │   └── discovery/
 │       ├── ucm/
@@ -959,7 +1050,9 @@ documents only the public-API page, because `__all__` lists just the
 public helpers. Narrative guides live alongside the code in
 [`docs/`](docs/): [`metrics.md`](docs/metrics.md),
 [`dashboards.md`](docs/dashboards.md),
-[`model_families.md`](docs/model_families.md).
+[`model_families.md`](docs/model_families.md),
+[`miner_performance.md`](docs/miner_performance.md) (what mining and replay
+actually cost, measured across twelve logs).
 
 ## Testing
 
