@@ -1353,6 +1353,44 @@ def _splice_orjoin_before_join(
     return orjoin
 
 
+def _splice_orjoin_before_single_entry(
+    target_map: UCM.UCMmap,
+    target: "UCM.PathNode",
+) -> "UCM.PathNode":
+    """Insert an OrJoin in front of a node that admits ONE incoming arc.
+
+    Almost every path node does: a responsibility, an empty point, a fork
+    of either kind and an end point all sit on exactly one path segment.
+    Landing a second arc on one of them produces a model that serialises,
+    renders and even traverses, but is not a UCM — jUCMNav draws the extra
+    segment and its own metamodel forbids it.
+
+    So the node's existing arc and the new one are merged through an
+    OrJoin, which is the construct that exists for exactly this: several
+    alternatives entering, one path leaving. Returns the node the caller
+    should connect to instead.
+
+    Idempotent, and a no-op when there is nothing to merge (no existing
+    predecessor, or an OrJoin already in place)."""
+    preds = list(target.pred_connections)
+    if not preds:
+        return target                  # nothing to merge with
+    if len(preds) == 1 and isinstance(preds[0].source, UCM.OrJoin):
+        return preds[0].source         # already merged here
+    if len(preds) > 1:
+        # Already malformed, or a kind that legitimately takes several.
+        # Either way, adding one more arc is not this function's call.
+        return target
+    arc = preds[0]
+    src, cond = arc.source, arc.condition
+    target_map.remove_connection(arc)
+    orjoin = UCM.OrJoin(name="OrJoin")
+    target_map.add_node(orjoin)
+    target_map.add_connection(src, orjoin, condition=cond)
+    target_map.add_connection(orjoin, target)
+    return orjoin
+
+
 def _insert_loop_entry_guard(
     target_map: UCM.UCMmap,
     loop_join: "UCM.OrJoin",
@@ -1404,8 +1442,22 @@ def _insert_loop_entry_guard(
     # If the exit_target is a Stub, route through an OrJoin so the
     # stub keeps its single bound plug-in entry instead of growing a
     # second, unbound incoming arc (see _splice_orjoin_before_stub).
+    # WHERE THE BYPASS MAY LAND.
+    #
+    # An OrJoin takes as many incoming arcs as you like — that is what it
+    # is for — so the bypass can land on one directly. Every other kind
+    # has a fixed arity, and landing a second arc on one produces a model
+    # that exports and renders but is not a UCM: a responsibility with two
+    # incoming path segments, an AND-fork with two. Those went unnoticed
+    # because nothing downstream checks (see
+    # :mod:`pm4py_ucm.objects.ucm.validate`, added with this fix).
+    #
+    # Stub and AndJoin need their own splices for reasons beyond arity,
+    # so they keep them; everything else merges through a plain OrJoin.
     bypass_target = exit_target
-    if isinstance(exit_target, UCM.Stub) and ucm is not None:
+    if isinstance(exit_target, UCM.OrJoin):
+        pass                           # merges by nature; land directly
+    elif isinstance(exit_target, UCM.Stub) and ucm is not None:
         bypass_target = _splice_orjoin_before_stub(
             ucm, target_map, exit_target,
         )
@@ -1421,6 +1473,10 @@ def _insert_loop_entry_guard(
         # the parallelism itself.
         bypass_target = _splice_orjoin_before_join(
             target_map, exit_target, loop_join,
+        )
+    else:
+        bypass_target = _splice_orjoin_before_single_entry(
+            target_map, exit_target,
         )
     target_map.add_connection(
         guard, bypass_target,

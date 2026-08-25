@@ -728,12 +728,32 @@ def test_synthesis_inserts_loop_entry_guard_so_counter_zero_means_zero_iteration
              if a.condition is not None]
     assert any("> 0" in e for e in exprs)
     assert any("<= 0" in e for e in exprs)
-    # The bypass arc lands on the post-loop node (not the LoopJoin).
+    # The bypass skips the loop: it must not re-enter the LoopJoin, which
+    # is the whole point of the guard.
+    #
+    # This used to assert "the target is not an OrJoin", as a proxy for
+    # "not the LoopJoin". The proxy stopped holding once the bypass began
+    # merging through an OrJoin of its own before landing on a node that
+    # admits one incoming segment — so assert the intent directly, by
+    # identity, and check where the bypass actually leads.
     bypass_arc = next(
         a for a in guard.succ_connections
         if a.condition and "<= 0" in a.condition.expression
     )
-    assert type(bypass_arc.target).__name__ != "OrJoin"
+    loop_join = next(
+        a.target for a in guard.succ_connections
+        if a.condition and "> 0" in a.condition.expression
+    )
+    assert bypass_arc.target is not loop_join
+
+    # Follow the bypass to the first real node: it is the loop's exit, not
+    # anything inside the body.
+    node, hops = bypass_arc.target, 0
+    while type(node).__name__ in ("OrJoin", "EmptyPoint") and hops < 10:
+        node = node.succ_connections[0].target
+        hops += 1
+    assert node is not loop_join
+    assert type(node).__name__ != "StartPoint"
 
 
 def test_synthesis_loop_entry_guard_excluded_from_orfork_condition_emission():
