@@ -58,6 +58,11 @@ from .algo.scenario_traversal import (  # noqa: E402
     check_traversal,
     required_max_hit_count,
 )
+from .objects.ucm.validate import (  # noqa: E402
+    StructuralProblem,
+    validate_ucm,
+    check_ucm,
+)
 from .algo.scenario_coverage import (  # noqa: E402
     Coverage,
     Comparison,
@@ -98,6 +103,9 @@ __all__ = [
     "traverse_all",
     "check_traversal",
     "required_max_hit_count",
+    "StructuralProblem",
+    "validate_ucm",
+    "check_ucm",
     "Coverage",
     "Comparison",
     "coverage",

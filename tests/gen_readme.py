@@ -38,6 +38,7 @@ README = TESTS_DIR / "README.md"
 AREAS: dict[str, list[str]] = {
     "Object model & jUCMNav I/O": [
         "test_obj.py",
+        "test_validate.py",
         "test_export_import.py",
         "test_stub_bindings.py",
         "test_name_wrap.py",

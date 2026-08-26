@@ -7,26 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- The A/B comparison uses **dark green / dark orange / purple** instead of
-  red / blue / purple. The pair separates by lightness as well as hue (a
-  44-point luma gap), so it survives a greyscale printout and does not lean
-  on the red-green axis; red also read badly next to the performance
-  heat-map's own red ramp.
-- Scenario coverage reports **Elements** (path nodes) and **Paths** (the
-  segments between them) separately rather than as one percentage. A run
-  can walk every node and still miss segments — an alternative carrying no
-  responsibility is a segment and nothing else — so the split says whether
-  what is left uncovered is real behaviour or just empty paths. On
-  `ClaimsPaymentLog` with every scenario: elements 100%, paths 97.3%. The
-  redundant "never walked" count is gone.
-- The Family view's grid render reports progress per cell
-  (`Rendering family grid (BPMN) — 4 of 8 cells: Direct`) instead of a mute
-  spinner. Each cell is its own graphviz run, so on a family with many
-  members there was no way to tell whether anything was happening.
-
 ### Added
+
+
+- **The `.jucm` exporters refuse a structurally malformed model.** Both
+  entry points gate on `validate_ucm()` — `serialize_to_string()` as well as
+  `apply()`, since the family writer serialises to a string rather than a
+  path. Export is the right place for the check: a malformed model
+  serialises, renders and traverses without complaint, so the fault
+  otherwise surfaces only when a human opens the file in jUCMNav and sees a
+  responsibility with two incoming path segments. Nothing is written when
+  the check fails, so there is no half-valid file to open.
+
+  Pass `parameters={"validate": False}` (or `validate=False` to
+  `serialize_to_string`) to write anyway. That is not decoration: jUCMNav
+  accepts files this check rejects, so a model imported from elsewhere may
+  be malformed through no fault of this library, and round-tripping it must
+  stay possible.
+- `pm4py_ucm.validate_ucm()` / `check_ucm()` — structural well-formedness
+  of a UCM, checking the in/out path-segment arity of every node kind
+  against jUCMNav's metamodel. Nothing enforced this before, which is how
+  the bug above survived: a malformed model serialises, renders and even
+  traverses, so the error only surfaced when a human opened the `.jucm` and
+  noticed the picture was wrong. Deliberately structural only — whether a
+  model deadlocks or selects exactly one branch is
+  `scenario_traversal`'s job, and that can only be trusted on a model that
+  is sound to begin with.
 
 - The jUCMNav scenario simulator (`pm4py_ucm.algo.scenario_traversal`) is
   now public API, exported from `pm4py_ucm`. It has existed since 0.7.x but
@@ -76,6 +82,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carries a label per key. This is the basis of the coverage highlighting
   and A/B comparison planned for 0.8.0 — see
   [`docs/scenario_simulation.md`](docs/scenario_simulation.md).
+
+### Changed
+
+
+- The A/B comparison uses **dark green / dark orange / purple** instead of
+  red / blue / purple. The pair separates by lightness as well as hue (a
+  44-point luma gap), so it survives a greyscale printout and does not lean
+  on the red-green axis; red also read badly next to the performance
+  heat-map's own red ramp.
+- Scenario coverage reports **Elements** (path nodes) and **Paths** (the
+  segments between them) separately rather than as one percentage. A run
+  can walk every node and still miss segments — an alternative carrying no
+  responsibility is a segment and nothing else — so the split says whether
+  what is left uncovered is real behaviour or just empty paths. On
+  `ClaimsPaymentLog` with every scenario: elements 100%, paths 97.3%. The
+  redundant "never walked" count is gone.
+- The Family view's grid render reports progress per cell
+  (`Rendering family grid (BPMN) — 4 of 8 cells: Direct`) instead of a mute
+  spinner. Each cell is its own graphviz run, so on a family with many
+  members there was no way to tell whether anything was happening.
+
+### Fixed
+
+
+- **Scenario synthesis produced structurally invalid models.** Emitting
+  loop conditions splices a `LoopEntryGuard` OR-fork whose bypass arc
+  (`counter <= 0`) has to land somewhere, and only two landing sites were
+  handled specially. Every other one — a responsibility, an AND-fork, an
+  empty point — received the arc **directly**, giving it a second incoming
+  path segment. jUCMNav's metamodel allows a responsibility exactly one,
+  so those models were not UCMs: on `ClaimsPaymentLog` at noise 0.0, two
+  responsibilities and an AND-fork each ended up with two. They still
+  exported, rendered and traversed, which is why it went unnoticed. The
+  bypass now merges through an `OrJoin` — the construct that exists for
+  alternatives — unless the target already admits several inputs.
+
+  This does not change scenario coverage: the bypass arcs are only walked
+  when a loop runs zero times, and no variant mined from that log does, so
+  they were unwalked before the fix and remain so after. They now hang off
+  a legal join.
 
 ## [0.7.12] — 2026-08-25
 
