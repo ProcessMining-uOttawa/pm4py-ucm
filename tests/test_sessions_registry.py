@@ -369,32 +369,34 @@ def test_restored_scenario_that_no_longer_exists_is_dropped():
     assert st.session_state["sim_cov_picks"] == []
 
 
+def _older_apps():
+    """Every app file superseded by V6."""
+    return sorted(f for f in _WEB.glob("streamlit_app_v*.py")
+                  if f.name != "streamlit_app_v6.py")
+
+
 def test_every_app_older_than_v6_is_marked_deprecated():
     """V6 is the app under development and the one ``streamlit_app.py`` serves.
     Every earlier app must say so in its module docstring, so a contributor who
-    opens one is told before they start editing it. V2 additionally carries the
-    FROZEN notice — it backs a public deployment for a paper under review and
-    may not be changed at all, which is stricter than deprecation."""
-    older = sorted(f for f in _WEB.glob("streamlit_app_v*.py")
-                   if f.name != "streamlit_app_v6.py")
+    opens one is told before they start editing it."""
+    older = _older_apps()
     assert older, "expected at least one pre-V6 app"
     for f in older:
-        head = f.read_text(encoding="utf-8")[:2000]
+        head = f.read_text(encoding="utf-8")[:2500]
         assert "eprecated" in head, f"{f.name} is not marked deprecated"
         assert "streamlit_app_v6.py" in head, (
             f"{f.name} does not point readers at V6")
-    frozen = _WEB / "streamlit_app_v2.py"
-    assert "DO NOT MODERNISE" in frozen.read_text(encoding="utf-8")[:2000]
 
 
-def test_deprecated_apps_say_so_in_their_ui_except_the_frozen_one():
-    """A local run of a superseded app shows a notice at the top. V2 is the
-    exception on purpose: its deployment is what a paper under review points
-    at, so its UI must keep matching the paper."""
-    for name in ("streamlit_app_v3.py", "streamlit_app_v5.py"):
-        src = (_WEB / name).read_text(encoding="utf-8")
-        assert "is deprecated.**" in src, f"{name} renders no notice"
-    v2 = (_WEB / "streamlit_app_v2.py").read_text(encoding="utf-8")
-    assert "is deprecated.**" not in v2, (
-        "V2 must not render a notice — see the FROZEN block in its docstring")
+def test_every_deprecated_app_says_so_in_its_ui():
+    """A run of any superseded app shows a notice at the top — the docstring
+    only reaches someone who opens the file.
+
+    V2 used to be the exception: it was frozen for a paper under review, and a
+    banner would have changed what the reviewers saw. That paper was accepted
+    and its final version points at the main app, so the exception is gone and
+    V2 carries the notice like the rest."""
+    for f in _older_apps():
+        src = f.read_text(encoding="utf-8")
+        assert "is deprecated.**" in src, f"{f.name} renders no notice"
 

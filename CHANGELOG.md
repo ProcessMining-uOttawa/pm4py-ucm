@@ -105,16 +105,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   development and the one `streamlit_app.py` shims for
   https://pm4py-ucm.streamlit.app/; V5, V3 and V2 are kept runnable so older
   results stay reproducible, but they receive no new features. Each says so
-  in its module docstring, and V5 and V3 now render a notice at the top when
-  started. Concretely the line is drawn at persistence: they still *save*
-  every session parameter — each keeps a gather covering the whole registry,
-  so `collect()` accepts it and their Save button works — but only V6
-  *restores* the newer ones.
+  in its module docstring and renders a notice at the top when started.
+  Concretely the line is drawn at persistence: they still *save* every
+  session parameter — each keeps a gather covering the whole registry, so
+  `collect()` accepts it and their Save button works — but only V6 *restores*
+  the newer ones.
 
-  **V2 is the exception, and renders no notice**: it backs
-  https://pm4py-ucm-scenarios.streamlit.app/ for a paper under review, so a
-  banner would change what the reviewers see. Frozen is stricter than
-  deprecated — that file may not be changed at all.
+- **V2 is no longer frozen.** It had been byte-for-byte unchangeable, and
+  the one app rendering no deprecation notice, because
+  https://pm4py-ucm-scenarios.streamlit.app/ served it to the reviewers of a
+  paper under review and a banner would have changed what they saw. That
+  paper has been accepted and its final version points at the main app, so
+  the freeze is lifted and V2 joins V3 and V5 as plainly deprecated.
 
 ### Changed
 

@@ -39,7 +39,7 @@ streamlit run web/streamlit_app_v6.py     # V6 — the current app
 # so older results stay reproducible:
 # streamlit run web/streamlit_app_v5.py   # V5 — deprecated
 # streamlit run web/streamlit_app_v3.py   # V3 — deprecated
-# streamlit run web/streamlit_app_v2.py   # V2 — deprecated AND frozen
+# streamlit run web/streamlit_app_v2.py   # V2 — deprecated
 ```
 
 Streamlit opens `http://localhost:8501`.
@@ -113,15 +113,17 @@ button works — but only V6 *restores* the newer ones.
 | **V6** | `streamlit_app_v6.py` | **Current**, and what `streamlit_app.py` shims for https://pm4py-ucm.streamlit.app/ |
 | V5 | `streamlit_app_v5.py` | Deprecated. Workspace shell + Dashboards; no cost screen, no Simulation |
 | V3 | `streamlit_app_v3.py` | Deprecated. The four-tab app, a strict subset of V5 |
-| V2 | `streamlit_app_v2.py` | Deprecated **and frozen** — see below |
+| V2 | `streamlit_app_v2.py` | Deprecated. Model + scenarios; was frozen for a paper, no longer |
 | V4 | — | Removed; a strict subset of V5, in git history |
 | V1 | — | Removed at v0.5.1 (model only) |
 
-**`streamlit_app_v2.py` is the FROZEN V2 app** (model + scenarios) — served
-at https://pm4py-ucm-scenarios.streamlit.app/ for a paper under review; do
-not modernise it. Frozen is stricter than deprecated: it may not be changed
-at all, and it is the one app that renders **no** deprecation notice,
-because a banner would change what the reviewers see.
+`streamlit_app_v2.py` (model + scenarios) was **frozen** rather than merely
+deprecated for as long as a paper under review pointed at
+https://pm4py-ucm-scenarios.streamlit.app/: byte-for-byte unchangeable, and
+the one app rendering no deprecation notice, because a banner would have
+changed what the reviewers saw. That paper has been accepted and its final
+version points at the main app, so the freeze is over — V2 is deprecated on
+the same terms as the rest.
 
 ## The cost screen (V6)
 
@@ -670,12 +672,13 @@ version-controllable pipeline; see [`docs/code_export.md`](../docs/code_export.m
 
 1. Push this repo to GitHub.
 2. At <https://share.streamlit.io>, "New app" → pick the repo and branch.
-3. Set **Main file path** to `web/streamlit_app_v6.py` for the latest
-   app (or `web/streamlit_app_v2.py` for the frozen V2 scenarios
-   app). Streamlit Cloud picks up `web/requirements.txt`
-   automatically (sits next to the main file). The existing primary
-   deployment points at `web/streamlit_app.py` — a shim that runs V5,
-   so it keeps working without a settings change.
+3. Set **Main file path** to `web/streamlit_app_v6.py`. Streamlit Cloud
+   picks up `web/requirements.txt` automatically (it sits next to the
+   main file). The existing primary deployment points at
+   `web/streamlit_app.py` — a shim that runs V6 — so it keeps working
+   without a settings change. Pointing a deployment at one of the
+   deprecated apps still works, but it will render their deprecation
+   notice to every visitor.
 4. **`packages.txt` (apt packages) MUST be at the repo root** — Streamlit
    Cloud's apt-install phase only reads from the root, not from the main
    file's directory. The root `packages.txt` in this repo installs the
