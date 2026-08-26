@@ -375,3 +375,90 @@ def cluster(
         total_cases=len(cases),
         budget_exhausted_case_ids=budget_exhausted,
     )
+
+
+# ---------------------------------------------------------------------------
+# Selecting a log down to chosen variants
+# ---------------------------------------------------------------------------
+
+def resolve_variant_names(
+    clustering: ClusteringResult,
+    names: Iterable[str],
+) -> List[Variant]:
+    """The variants ``names`` refers to, in the clustering's own order.
+
+    Accepts a variant id (``"v1"``) or a synthesized scenario name
+    (``"v1_QuickAssessment"``) interchangeably, because the two are the two
+    ways the same cluster is spelled: the synthesizer names each scenario
+    ``<variant_id>_<suffix>``, so the caller holding a scenario selection and
+    the caller holding variant ids are asking the same question.
+
+    An unrecognised name raises rather than being skipped. Silently dropping
+    one would silently shrink whatever log is filtered with the result, and a
+    log that is quietly missing cases is worse than no log at all.
+    """
+    by_id = {v.variant_id: v for v in clustering.variants}
+    wanted: List[Variant] = []
+    unknown: List[str] = []
+    seen = set()
+    for name in names:
+        key = str(name)
+        v = by_id.get(key) or by_id.get(key.split("_", 1)[0])
+        if v is None:
+            unknown.append(key)
+        elif v.variant_id not in seen:
+            seen.add(v.variant_id)
+            wanted.append(v)
+    if unknown:
+        raise ValueError(
+            f"Not variants of this clustering: {unknown}. Expected variant "
+            f"ids like 'v1' or scenario names like 'v1_Assess'; this "
+            f"clustering has {len(clustering.variants)} variant(s)."
+        )
+    order = {v.variant_id: i for i, v in enumerate(clustering.variants)}
+    return sorted(wanted, key=lambda v: order[v.variant_id])
+
+
+def filter_log_by_variants(
+    log,
+    clustering: ClusteringResult,
+    names: Iterable[str],
+    case_id_col: str = "case:concept:name",
+):
+    """The event log reduced to the cases belonging to ``names``.
+
+    The complement of the variant table: clustering already knows which case
+    fell into which behavioural variant, so choosing a few variants selects a
+    sub-log directly. Keeping the frequent variants and dropping the rest is
+    how a noisy log is cleaned — the cases that replayed as *noise* belong to
+    no variant, so they are excluded by construction rather than by a
+    threshold.
+
+    ``log`` may be a ``pandas.DataFrame`` or a pm4py ``EventLog``; a
+    ``DataFrame`` comes back, with the original row order and every column
+    intact, so it re-mines exactly like the log it came from.
+
+    Raises :class:`ValueError` for an unrecognised name (see
+    :func:`resolve_variant_names`) or an empty selection — an empty log is
+    not a useful artifact, and asking for one is more likely a mistake than
+    an intent.
+    """
+    wanted = resolve_variant_names(clustering, names)
+    if not wanted:
+        raise ValueError(
+            "No variants selected; filtering would produce an empty log.")
+
+    df = log
+    if not hasattr(df, "columns"):
+        import pm4py
+        df = pm4py.convert_to_dataframe(df)
+    if case_id_col not in df.columns:
+        raise ValueError(
+            f"Log has no {case_id_col!r} column; pass case_id_col= to name "
+            f"the case column. Available: {list(df.columns)[:8]}")
+
+    keep = {str(cid) for v in wanted for cid in v.case_ids}
+    # Compare as text on both sides: variant case ids are strings, while a
+    # CSV-imported log may carry integer case ids, and an int/str mismatch
+    # would silently select nothing.
+    return df[df[case_id_col].astype(str).isin(keep)]

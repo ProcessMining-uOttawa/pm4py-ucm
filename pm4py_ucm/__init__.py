@@ -63,6 +63,10 @@ from .objects.ucm.validate import (  # noqa: E402
     validate_ucm,
     check_ucm,
 )
+from .algo.discovery.variants.clustering import (  # noqa: E402
+    filter_log_by_variants,
+    resolve_variant_names,
+)
 from .algo.scenario_coverage import (  # noqa: E402
     Coverage,
     Comparison,
@@ -85,6 +89,8 @@ __all__ = [
     "discover_scenarios",
     "write_variants_report",
     "write_case_variant_map",
+    "filter_log_by_variants",
+    "resolve_variant_names",
     "write_condition_mining_report",
     "discover_ucm_family",
     "write_ucm_family",

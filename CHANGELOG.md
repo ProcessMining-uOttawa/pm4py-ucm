@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Export the event log filtered to chosen variants.**
+  `pm4py_ucm.filter_log_by_variants(log, clustering, names)` returns the log
+  reduced to the cases belonging to the named behavioural variants, with the
+  original columns and row order, so it re-mines exactly like the log it came
+  from. Variant ids (`"v1"`) and synthesized scenario names
+  (`"v1_QuickAssessment"`) are interchangeable, because they are two spellings
+  of the same cluster; `resolve_variant_names` exposes that lookup alone.
+
+  This is a way to **clean a noisy log without a threshold**: a case that did
+  not replay on the tree is noise and belongs to no variant, so selecting every
+  variant already removes it. On `ClaimsPaymentLog` at noise 0.2, keeping all
+  18 variants drops exactly the 610 non-replaying cases of 5,600.
+
+  An unrecognised name raises rather than being skipped — silently dropping one
+  would silently shrink the exported log — and so does an empty selection.
+
+  In the app it is the **Export the log for the selected variants** panel in
+  the Scenarios view's Simulation section: the picker that chooses what to
+  highlight also chooses what to keep, with XES and CSV downloads and a
+  cases/events count against the full log. It works in both highlight modes,
+  and is built only when asked, since serializing XES is not free.
+
 ### Fixed
 
 - **Loading a project warned about widgets "created with a default value but

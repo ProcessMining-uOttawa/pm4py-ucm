@@ -1062,6 +1062,44 @@ emit XMI files that load directly in jUCMNav.
 
 [jucmnav-meta]: https://github.com/JUCMNAV/projetseg-update/tree/master/seg.jUCMNav/src/seg/jUCMNav/emf
 
+## Cleaning a log by variant
+
+Clustering already records which case fell into which behavioural variant, so
+choosing a few variants selects a sub-log directly:
+
+```python
+ucm, clustering = pm4py_ucm.discover_scenarios(log)
+
+# Keep the two most frequent variants (they are ordered by frequency)
+kept = pm4py_ucm.filter_log_by_variants(log, clustering, ["v1", "v2"])
+
+# Scenario names work too, so a selection made in the app can be replayed
+kept = pm4py_ucm.filter_log_by_variants(
+    log, clustering, ["v1_QuickAssessment", "v2_AnalyzeClaim"])
+```
+
+A `DataFrame` comes back with the original columns and row order, so it
+re-mines exactly like the log it came from.
+
+**This is how a noisy log gets cleaned.** A case that did not replay on the
+tree is *noise* and belongs to no variant, so selecting every variant already
+removes it — no threshold to tune:
+
+```python
+names = [s.name for g in ucm.scenario_groups for s in g.scenarios]
+clean = pm4py_ucm.filter_log_by_variants(log, clustering, names)
+```
+
+An unrecognised name raises rather than being skipped: silently dropping one
+would silently shrink the result, and a log quietly missing cases is worse
+than no log. `pm4py_ucm.resolve_variant_names` exposes the same lookup on its
+own.
+
+In the web app this is the **Export the log for the selected variants** panel
+at the bottom of the Scenarios view's Simulation section — the picker that
+chooses what to highlight also chooses what to keep, downloadable as XES or
+CSV.
+
 ## Structural validation
 
 A UCM is not just a bag of nodes: jUCMNav's metamodel fixes how many path
