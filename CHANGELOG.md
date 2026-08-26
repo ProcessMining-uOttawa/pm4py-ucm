@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The A/B comparison uses **dark green / dark orange / purple** instead of
+  red / blue / purple. The pair separates by lightness as well as hue (a
+  44-point luma gap), so it survives a greyscale printout and does not lean
+  on the red-green axis; red also read badly next to the performance
+  heat-map's own red ramp.
+- Scenario coverage reports **Elements** (path nodes) and **Paths** (the
+  segments between them) separately rather than as one percentage. A run
+  can walk every node and still miss segments — an alternative carrying no
+  responsibility is a segment and nothing else — so the split says whether
+  what is left uncovered is real behaviour or just empty paths. On
+  `ClaimsPaymentLog` with every scenario: elements 100%, paths 97.3%. The
+  redundant "never walked" count is gone.
+- The Family view's grid render reports progress per cell
+  (`Rendering family grid (BPMN) — 4 of 8 cells: Direct`) instead of a mute
+  spinner. Each cell is its own graphviz run, so on a family with many
+  members there was no way to tell whether anything was happening.
+
 ### Added
 
 - The jUCMNav scenario simulator (`pm4py_ucm.algo.scenario_traversal`) is
@@ -17,8 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   jUCMNav's Problems view would; **Coverage** mode highlights what a
   selected set of scenarios walked, with the percentage of the whole model
   and a per-element-kind breakdown; **Compare A vs B** highlights one
-  scenario red, the other blue and what both walked purple, with the
-  three-way counts and an agreement figure. Every element is hoverable. The
+  scenario dark green, the other dark orange and what both walked purple,
+  with the three-way counts and an agreement figure. Every element is hoverable. The
   performance heat-map is suspended while a highlight is on, with a notice
   saying so — it defaults on whenever overlay metrics are picked, so it
   would otherwise appear to vanish unexplained.

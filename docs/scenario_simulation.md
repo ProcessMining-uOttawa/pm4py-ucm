@@ -105,7 +105,7 @@ second **value source** into that same pipeline.
 | `Timer` / `WaitingPlace` / `Connect` / `FailurePoint` | Out of scope — never generated |
 | Coverage denominator | **Whole model** |
 | A/B unit | **Two individual scenarios** for now, not two scenario groups |
-| Colours | A = red, B = blue, both = purple |
+| Colours | A = dark green, B = dark orange, both = purple |
 
 ### Why the Scenarios view rather than a new one
 
@@ -278,10 +278,15 @@ hover titles.
 
 * **Stub traversal is the schedule risk.** Everything else is additive to
   code that already works; this one changes the traversal's core loop.
-* **Purple as the union colour** is the weakest part of the colour scheme
-  under deuteranopia — red and blue separate well, but purple can read as
-  either. Kept as specified; if it proves hard to read, add a second channel
-  (dash pattern or thickness) rather than changing the hues.
+* **The colours changed once they were seen in use.** Red/blue read badly
+  beside the heat-map's red ramp, so A/B became dark green and dark
+  orange. Making both "a bit dark" nearly matched their lightness (luma
+  95.5 vs 101.4), which would have merged them on a greyscale printout and
+  under strong colour-vision deficiency, so the green was deepened to open
+  a 44-point luma gap: the pair now separates by lightness as well as hue.
+  Purple stays for the intersection and sits between the two in lightness,
+  so if it ever proves hard to read, add a second channel (dash or
+  thickness) rather than re-hueing.
 * **Whole-model coverage will report low percentages** on decomposed models,
   because one scenario walks one path through a model that contains every
   path. That is the honest number and is the decision taken; it needs

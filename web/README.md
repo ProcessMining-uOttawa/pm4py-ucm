@@ -417,15 +417,21 @@ plug-in maps, so a stub is descended rather than skipped.
 
 Two highlight modes over the mined model:
 
-* **Coverage** — pick any number of scenarios; the elements they walked are
-  coloured, with the share of the **whole model** they cover, how many
-  elements were never walked, and a breakdown per element kind. Coverage is
-  a set, so a loop that enters an element nine times covers it once. A single
-  scenario reads low by design: it walks one path through a model containing
-  every path.
-* **Compare A vs B** — pick two scenarios; what only **A** walked is red,
-  only **B** blue, and what **both** walked purple, with the three counts, an
-  agreement figure, and how many elements neither touched.
+* **Coverage** — pick any number of scenarios; what they walked is
+  coloured, and the numbers are reported as **Elements** (path nodes: start
+  and end points, responsibilities, forks and joins, stubs) and **Paths**
+  (the segments between them), against the **whole model**. The split
+  matters: a run can walk every node and still miss segments, so elements at
+  100% with paths below it means what is left over is empty alternatives
+  rather than unexercised behaviour. A breakdown per element kind is one
+  click away. Coverage is a set, so a loop that enters an element nine times
+  covers it once, and a single scenario reads low by design — it walks one
+  path through a model containing every path.
+* **Compare A vs B** — pick two scenarios; what only **A** walked is dark
+  green, only **B** dark orange, and what **both** walked purple, with the
+  three counts, an agreement figure, and how many elements neither touched.
+  The pair differs in lightness as well as hue, so it survives a greyscale
+  printout.
 
 Every element carries hover text saying what it is and whether these
 scenarios walked it. The performance overlay's heat-map is suspended while a

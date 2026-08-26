@@ -240,3 +240,65 @@ def _looping_model(iterations: int = 3):
     s.add_end_point(ep)
     group.scenarios.append(s)
     return u
+
+
+class TestElementsAndPathsSplit:
+    """One percentage cannot say whether the gap is behaviour or wiring.
+
+    A run can walk every node and still miss segments — an alternative
+    that carries no responsibility is a segment and nothing else — so the
+    two are reported apart.
+    """
+
+    def test_the_split_is_exhaustive_and_disjoint(self, forked):
+        u, ra, _rb = forked
+        cov = sc.coverage(u, [ra])
+        ec, et = cov.elements
+        pc, pt = cov.paths
+        assert ec + pc == len(cov.covered)
+        assert et + pt == len(cov.total)
+
+    def test_elements_are_nodes_and_paths_are_connections(self, forked):
+        u, ra, _rb = forked
+        cov = sc.coverage(u, [ra])
+        _ec, et = cov.elements
+        _pc, pt = cov.paths
+        assert et == sum(len(m.nodes) for m in u.maps)
+        assert pt == sum(len(m.connections) for m in u.maps)
+
+    def test_fractions_match_their_counts(self, forked):
+        u, ra, _rb = forked
+        cov = sc.coverage(u, [ra])
+        ec, et = cov.elements
+        pc, pt = cov.paths
+        assert cov.element_fraction == pytest.approx(ec / et)
+        assert cov.path_fraction == pytest.approx(pc / pt)
+
+    def test_full_coverage_reports_both_at_one(self, forked):
+        u, ra, rb = forked
+        cov = sc.coverage(u, [ra, rb])
+        # Both branches together walk this whole fixture.
+        assert cov.element_fraction == 1.0
+        assert cov.path_fraction == 1.0
+
+    def test_an_empty_model_does_not_divide_by_zero(self):
+        u = UCM(name="empty")
+        u.add_map(name="m")
+        cov = sc.coverage(u, [])
+        assert cov.element_fraction == 0.0
+        assert cov.path_fraction == 0.0
+
+
+class TestComparisonColours:
+
+    def test_the_three_colours_are_distinct(self):
+        assert len({sc.COLOR_A, sc.COLOR_B, sc.COLOR_BOTH}) == 3
+
+    def test_a_and_b_differ_in_lightness_not_only_hue(self):
+        """Hue alone fails on a greyscale printout and for some colour
+        vision deficiencies; the pair must separate by lightness too."""
+        def luma(hex_color):
+            h = hex_color.lstrip("#")
+            r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+            return 0.2126 * r + 0.7152 * g + 0.0722 * b
+        assert abs(luma(sc.COLOR_A) - luma(sc.COLOR_B)) > 30

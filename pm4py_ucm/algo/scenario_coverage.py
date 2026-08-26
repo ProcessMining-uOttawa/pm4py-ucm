@@ -33,6 +33,10 @@ from ..objects.ucm.obj import UCM
 #: runs and serialisable, unlike ``id(element)``.
 Key = Tuple[str, int]
 
+#: The key type name used for a path segment. Everything else is a node,
+#: which is what makes the elements/paths split a one-line predicate.
+PATH_KIND = "NodeConnection"
+
 
 def model_elements(ucm: UCM) -> Dict[Key, Any]:
     """Every path node and connection in the model, keyed for coverage.
@@ -74,6 +78,44 @@ class Coverage:
     @property
     def fraction(self) -> float:
         return len(self.covered) / len(self.total) if self.total else 0.0
+
+    @property
+    def elements(self) -> Tuple[int, int]:
+        """``(covered, total)`` over path **nodes**.
+
+        Start and end points, responsibilities, forks and joins, stubs —
+        the things drawn on the map. Split out from the paths because a
+        run can walk every node and still miss segments, and the two
+        readings answer different questions.
+        """
+        return self._split(nodes=True)
+
+    @property
+    def paths(self) -> Tuple[int, int]:
+        """``(covered, total)`` over path **segments** (the connections).
+
+        Usually the harder number: a model has more segments than nodes,
+        and an alternative that carries no responsibility shows up here
+        and nowhere else.
+        """
+        return self._split(nodes=False)
+
+    def _split(self, nodes: bool) -> Tuple[int, int]:
+        def want(key: Key) -> bool:
+            is_path = key[0] == PATH_KIND
+            return is_path != nodes
+        return (sum(1 for k in self.covered if want(k)),
+                sum(1 for k in self.total if want(k)))
+
+    @property
+    def element_fraction(self) -> float:
+        c, t = self.elements
+        return c / t if t else 0.0
+
+    @property
+    def path_fraction(self) -> float:
+        c, t = self.paths
+        return c / t if t else 0.0
 
     def by_kind(self) -> Dict[str, Tuple[int, int]]:
         """``{element type: (covered, total)}``.
@@ -171,14 +213,15 @@ def compare(ucm: UCM, result_a: Any, result_b: Any) -> Comparison:
 # boundary, so neither side has to know about the other's keying.
 # ---------------------------------------------------------------------------
 
-#: Default A / B / shared colours. Red and blue separate well under the
-#: common colour-blindness types; purple for the intersection is the weak
-#: one, so if it proves hard to read, add a second channel (dash or
-#: thickness) rather than changing the hues.
-COLOR_A = "#d62728"
-COLOR_B = "#1f77b4"
-COLOR_BOTH = "#7b3fa0"
-COLOR_COVERED = "#d62728"
+#: Default A / B / shared colours. Dark green and dark orange differ in
+#: hue *and* in lightness, so they stay apart on a printout, on a
+#: projector, and for most colour-vision deficiencies — the pairing does
+#: not rely on the red/green axis the way the original red/blue did.
+#: Purple keeps the intersection distinct from both.
+COLOR_A = "#145a32"        # dark green
+COLOR_B = "#c2680a"        # dark orange
+COLOR_BOTH = "#7b3fa0"     # purple
+COLOR_COVERED = "#145a32"
 
 
 def _index(ucm: UCM) -> Dict[Key, Any]:
