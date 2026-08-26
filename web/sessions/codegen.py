@@ -32,7 +32,7 @@ from .schema import ProjectDoc
 
 # The generator's own version marker, surfaced in the script header. Kept in
 # lock-step with the package version by a test.
-GENERATOR_VERSION = "0.8.0"
+GENERATOR_VERSION = "0.8.1"
 
 
 # ---------------------------------------------------------------------------
