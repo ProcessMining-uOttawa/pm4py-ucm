@@ -124,6 +124,9 @@ def apply(
             ``"graphviz"`` (default) computes positions via graphviz so
             the ``.jucm`` lays out like the PNG; ``"builtin"`` forces
             the in-house Sugiyama layouter.
+        ``validate``
+            Boolean, default ``True``. Refuse to write a structurally
+            malformed model — see :func:`serialize_to_string`.
     """
     parameters = dict(parameters or {})
 
@@ -135,6 +138,7 @@ def apply(
         wrap_width=parameters.get("wrap_width", _DEFAULT_WRAP_WIDTH),
         layout_engine=parameters.get("layout_engine", "graphviz"),
         emit_conditions=parameters.get("emit_conditions", False),
+        validate=parameters.get("validate", True),
     )
 
     if hasattr(file_path, "write"):
@@ -153,6 +157,7 @@ def serialize_to_string(
     wrap_width: int = None,
     layout_engine: str = "graphviz",
     emit_conditions: bool = False,
+    validate: bool = True,
 ) -> str:
     """Return the XMI serialisation of ``ucm`` as a string.
 
@@ -177,7 +182,29 @@ def serialize_to_string(
     wrap_width
         Per-line character budget for wrapping; default
         :data:`~pm4py_ucm.objects.ucm.util.name_wrap.DEFAULT_MAX_WIDTH`.
+    validate
+        Check the model is structurally well-formed first (default
+        ``True``), and refuse to write it if not — see
+        :func:`pm4py_ucm.objects.ucm.validate.validate_ucm`.
+
+        Export is the right gate for this. A malformed UCM serialises
+        perfectly happily, renders, and even traverses, so nothing
+        downstream notices; the error surfaces only when someone opens
+        the file in jUCMNav and sees a responsibility with two incoming
+        path segments. Failing here turns a silent, late, confusing
+        problem into a loud, immediate one.
+
+        Pass ``False`` to write anyway. That is not a nicety: jUCMNav
+        accepts files this check rejects, so a model imported from
+        elsewhere may be malformed through no fault of this library, and
+        round-tripping it must remain possible.
     """
+    if validate:
+        # Before the layouter runs: a model that will not be written is
+        # not worth positioning, and the failure reads better without a
+        # layout pass in between the call and the error.
+        from ...validate import check_ucm
+        check_ucm(ucm)
     if wrap_width is None:
         wrap_width = _DEFAULT_WRAP_WIDTH
     if layout and _needs_layout(ucm):

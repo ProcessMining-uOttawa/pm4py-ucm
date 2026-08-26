@@ -920,6 +920,41 @@ emit XMI files that load directly in jUCMNav.
 
 [jucmnav-meta]: https://github.com/JUCMNAV/projetseg-update/tree/master/seg.jUCMNav/src/seg/jUCMNav/emf
 
+## Structural validation
+
+A UCM is not just a bag of nodes: jUCMNav's metamodel fixes how many path
+segments may enter and leave each kind. A responsibility sits on exactly
+one path, a fork has one way in and several out, a join the reverse.
+
+```python
+from pm4py_ucm import validate_ucm, check_ucm
+
+problems = validate_ucm(ucm)      # a list; empty means well-formed
+for p in problems:
+    print(p)      # [DiscoveredMap] RespRef 'Assess Claim' (id 12): 2 incoming (expected 1)
+
+check_ucm(ucm)                    # or raise, for a caller that would rather fail
+```
+
+**`write_ucm` applies this automatically and refuses to write a malformed
+model.** That is deliberate: a malformed UCM serialises, renders and even
+traverses without complaint, so without the gate the error surfaces only
+when someone opens the `.jucm` in jUCMNav and notices the picture is wrong.
+Nothing is written when the check fails.
+
+jUCMNav itself accepts files this check rejects, so a model imported from
+elsewhere may be malformed through no fault of yours. To round-trip one:
+
+```python
+pm4py_ucm.write_ucm(ucm, "out.jucm", parameters={"validate": False})
+```
+
+The check is structural only. Whether a model deadlocks, or whether its
+guards select exactly one branch, is
+[`scenario_traversal`](#screen-what-a-log-will-cost-before-mining-it)'s
+question — and that answer is only trustworthy on a model that is sound to
+begin with.
+
 ## Definitions vs references
 
 For the full Python object model in one picture, see

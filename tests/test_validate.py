@@ -209,3 +209,86 @@ class TestMinedModels:
                 assert isinstance(arc.target, (UCM.OrJoin, UCM.Stub)), (
                     f"bypass landed on {type(arc.target).__name__}, which "
                     "admits only one incoming segment")
+
+
+# ---------------------------------------------------------------------------
+# The export gate.
+#
+# Export is where this check belongs: a malformed model serialises, renders
+# and traverses without complaint, so the fault surfaces only when someone
+# opens the .jucm in jUCMNav. Refusing to write it turns a silent, late
+# problem into an immediate one.
+# ---------------------------------------------------------------------------
+
+class TestExportGate:
+
+    def _malformed(self):
+        u, m, sp, a, ep = _linear()
+        m.add_connection(m.add_node(UCM.StartPoint(name="other")), a)
+        return u
+
+    def test_a_well_formed_model_exports(self, tmp_path):
+        import pm4py_ucm
+        out = tmp_path / "ok.jucm"
+        pm4py_ucm.write_ucm(_linear()[0], str(out))
+        assert out.exists() and out.stat().st_size > 0
+
+    def test_a_malformed_model_is_refused(self, tmp_path):
+        import pm4py_ucm
+        out = tmp_path / "bad.jucm"
+        with pytest.raises(ValueError, match="structural problem"):
+            pm4py_ucm.write_ucm(self._malformed(), str(out))
+
+    def test_the_refusal_leaves_no_partial_file(self, tmp_path):
+        """A half-written .jucm would be worse than none: it opens."""
+        import pm4py_ucm
+        out = tmp_path / "bad.jucm"
+        with pytest.raises(ValueError):
+            pm4py_ucm.write_ucm(self._malformed(), str(out))
+        assert not out.exists()
+
+    def test_the_message_names_the_offending_node(self, tmp_path):
+        import pm4py_ucm
+        with pytest.raises(ValueError) as exc:
+            pm4py_ucm.write_ucm(self._malformed(), str(tmp_path / "b.jucm"))
+        assert "RespRef" in str(exc.value) and "2 incoming" in str(exc.value)
+
+    def test_validate_false_writes_anyway(self, tmp_path):
+        """jUCMNav accepts files this check rejects, so a model imported
+        from elsewhere must remain round-trippable."""
+        import pm4py_ucm
+        out = tmp_path / "bad.jucm"
+        pm4py_ucm.write_ucm(self._malformed(), str(out),
+                            parameters={"validate": False})
+        assert out.exists() and out.stat().st_size > 0
+
+    def test_serialize_to_string_gates_too(self):
+        """The family writer serialises to a string rather than a path, so
+        the gate cannot live only in the file-writing wrapper."""
+        from pm4py_ucm.objects.ucm.exporter.variants.jucm import (
+            serialize_to_string,
+        )
+        with pytest.raises(ValueError, match="structural problem"):
+            serialize_to_string(self._malformed())
+        assert serialize_to_string(self._malformed(), validate=False)
+
+    def test_a_mined_model_still_exports(self, tmp_path):
+        """The gate must not block the pipeline it is protecting."""
+        pm4py = pytest.importorskip("pm4py")
+        import pm4py_ucm, zipfile
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent
+        xes = root / "demo" / "ClaimsPaymentLog.xes"
+        if not xes.exists():
+            zf = root / "demo" / "ClaimsPaymentLog.zip"
+            if not zf.exists():
+                pytest.skip("bundled log unavailable")
+            with zipfile.ZipFile(zf) as z:
+                z.extractall(root / "demo")
+        log = pm4py.read_xes(str(xes))
+        tree = pm4py.discover_process_tree_inductive(log, noise_threshold=0.0)
+        ucm, _ = pm4py_ucm.discover_scenarios(
+            log, parameters={"process_tree": tree})
+        out = tmp_path / "mined.jucm"
+        pm4py_ucm.write_ucm(ucm, str(out))
+        assert out.exists()

@@ -1,6 +1,6 @@
 # Test suite
 
-**1107 tests** across **35 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
+**1114 tests** across **35 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
 
 > Regenerate this file with `python tests/gen_readme.py` after adding or removing tests. Purposes are the first sentence of each module's docstring; edit the docstring, not this table.
 
@@ -10,8 +10,8 @@
 |  | [`test_name_wrap.py`](test_name_wrap.py) | Tests for the multi-line name-wrapping helper and its integration with the exporter (issue 2 of the visual-improvements series). | 10 |
 |  | [`test_obj.py`](test_obj.py) | Unit tests for the UCM object model. | 7 |
 |  | [`test_stub_bindings.py`](test_stub_bindings.py) | Tests for stub plug-in binding round-trip. | 15 |
-|  | [`test_validate.py`](test_validate.py) | Structural well-formedness of a UCM. | 16 |
-| | _Object model & jUCMNav I/O subtotal_ | | **82** |
+|  | [`test_validate.py`](test_validate.py) | Structural well-formedness of a UCM. | 23 |
+| | _Object model & jUCMNav I/O subtotal_ | | **89** |
 | **Discovery & conversion** | [`test_boolean_detection.py`](test_boolean_detection.py) | Case-insensitive boolean type detection in decision mining (issue #6). | 12 |
 |  | [`test_choice_signature.py`](test_choice_signature.py) | Smoke tests for the concurrency-aware choice signature. | 20 |
 |  | [`test_conversion.py`](test_conversion.py) | Tests for the process tree → UCM converter. | 7 |
@@ -50,6 +50,6 @@
 |  | [`test_sessions_registry.py`](test_sessions_registry.py) | Tests for the Session Parameter Registry (``web/sessions/registry.py``). | 10 |
 | | _Sessions (save / share / resume) subtotal_ | | **50** |
 | **Progress / infrastructure** | [`test_progress.py`](test_progress.py) | Tests for the progress-reporting layer and the vectorized DataFrame resource miner. | 15 |
-| | **Total** | | **1107** |
+| | **Total** | | **1114** |
 
 See the repository [`README.md`](../README.md#testing) for how to run the suite, and [`docs/metrics.md`](../docs/metrics.md) for the metric definitions the validation tests enforce.

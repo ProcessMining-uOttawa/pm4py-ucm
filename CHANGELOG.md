@@ -28,6 +28,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The `.jucm` exporters refuse a structurally malformed model.** Both
+  entry points gate on `validate_ucm()` — `serialize_to_string()` as well as
+  `apply()`, since the family writer serialises to a string rather than a
+  path. Export is the right place for the check: a malformed model
+  serialises, renders and traverses without complaint, so the fault
+  otherwise surfaces only when a human opens the file in jUCMNav and sees a
+  responsibility with two incoming path segments. Nothing is written when
+  the check fails, so there is no half-valid file to open.
+
+  Pass `parameters={"validate": False}` (or `validate=False` to
+  `serialize_to_string`) to write anyway. That is not decoration: jUCMNav
+  accepts files this check rejects, so a model imported from elsewhere may
+  be malformed through no fault of this library, and round-tripping it must
+  stay possible.
 - `pm4py_ucm.validate_ucm()` / `check_ucm()` — structural well-formedness
   of a UCM, checking the in/out path-segment arity of every node kind
   against jUCMNav's metamodel. Nothing enforced this before, which is how
