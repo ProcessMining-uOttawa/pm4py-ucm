@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Structural validation is now wired into generation, not just export.**
+  `convert_to_ucm`, `discover_ucm_inductive` and `synthesize_scenarios` (and
+  therefore `discover_scenarios`) check the model they produced and raise
+  `ValueError` if it breaks jUCMNav's arity rules. Each takes
+  `validate=True` by default; pass `False` to opt out.
+
+  Export already refused a malformed model, but that is the **last** moment
+  the fault can be caught and a caller who never exports walks straight past
+  it — a malformed UCM renders and even traverses without complaint. Checking
+  where the model is built turns the class of fault that produced the 0.8.0
+  loop-guard bug from *detectable* into *unobservable downstream*.
+
+  The two gates fail for different reasons and say so. A generation failure is
+  a bug in this library — the model was built here, from a process tree, so no
+  input can be at fault — and the message says so and asks for a report. An
+  export failure need not be: jUCMNav accepts files this check rejects, so a
+  model imported from elsewhere may be malformed through nobody's fault, and
+  round-tripping it stays possible.
+
+  **Synthesis carries its own gate** rather than relying on
+  `discover_scenarios`. It is the step that *mutates* an already-sound model,
+  and callers reach it directly — the web app builds the UCM and calls
+  `synthesize_scenarios` itself, so gating only the convenience wrapper would
+  have left the library's main consumer unguarded.
+
+  This is a **behaviour change**: code that previously received a malformed
+  model now gets an exception. Nothing known produces one — the full suite
+  passes with the gates live, as do every bundled sample across three noise
+  thresholds and both decomposition modes, and 1,200 random process-tree
+  conversions.
+
+  Not covered: `discover_ucm_family` builds its cells through the converter
+  module directly rather than the public API, so family mining and the
+  umbrella assembly are still ungated. Their per-cell conversions are the same
+  code path, but the assembled umbrella is not checked.
+
 ## [0.8.0] — 2026-08-25
 
 ### Added
