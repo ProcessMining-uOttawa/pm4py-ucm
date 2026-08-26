@@ -45,6 +45,12 @@ def model_elements(ucm: UCM) -> Dict[Key, Any]:
     traversal record either, so counting them in the denominator would
     make full coverage unreachable.
     """
+    # Pin the id allocation order before reading any ``.id``. Ids are lazy,
+    # so whoever reads them first decides them; without this the traversal
+    # (which allocates in traversal order) and this function (map order)
+    # disagree on every element whenever they run on separate copies of the
+    # same model. See :meth:`UCM.assign_path_ids`.
+    ucm.assign_path_ids()
     out: Dict[Key, Any] = {}
     for m in ucm.maps:
         for coll in (getattr(m, "nodes", []), getattr(m, "connections", [])):
@@ -164,6 +170,32 @@ class Comparison:
         return len(self.both) / len(u) if u else 0.0
 
 
+def _reject_stray(visited: Set[Key], total: Set[Key]) -> None:
+    """Refuse results that do not belong to the model being measured.
+
+    A scenario can only walk what the model contains, so a visited key the
+    model has no element for means the results and the UCM are not the same
+    model — most often two *copies* of one model whose lazily-allocated ids
+    were assigned in different orders (see :meth:`UCM.assign_path_ids`).
+
+    Both entry points check. Reporting nonsense is worse than refusing: with
+    mismatched keys a comparison still returns numbers, and they look
+    plausible — a large "walked by neither" and a low agreement read as a
+    finding about the scenarios rather than as a broken measurement.
+    """
+    stray = visited - total
+    if not stray:
+        return
+    sample = ", ".join(f"{k[0]}#{k[1]}" for k in sorted(stray)[:3])
+    raise ValueError(
+        f"{len(stray)} of {len(visited)} visited element(s) are not in this "
+        f"model — the traversal results and the UCM do not match (e.g. "
+        f"{sample}). They are probably separate copies of one model: element "
+        f"ids are allocated lazily, so a copy that was traversed and a copy "
+        f"that is being measured can number the same element differently. "
+        f"Re-run the traversal on the very object being measured.")
+
+
 def coverage(ucm: UCM, results: Iterable[Any]) -> Coverage:
     """Coverage of ``results`` (traversal results) over the whole model."""
     total = set(model_elements(ucm))
@@ -178,13 +210,7 @@ def coverage(ucm: UCM, results: Iterable[Any]) -> Coverage:
                 label = r.visit_labels.get(k, "")
                 if label:
                     cov.labels[k] = label
-    # A scenario can only walk what the model contains; anything else means
-    # the results came from a different model than the one being measured.
-    stray = cov.covered - total
-    if stray:
-        raise ValueError(
-            f"{len(stray)} visited element(s) are not in this model — the "
-            "traversal results and the UCM do not match")
+    _reject_stray(cov.covered, total)
     return cov
 
 
@@ -196,11 +222,17 @@ def compare(ucm: UCM, result_a: Any, result_b: Any) -> Comparison:
     for r in (result_a, result_b):
         for k, lab in getattr(r, "visit_labels", {}).items():
             labels.setdefault(k, lab)
+    total = set(model_elements(ucm))
+    # Checked here as well as in ``coverage``. Without it a mismatch is not an
+    # error but a plausible-looking wrong answer: every stray key still counts
+    # towards A-only / B-only / both, while ``neither`` swells with elements
+    # both scenarios actually walked, so the agreement figure quietly lies.
+    _reject_stray(a | b, total)
     return Comparison(
         a_name=getattr(result_a, "scenario", "A"),
         b_name=getattr(result_b, "scenario", "B"),
         a_only=a - b, b_only=b - a, both=a & b,
-        total=set(model_elements(ucm)), labels=labels,
+        total=total, labels=labels,
     )
 
 

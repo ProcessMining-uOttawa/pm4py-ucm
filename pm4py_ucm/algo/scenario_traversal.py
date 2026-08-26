@@ -719,6 +719,10 @@ def traverse_scenario(
     patient_on_preconditions: bool = True,
 ) -> ScenarioTraversalResult:
     """Run one scenario the way jUCMNav would, and report what it reports."""
+    # Pin the id allocation order before the run records anything: the visit
+    # record is keyed by model id, ids are allocated lazily, and traversal
+    # order is not map order. See :meth:`UCM.assign_path_ids`.
+    ucm.assign_path_ids()
     return _Traversal(ucm, scenario, max_hit_count, max_steps,
                       patient_on_preconditions).run()
 
