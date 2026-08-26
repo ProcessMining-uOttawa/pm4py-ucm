@@ -1,23 +1,44 @@
-# Handoff — after 0.8.0
+# Handoff — after 0.8.1
 
-**0.8.0 is released.** Scenario simulation, coverage and A/B comparison are
+**0.8.1 is released.** Scenario simulation, coverage and A/B comparison are
 complete: stages 1–5 of [`docs/scenario_simulation.md`](docs/scenario_simulation.md)
-are all on `main`, and that plan is now history rather than a to-do.
+are all on `main`, and that plan is now history rather than a to-do. 0.8.1
+adds the validation gates, the variant-filtered log export, and two fixes
+found by using the app.
 
 ## State on arrival
 
-- `main` carries 0.8.0, tagged `v0.8.0`, published to PyPI.
-- All three version sites read **0.8.0** and are kept in lock-step by a test:
+- `main` carries 0.8.1, tagged `v0.8.1`, published to PyPI.
+- All three version sites read **0.8.1** and are kept in lock-step by a test:
   `pyproject.toml`, `pm4py_ucm/__init__.py`, `web/sessions/codegen.py`
   (`GENERATOR_VERSION`).
 - `CHANGELOG.md` has a fresh empty `[Unreleased]`.
-- Suite: **1133 passed, 0 failed, 0 skipped** (~4½ min locally); CI green on
+- Suite: **1169 passed, 0 failed, 0 skipped** (~5½ min locally); CI green on
   Python 3.9–3.12.
 - **One deployment.** https://pm4py-ucm.streamlit.app/ serves V6 through the
   `streamlit_app.py` shim. The second deployment
   (`pm4py-ucm-scenarios`, which served the frozen V2) has been **deleted** —
   the SAM 2026 paper that required it was accepted and its final version
   points at the main app. That URL now 404s; do not link it.
+
+## What 0.8.1 added
+
+Structural validation is wired into **every** generation path — conversion,
+discovery, synthesis, family mining and family assembly — not just the
+exporters, so a malformed model can no longer be observed downstream. Each
+takes `validate=True` by default and raises otherwise; see the upgrade note in
+the changelog.
+
+`filter_log_by_variants` cuts a log down to chosen behavioural variants, which
+is how a noisy log is cleaned without a threshold: a case that did not replay
+belongs to no variant, so selecting every variant already drops it. Exposed in
+the app's Simulation section and in exported scripts.
+
+Two fixes came from using the app rather than from tests. Coverage keys were
+unstable across copies of a model, because element ids are allocated lazily —
+and `compare()` silently returned a plausible wrong answer where `coverage()`
+refused. And nine widgets both took a default and had their key restored, which
+warned on every project load and hid a latent crash on a stale option value.
 
 ## What 0.8.0 delivered
 

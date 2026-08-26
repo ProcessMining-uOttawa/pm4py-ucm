@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-08-26
+
+> **Upgrading from 0.8.0 — one behaviour change.** Conversion, discovery,
+> synthesis and family mining/assembly now **raise `ValueError`** on a
+> structurally invalid model instead of returning it. Nothing known produces
+> one — the suite, every bundled sample across three noise thresholds and both
+> decomposition modes, and 1,200 random process-tree conversions all pass — so
+> in practice this turns a silent fault into a loud one rather than breaking
+> working code. If it ever fires it is a bug in this library, not in your log;
+> `validate=False` on any of those entry points restores the old behaviour.
+> Kept in a patch release deliberately: the change is a guard, not a new
+> contract.
+
 ### Added
 
 - **Export the event log filtered to chosen variants.**
