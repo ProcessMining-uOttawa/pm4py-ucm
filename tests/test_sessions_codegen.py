@@ -154,9 +154,12 @@ def test_simulation_emitted_only_with_the_scenarios_section():
     assert "SIMULATION_MODE = 'compare'" in on
     assert "SIMULATION_A = 'v1_Quick'" in on
     assert "SIMULATION_B = 'v2_Analyze'" in on
-    # The synthesized model is threaded straight into the simulation, so the
-    # script replays the scenarios it just built rather than re-mining.
-    assert "run_simulation(run_scenarios(log))" in on
+    # The synthesized model AND the clustering are threaded straight into the
+    # simulation, so the script replays the scenarios it just built rather
+    # than re-mining — and can cut the log to the selected variants, which
+    # needs the case-to-variant mapping the clustering carries.
+    assert "ucm_s, clustering = run_scenarios(log)" in on
+    assert "run_simulation(ucm_s, clustering, log)" in on
 
 
 def test_simulation_mode_is_emitted_as_an_identifier_not_a_label():
@@ -191,9 +194,11 @@ def test_simulation_selection_degrades_when_a_scenario_is_gone(tmp_path):
 def test_notebook_runs_the_simulation_on_the_synthesized_model():
     nb = json.loads(generate_notebook(_doc({}), include_scenarios=True))
     src = "".join("".join(c["source"]) for c in nb["cells"])
-    # The scenarios cell must BIND the model the simulation cell consumes.
-    assert "ucm_s = run_scenarios(log)" in src
-    assert "simulation = run_simulation(ucm_s)" in src
+    # The scenarios cell must BIND what the simulation cell consumes — the
+    # model and the clustering both, since the sub-log export needs the
+    # case-to-variant mapping.
+    assert "ucm_s, clustering = run_scenarios(log)" in src
+    assert "simulation = run_simulation(ucm_s, clustering, log)" in src
     assert 'preview("simulation")' in src
 
 
@@ -594,3 +599,43 @@ def test_emitted_read_log_maps_role_column_named_concept_name(tmp_path):
     assert "concept:name" in out.columns
     assert set(out["concept:name"]) == {"Read", "Nav"}
     assert set(out["org:role"]) == {"EXPLORE", "BROWSE"}
+
+
+def test_the_selection_is_also_written_out_as_a_filtered_log():
+    """The picker that chooses what to highlight also chooses what to keep, in
+    the app — so an exported script must produce that artifact too, or it is
+    not the faithful replay it claims to be."""
+    src = generate_script(
+        _doc({"simulation_mode": "coverage",
+              "simulation_scenarios": ["v1_Quick", "v2_Analyze"]}),
+        include_scenarios=True)
+    assert "def _write_variant_log" in src
+    assert "pm4py_ucm.filter_log_by_variants(log, clustering, names)" in src
+    assert '"simulation_log.csv"' in src
+    assert '"simulation_log.xes"' in src
+    # It runs on the SAME selection that drives the highlight, not a re-derived
+    # one: `want` is what the mode resolution above produced.
+    assert "_write_variant_log(log, clustering, want)" in src
+
+
+def test_a_selection_that_cannot_be_resolved_skips_the_log_quietly():
+    """``filter_log_by_variants`` raises for an empty or unknown selection.
+    In a batch script that must not take the whole pipeline down after the
+    model and the highlight have already been written."""
+    src = generate_script(_doc({"simulation_mode": "coverage"}),
+                          include_scenarios=True)
+    body = src[src.index("def _write_variant_log"):]
+    assert "except ValueError as exc:" in body
+    assert "no filtered log written" in body
+
+
+def test_the_xes_write_cannot_lose_the_csv():
+    """XES serialization is the expensive, failure-prone half. The CSV is
+    written first and its failure path is separate, so a log too awkward for
+    pm4py's XES writer still leaves a usable artifact."""
+    src = generate_script(_doc({"simulation_mode": "coverage"}),
+                          include_scenarios=True)
+    body = src[src.index("def _write_variant_log"):]
+    assert body.index("to_csv") < body.index("write_xes")
+    assert "simulation_log.xes skipped" in body
+

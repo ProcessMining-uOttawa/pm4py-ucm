@@ -64,7 +64,7 @@ Nearly 1:1 with the public API (`pm4py_ucm.__all__`):
 | `overlay_nodes`, `overlay_edges`, `overlay_heatmap*` | `annotate_performance(...)` (+ heat-map render args). When a `traversal_*` metric is selected the script first calls `compute_traversal_stats(tree, log)` and passes it — the emitted `wants_traversal()` helper gates that, so a session without those metrics pays nothing. |
 | `family_*` | `discover_ucm_family(...)`, `write_ucm_family`, `assemble_ucm_family`, `write_family_report` |
 | `scenario_*` | `discover_scenarios(...)` + `write_variants_report` / `write_case_variant_map` / `write_condition_mining_report` |
-| `simulation_*` | `traverse_all(ucm_s)` + `coverage(...)` / `compare(...)`, rendered through `coverage_render` / `comparison_render` into `simulation.svg` plus a summary CSV. Emitted only with the scenarios section, since it replays the scenarios that section synthesizes. |
+| `simulation_*` | `traverse_all(ucm_s)` + `coverage(...)` / `compare(...)`, rendered through `coverage_render` / `comparison_render` into `simulation.svg` plus a summary CSV — **and** `filter_log_by_variants(...)` into `simulation_log.csv` / `.xes`, the log cut down to the selected variants, because in the app the same picker chooses what to highlight and what to keep. Emitted only with the scenarios section, since it replays the scenarios that section synthesizes. |
 | `active_view`, `compare_*` | comments / which artifacts the script writes |
 
 ## 5. Architecture

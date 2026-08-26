@@ -25,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   An unrecognised name raises rather than being skipped — silently dropping one
   would silently shrink the exported log — and so does an empty selection.
 
+  **Exported scripts and notebooks write it too**, as `simulation_log.csv` and
+  `simulation_log.xes`, from the same selection that drives the highlight —
+  `run_scenarios` now returns the clustering alongside the model so
+  `run_simulation` has the case-to-variant mapping. Verified by running a
+  generated script end to end: the same two variants give 2,271 cases /
+  32,908 events there and in the app.
+
   In the app it is the **Export the log for the selected variants** panel in
   the Scenarios view's Simulation section: the picker that chooses what to
   highlight also chooses what to keep, with XES and CSV downloads and a

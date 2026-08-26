@@ -542,11 +542,14 @@ def _scenarios_fn() -> str:
         '            str(OUT_DIR / "condition_mining.csv"))\n'
         '    print(f"[scenarios] wrote {OUT_DIR / \'scenarios.jucm\'} "\n'
         '          f"({len(clustering.variants)} variant(s))")\n'
-        "    return ucm_s"
+        "    # The clustering travels with the model: it maps each case to\n"
+        "    # the behavioural variant it fell into, which the simulation\n"
+        "    # step needs to cut the log down to a chosen selection.\n"
+        "    return ucm_s, clustering"
     )
 
 
-_SIMULATION_FN = '''def run_simulation(ucm_s):
+_SIMULATION_FN = '''def run_simulation(ucm_s, clustering, log):
     """Replay the synthesized scenarios and export the highlight the app showed.
 
     Mirrors the Scenarios view's Simulation section: every scenario is
@@ -554,6 +557,12 @@ _SIMULATION_FN = '''def run_simulation(ucm_s):
     scenarios or the A-only / B-only / both partition of two of them is
     written out as ``simulation.svg`` plus a small CSV. Returns the
     ``Coverage`` / ``Comparison`` object so a notebook can inspect it.
+
+    The same selection also names a set of *cases*, because clustering
+    recorded which case fell into which variant — so the sub-log is written
+    too, as ``simulation_log.xes`` / ``.csv``. Selecting the variants worth
+    trusting and keeping their cases is how a noisy log is cleaned; cases that
+    replayed as noise belong to no variant and drop out by construction.
     """
     from pm4py_ucm.algo import scenario_coverage as _sc
     from pm4py_ucm.visualization.ucm import svg as _svgmod
@@ -632,7 +641,33 @@ _SIMULATION_FN = '''def run_simulation(ucm_s):
         print(f"[simulation] wrote {OUT_DIR / 'simulation.svg'}")
     except Exception as exc:  # noqa: BLE001 - graphviz may be absent
         print(f"[warn] simulation SVG skipped ({type(exc).__name__}: {exc})")
-    return report'''
+
+    _write_variant_log(log, clustering, want)
+    return report
+
+
+def _write_variant_log(log, clustering, names):
+    """The event log cut down to the cases in ``names``, beside the highlight.
+
+    Same columns and row order as the log it came from, so it re-mines into
+    the model this script just built.
+    """
+    try:
+        sub = pm4py_ucm.filter_log_by_variants(log, clustering, names)
+    except ValueError as exc:      # nothing selected, or a name that is gone
+        print(f"[simulation] no filtered log written ({exc})")
+        return None
+    sub.to_csv(OUT_DIR / "simulation_log.csv", index=False)
+    cases = sub["case:concept:name"].nunique()
+    try:
+        pm4py.write_xes(sub, str(OUT_DIR / "simulation_log.xes"),
+                        case_id_key="case:concept:name")
+    except Exception as exc:  # noqa: BLE001 - keep the CSV either way
+        print(f"[warn] simulation_log.xes skipped "
+              f"({type(exc).__name__}: {exc})")
+    print(f"[simulation] wrote {OUT_DIR / 'simulation_log.csv'} "
+          f"({cases} case(s), {len(sub)} event(s))")
+    return sub'''
 
 
 def _simulation_fn() -> str:
@@ -753,8 +788,11 @@ def _run_fn(include_scenarios: bool, include_family: bool,
         "    ucm = run_model(log)",
     ]
     if include_scenarios:
-        # The simulation consumes the synthesized model, so the two chain.
-        body.append("    run_simulation(run_scenarios(log))")
+        # The simulation consumes the synthesized model AND the clustering
+        # (to cut the log down to the selected variants), so unpack rather
+        # than chain.
+        body.append("    ucm_s, clustering = run_scenarios(log)")
+        body.append("    run_simulation(ucm_s, clustering, log)")
     if include_family:
         body.append(
             "    if FAMILY_ATTRS:\n"
@@ -963,7 +1001,8 @@ def generate_notebook(
             _nb_md("## 4 · Scenario synthesis\n\nOne executable `ScenarioDef` "
                    "per behavioural variant. Writes `scenarios.jucm` and the "
                    "variant CSVs."),
-            _nb_code(_scenarios_fn() + "\n\nucm_s = run_scenarios(log)"),
+            _nb_code(_scenarios_fn()
+                     + "\n\nucm_s, clustering = run_scenarios(log)"),
             _nb_md("The behavioural variants that drive the scenarios:"),
             _nb_code('pd.read_csv(OUT_DIR / "variants.csv").head(10)'),
             _nb_md("### Simulation\n\nRun those scenarios on the "
@@ -972,7 +1011,7 @@ def generate_notebook(
                    "**A vs B** partition, whichever the session had. Writes "
                    "`simulation.svg` and a summary CSV."),
             _nb_code(_simulation_fn()
-                     + "\n\nsimulation = run_simulation(ucm_s)"),
+                     + "\n\nsimulation = run_simulation(ucm_s, clustering, log)"),
             _nb_md("The highlighted model — hover any element for its detail:"),
             _nb_code('preview("simulation")'),
         ]
