@@ -400,3 +400,96 @@ def test_every_deprecated_app_says_so_in_its_ui():
         src = f.read_text(encoding="utf-8")
         assert "is deprecated.**" in src, f"{f.name} renders no notice"
 
+
+
+def _restore_written_keys():
+    """Session-state keys the restore path writes DIRECTLY (``ss[...] = ...``).
+
+    Literal keys come back as-is; an f-string key comes back as its literal
+    prefix, since the suffix is a log hash or a loop variable.
+    """
+    import ast
+
+    tree = ast.parse(_APP.read_text(encoding="utf-8"))
+    out = {}
+    for fn in ast.walk(tree):
+        if not (isinstance(fn, ast.FunctionDef) and fn.name in (
+                "_apply_project_config", "_apply_filter_spec_to_state")):
+            continue
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Assign):
+                continue
+            for t in node.targets:
+                if not (isinstance(t, ast.Subscript)
+                        and isinstance(t.value, ast.Name)
+                        and t.value.id == "ss"):
+                    continue
+                k = t.slice
+                if isinstance(k, ast.Constant):
+                    out[k.value] = "literal"
+                elif isinstance(k, ast.JoinedStr):
+                    out["".join(p.value for p in k.values
+                                if isinstance(p, ast.Constant))] = "prefix"
+    return out
+
+
+def test_no_restored_widget_also_passes_its_own_default():
+    """Streamlit warns — "created with a default value but also had its value
+    set via the Session State API" — for any widget that both receives a
+    default and has its key written by the app. A loaded project writes
+    exactly those keys, so every such widget must take its default *through*
+    session_state (``_seed_choice`` / ``setdefault``) and pass none itself.
+
+    Reported from a real load: nine widgets were in that state, of which the
+    user saw only ``cfg_decomp_preset`` because it renders first. The warning
+    is only a warning — session_state wins, so the restore does apply — but it
+    fires on every load and marks a genuine ambiguity about which value is in
+    force.
+
+    The exception is a widget that takes its default from ``_rv``: that IS the
+    restore channel for value=/default= widgets (see ``_rv``), and the restore
+    path seeds a slot for it rather than writing its key.
+    """
+    import ast
+
+    src = _APP.read_text(encoding="utf-8")
+    written = _restore_written_keys()
+    assert written, "could not find the restore path's direct key writes"
+
+    DEFAULTS = {"index", "value", "default"}
+    WIDGETS = {"selectbox", "radio", "multiselect", "checkbox", "slider",
+               "text_input", "number_input", "select_slider", "toggle"}
+    clashes = []
+    for node in ast.walk(ast.parse(src)):
+        if not isinstance(node, ast.Call):
+            continue
+        if getattr(node.func, "attr", None) not in WIDGETS:
+            continue
+        kw = {k.arg: k for k in node.keywords if k.arg}
+        if "key" not in kw:
+            continue
+        kn = kw["key"].value
+        if isinstance(kn, ast.Constant):
+            key = kn.value
+        elif isinstance(kn, ast.JoinedStr):
+            key = "".join(p.value for p in kn.values
+                          if isinstance(p, ast.Constant))
+        else:
+            continue
+        passed = sorted(DEFAULTS & set(kw))
+        if not passed:
+            continue
+        # A default sourced from _rv is the restore slot, not a clash.
+        if any("_rv(" in (ast.unparse(kw[d].value)) for d in passed):
+            continue
+        for prefix, kind in written.items():
+            if key == prefix or (kind == "prefix" and key.startswith(prefix)):
+                clashes.append(
+                    f"line {node.lineno}: st.{node.func.attr}(key={key!r}) "
+                    f"passes {passed} but the restore path writes it")
+                break
+    assert not clashes, (
+        "widgets both restored and given their own default:\n  "
+        + "\n  ".join(clashes)
+        + "\nSeed the default through session_state (_seed_choice / "
+          "setdefault) and drop the index=/value=/default= argument.")

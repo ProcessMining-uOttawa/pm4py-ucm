@@ -33,6 +33,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Loading a project warned about widgets "created with a default value but
+  also had its value set via the Session State API".** Reported for
+  `cfg_decomp_preset`; an audit found **nine** widgets in that state, of which
+  only the first to render was visible. A restored project writes those keys
+  directly, so any widget also passing its own `index=` / `value=` triggers
+  Streamlit's check.
+
+  The warning was only a warning — session_state wins, so settings did
+  restore — but it fired on every load and marked a real ambiguity about which
+  value was in force. The affected widgets (decomposition preset and its
+  boundary-rule toggles, notation, resource attribute, heat-map scale,
+  condition strategy) now take their defaults *through* session_state and pass
+  none themselves; the defaults are unchanged.
+
+  `_seed_choice` also **clamps**: a stored value no longer among a widget's
+  options falls back to the default instead of making Streamlit raise. That
+  was a latent crash — a project saved with `data-driven` loaded on a machine
+  without scikit-learn, where that option is not offered, would have taken the
+  app down rather than degrading.
+
+  A test now enforces the rule statically: no widget whose key the restore
+  path writes may pass its own default.
+
 - **Scenario coverage and A/B comparison could measure against the wrong
   numbering of the same model.** Reported from the app: an A/B comparison
   appeared to work, then coverage of a single scenario failed with
