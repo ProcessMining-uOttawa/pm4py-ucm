@@ -7,26 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **Scenario synthesis produced structurally invalid models.** Emitting
-  loop conditions splices a `LoopEntryGuard` OR-fork whose bypass arc
-  (`counter <= 0`) has to land somewhere, and only two landing sites were
-  handled specially. Every other one — a responsibility, an AND-fork, an
-  empty point — received the arc **directly**, giving it a second incoming
-  path segment. jUCMNav's metamodel allows a responsibility exactly one,
-  so those models were not UCMs: on `ClaimsPaymentLog` at noise 0.0, two
-  responsibilities and an AND-fork each ended up with two. They still
-  exported, rendered and traversed, which is why it went unnoticed. The
-  bypass now merges through an `OrJoin` — the construct that exists for
-  alternatives — unless the target already admits several inputs.
-
-  This does not change scenario coverage: the bypass arcs are only walked
-  when a loop runs zero times, and no variant mined from that log does, so
-  they were unwalked before the fix and remain so after. They now hang off
-  a legal join.
-
 ### Added
+
 
 - **The `.jucm` exporters refuse a structurally malformed model.** Both
   entry points gate on `validate_ucm()` — `serialize_to_string()` as well as
@@ -60,8 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   jUCMNav's Problems view would; **Coverage** mode highlights what a
   selected set of scenarios walked, with the percentage of the whole model
   and a per-element-kind breakdown; **Compare A vs B** highlights one
-  scenario red, the other blue and what both walked purple, with the
-  three-way counts and an agreement figure. Every element is hoverable. The
+  scenario dark green, the other dark orange and what both walked purple,
+  with the three-way counts and an agreement figure. Every element is hoverable. The
   performance heat-map is suspended while a highlight is on, with a notice
   saying so — it defaults on whenever overlay metrics are picked, so it
   would otherwise appear to vanish unexplained.
@@ -100,6 +82,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carries a label per key. This is the basis of the coverage highlighting
   and A/B comparison planned for 0.8.0 — see
   [`docs/scenario_simulation.md`](docs/scenario_simulation.md).
+
+### Changed
+
+
+- The A/B comparison uses **dark green / dark orange / purple** instead of
+  red / blue / purple. The pair separates by lightness as well as hue (a
+  44-point luma gap), so it survives a greyscale printout and does not lean
+  on the red-green axis; red also read badly next to the performance
+  heat-map's own red ramp.
+- Scenario coverage reports **Elements** (path nodes) and **Paths** (the
+  segments between them) separately rather than as one percentage. A run
+  can walk every node and still miss segments — an alternative carrying no
+  responsibility is a segment and nothing else — so the split says whether
+  what is left uncovered is real behaviour or just empty paths. On
+  `ClaimsPaymentLog` with every scenario: elements 100%, paths 97.3%. The
+  redundant "never walked" count is gone.
+- The Family view's grid render reports progress per cell
+  (`Rendering family grid (BPMN) — 4 of 8 cells: Direct`) instead of a mute
+  spinner. Each cell is its own graphviz run, so on a family with many
+  members there was no way to tell whether anything was happening.
+
+### Fixed
+
+
+- **Scenario synthesis produced structurally invalid models.** Emitting
+  loop conditions splices a `LoopEntryGuard` OR-fork whose bypass arc
+  (`counter <= 0`) has to land somewhere, and only two landing sites were
+  handled specially. Every other one — a responsibility, an AND-fork, an
+  empty point — received the arc **directly**, giving it a second incoming
+  path segment. jUCMNav's metamodel allows a responsibility exactly one,
+  so those models were not UCMs: on `ClaimsPaymentLog` at noise 0.0, two
+  responsibilities and an AND-fork each ended up with two. They still
+  exported, rendered and traversed, which is why it went unnoticed. The
+  bypass now merges through an `OrJoin` — the construct that exists for
+  alternatives — unless the target already admits several inputs.
+
+  This does not change scenario coverage: the bypass arcs are only walked
+  when a loop runs zero times, and no variant mined from that log does, so
+  they were unwalked before the fix and remain so after. They now hang off
+  a legal join.
 
 ## [0.7.12] — 2026-08-25
 

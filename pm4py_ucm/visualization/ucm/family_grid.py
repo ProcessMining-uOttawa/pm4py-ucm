@@ -502,7 +502,8 @@ def render_svg(family, style: str = "ucm", *,
                node_metric: "Optional[str]" = None,
                edge_metric: "Optional[str]" = None,
                heatmap_global: bool = False,
-               node_span=None, edge_span=None) -> str:
+               node_span=None, edge_span=None,
+               progress_callback=None) -> str:
     """Render ``family`` as a single **2-D vector SVG** — the same matrix
     the PNG :func:`render` composites (rows = first attribute's values,
     columns = the second's; a stack for one attribute), but as vectors:
@@ -525,6 +526,11 @@ def render_svg(family, style: str = "ucm", *,
 
     Layout units are points; there is no rasterisation, so a panel is
     sized directly from its graphviz ``<svg>`` extents.
+
+    ``progress_callback(done, total, label)`` is called after each cell is
+    rendered, if given. Each cell is a separate graphviz run, so on a
+    family with many members this is the difference between a spinner that
+    sits there and one that says how far along it is.
     """
     from xml.sax.saxutils import escape
 
@@ -555,6 +561,14 @@ def render_svg(family, style: str = "ucm", *,
     panels: Dict[Tuple[int, int], Tuple[float, float, str]] = {}
     captions: Dict[Tuple[int, int], str] = {}
     placeholders: Dict[Tuple[int, int], str] = {}
+    # Only the cells that actually render count toward the total: a
+    # skipped combination is a placeholder, not work, and including it
+    # would make the progress stall at the end for no reason.
+    _total_cells = sum(
+        1 for r, rv in enumerate(rows) for c in range(n_cols)
+        if grid.get((rv.label, cols[c].label) if two_d else (rv.label,))
+        is not None)
+    _done_cells = 0
     for r, rv in enumerate(rows):
         for c in range(n_cols):
             labels = (rv.label, cols[c].label) if two_d else (rv.label,)
@@ -568,6 +582,10 @@ def render_svg(family, style: str = "ucm", *,
                 w, h = _svg.svg_dimensions(cell_svg)
                 panels[(r, c)] = (w, h, _svg.svg_inner(cell_svg))
                 captions[(r, c)] = cell.caption
+                _done_cells += 1
+                if progress_callback is not None:
+                    progress_callback(_done_cells, _total_cells,
+                                      getattr(cell, "label", "") or "")
             elif labels in skipped:
                 placeholders[(r, c)] = f"n={skipped[labels]} (below min_cases)"
             else:

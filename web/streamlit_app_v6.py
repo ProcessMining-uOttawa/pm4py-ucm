@@ -2109,6 +2109,7 @@ def _render_family_grid_svg(
     node_metric: Optional[str] = None,
     edge_metric: Optional[str] = None,
     heat_scope: str = "local",
+    _progress=None,
 ) -> Tuple[Optional[str], Optional[str]]:
     """The whole family as one navigable 2-D vector SVG — the same matrix
     the PNG grid composites (rows × columns, headers, captions), but as
@@ -2129,7 +2130,8 @@ def _render_family_grid_svg(
         return render_svg(
             _family, style, heatmap=heatmap, node_metric=node_metric,
             edge_metric=edge_metric, heatmap_global=hglobal,
-            node_span=node_span, edge_span=edge_span), None
+            node_span=node_span, edge_span=edge_span,
+            progress_callback=_progress), None
     except Exception as exc:  # pragma: no cover - depends on env
         return None, f"{type(exc).__name__}: {exc}"
 
@@ -5336,8 +5338,8 @@ if _view == "Scenarios":
                 "Highlight", options=["Coverage", "Compare A vs B"],
                 horizontal=True, key="sim_mode",
                 help="**Coverage** paints what any of the selected scenarios "
-                     "walked. **Compare A vs B** paints one scenario red, "
-                     "the other blue, and what both walked purple.",
+                     "walked. **Compare A vs B** paints one scenario "
+                     "green, the other orange, and what both walked purple.",
             )
 
             if _mode == "Coverage":
@@ -5351,10 +5353,10 @@ if _view == "Scenarios":
                 _sim_mode_key = "coverage"
             else:
                 ab1, ab2 = st.columns(2)
-                _a = ab1.selectbox("A (red)", options=_names, index=0,
+                _a = ab1.selectbox("A (green)", options=_names, index=0,
                                    key="sim_a")
                 _b = ab2.selectbox(
-                    "B (blue)", options=_names,
+                    "B (orange)", options=_names,
                     index=1 if len(_names) > 1 else 0, key="sim_b")
                 _picks = (_a, _b)
                 _sim_mode_key = "compare"
@@ -5371,17 +5373,33 @@ if _view == "Scenarios":
                     synth["ucm"], _sim_results)
 
                 if _sim_mode_key == "coverage" and _payload is not None:
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric("Model covered",
-                              f"{_payload.fraction * 100:.1f}%")
-                    c2.metric("Elements",
-                              f"{len(_payload.covered):,} / "
-                              f"{len(_payload.total):,}")
-                    c3.metric("Never walked", f"{len(_payload.uncovered):,}")
+                    # Split rather than one number: a run can walk every
+                    # node and still miss segments, and the gap between the
+                    # two says whether what is left over is real behaviour
+                    # or just empty alternatives.
+                    _ec, _et = _payload.elements
+                    _pc, _pt = _payload.paths
+                    c1, c2 = st.columns(2)
+                    c1.metric(
+                        "Elements", f"{_ec:,} / {_et:,}",
+                        f"{_payload.element_fraction * 100:.1f}%",
+                        delta_color="off",
+                        help="Path nodes: start and end points, "
+                             "responsibilities, forks and joins, stubs.")
+                    c2.metric(
+                        "Paths", f"{_pc:,} / {_pt:,}",
+                        f"{_payload.path_fraction * 100:.1f}%",
+                        delta_color="off",
+                        help="Path segments between nodes. Usually the "
+                             "harder number — there are more of them, and "
+                             "an alternative carrying no responsibility "
+                             "shows up here and nowhere else.")
                     st.caption(
                         "Against the **whole model**, every map included. A "
                         "single scenario reads low because it walks one path "
-                        "through a model that contains every path."
+                        "through a model that contains every path. Elements "
+                        "at 100% with paths below it means what is left "
+                        "uncovered is segments, not behaviour."
                     )
                     with st.expander("Coverage by element kind",
                                      expanded=False):
@@ -5742,11 +5760,28 @@ if _view == "Family":
                 # independent of mining — switching UCM ↔ BPMN re-renders
                 # but never re-mines.
                 grid_png = None  # rendered lazily (fallback / on-demand)
-                with st.spinner(f"Rendering family grid ({notation})..."):
-                    grid_svg, grid_svg_err = _render_family_grid_svg(
-                        st.session_state["family_fp"], style, fam["family"],
-                        **_view_heat_args(),
-                    )
+                # Each cell is its own graphviz run, so on a family with
+                # many members a mute spinner leaves the user guessing
+                # whether anything is happening. Count them instead.
+                _grid_status = st.status(
+                    f"Rendering family grid ({notation})…", expanded=False)
+                _grid_bar = _grid_status.progress(0.0)
+
+                def _grid_progress(done, total, label):
+                    total = max(total, 1)
+                    _grid_bar.progress(min(done / total, 1.0))
+                    _grid_status.update(
+                        label=f"Rendering family grid ({notation}) — "
+                              f"{done} of {total} cells"
+                              + (f": {label}" if label else ""))
+
+                grid_svg, grid_svg_err = _render_family_grid_svg(
+                    st.session_state["family_fp"], style, fam["family"],
+                    _progress=_grid_progress, **_view_heat_args(),
+                )
+                _grid_status.update(
+                    label=f"Family grid rendered ({notation}).",
+                    state="complete")
                 if grid_svg is not None:
                     _svg_viewer(grid_svg, height=640, key="familysvg")
                     _fam_heat = (
