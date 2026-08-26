@@ -64,11 +64,13 @@ https://pm4py-ucm.streamlit.app/ main file) is a shim that runs
 is not deployed until that shim is repointed deliberately. V4/V3 are
 strict subsets and live in git history (``streamlit_app_v3.py`` is still
 present); V1 (model-only) was retired at v0.5.1. ``streamlit_app_v2.py``
-is deliberately NOT a shim: it is the frozen V2 (model + scenarios) app
-served at https://pm4py-ucm-scenarios.streamlit.app/. The SAM 2026 paper
-that referenced it has been accepted, so V2 is now kept for historical
-reference rather than for review — it no longer constrains V5/V6, though
-nothing here depends on changing it.
+is deliberately NOT a shim: it is the V2 (model + scenarios) app itself,
+deprecated like every pre-V6 app. It was frozen, and served at a second
+deployment, https://pm4py-ucm-scenarios.streamlit.app/, while the SAM 2026
+paper referencing it was under review. That paper has been accepted and its
+final version points here instead, so the freeze is lifted and the second
+deployment retired — V2 is kept for historical reference and constrains
+nothing.
 """
 from __future__ import annotations
 

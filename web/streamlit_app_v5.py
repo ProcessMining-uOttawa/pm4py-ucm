@@ -49,9 +49,10 @@ https://pm4py-ucm.streamlit.app/ main file) is a shim that runs
 ``streamlit_app_v5.py``, so the primary deployment serves V5. V4/V3 are
 strict subsets and live in git history (``streamlit_app_v3.py`` is still
 present); V1 (model-only) was retired at v0.5.1. ``streamlit_app_v2.py``
-is deliberately NOT a shim: it is the frozen V2 (model + scenarios) app
-that https://pm4py-ucm-scenarios.streamlit.app/ must keep serving while a
-paper referencing it is under review — do not fold it into V5.
+is deliberately NOT a shim: it is the V2 (model + scenarios) app itself,
+deprecated like this one. It was frozen while a paper referencing it was
+under review; that paper was accepted and its second deployment retired, so
+the freeze no longer applies.
 """
 from __future__ import annotations
 

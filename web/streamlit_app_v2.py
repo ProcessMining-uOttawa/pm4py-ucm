@@ -10,10 +10,11 @@
    This app used to be **frozen** as well, not merely deprecated: it was
    the V2 app exactly as referenced by a paper under review, restored
    byte-for-byte from commit 17d333b (the last pre-model-family state),
-   and https://pm4py-ucm-scenarios.streamlit.app/ served it so it kept
-   matching what the reviewers saw. That paper has since been accepted
-   and its final version points at the main app, so the freeze is over
-   and V2 is now deprecated on the same terms as V3 and V5.
+   and a second deployment, https://pm4py-ucm-scenarios.streamlit.app/,
+   served it so it kept matching what the reviewers saw. That paper has
+   since been accepted and its final version points at the main app, so
+   the freeze is over, that deployment is retired, and V2 is deprecated
+   on the same terms as V3 and V5.
 ......................................................................
 
 V2 is a superset of V1: same log-source / inductive-miner / performer /
