@@ -64,7 +64,14 @@ class StubBindingObjectModelTests(unittest.TestCase):
 
 
 class StubBindingExportTests(unittest.TestCase):
-    """The exporter writes the binding shape jUCMNav expects."""
+    """The exporter writes the binding shape jUCMNav expects.
+    These fixtures are deliberately **fragments**, not whole UCMs: the
+    nodes are unconnected because each assertion is about one serialised
+    attribute, not about a model anyone would open. The exporter refuses a
+    structurally malformed model by default, so they pass
+    ``validate=False`` — the escape hatch exists for exactly this, and for
+    round-tripping a file authored elsewhere.
+    """
 
     def _build(self):
         ucm = UCM(name="WithStub")
@@ -89,13 +96,13 @@ class StubBindingExportTests(unittest.TestCase):
         return ucm
 
     def test_emits_bindings_element_with_plugin_id(self):
-        xml = serialize_to_string(self._build())
+        xml = serialize_to_string(self._build(), validate=False)
         self.assertIn("<bindings", xml)
         # plugin attribute carries the plug-in map's integer ID
         self.assertRegex(xml, r'<bindings plugin="\d+">')
 
     def test_emits_in_and_out_children(self):
-        xml = serialize_to_string(self._build())
+        xml = serialize_to_string(self._build(), validate=False)
         self.assertRegex(xml,
             r'<in startPoint="\d+" stubEntry="//@urndef/@specDiagrams\.\d+/@connections\.\d+"/>')
         self.assertRegex(xml,
@@ -104,30 +111,30 @@ class StubBindingExportTests(unittest.TestCase):
     def test_emits_parent_stub_on_plugin_map(self):
         """The plug-in ``specDiagrams`` element gets a ``parentStub``
         attribute pointing back into the bindings element."""
-        xml = serialize_to_string(self._build())
+        xml = serialize_to_string(self._build(), validate=False)
         self.assertRegex(xml,
             r'<specDiagrams[^>]*name="Sub"[^>]*parentStub="//@urndef/@specDiagrams\.\d+/@nodes\.\d+/@bindings\.0"')
 
     def test_emits_in_bindings_on_entry_connection(self):
         """The parent-map connection entering the stub gets an
         ``inBindings`` attribute pointing to its ``<in>`` element."""
-        xml = serialize_to_string(self._build())
+        xml = serialize_to_string(self._build(), validate=False)
         self.assertRegex(xml,
             r'<connections[^>]*target="\d+"[^>]*inBindings="//@urndef/@specDiagrams\.\d+/@nodes\.\d+/@bindings\.0/@in\.0"')
 
     def test_emits_out_bindings_on_exit_connection(self):
-        xml = serialize_to_string(self._build())
+        xml = serialize_to_string(self._build(), validate=False)
         self.assertRegex(xml,
             r'<connections[^>]*source="\d+"[^>]*outBindings="//@urndef/@specDiagrams\.\d+/@nodes\.\d+/@bindings\.0/@out\.0"')
 
     def test_emits_inbindings_on_plugin_start_point(self):
-        xml = serialize_to_string(self._build())
+        xml = serialize_to_string(self._build(), validate=False)
         # The plug-in StartPoint should carry inBindings.
         self.assertRegex(xml,
             r'<nodes[^>]*xsi:type="ucm\.map:StartPoint"[^>]*name="ss"[^>]*inBindings="')
 
     def test_emits_outbindings_on_plugin_end_point(self):
-        xml = serialize_to_string(self._build())
+        xml = serialize_to_string(self._build(), validate=False)
         self.assertRegex(xml,
             r'<nodes[^>]*xsi:type="ucm\.map:EndPoint"[^>]*name="se"[^>]*outBindings="')
 
@@ -135,7 +142,7 @@ class StubBindingExportTests(unittest.TestCase):
         ucm = UCM(name="D")
         m = ucm.add_map(name="M")
         stub = m.add_node(UCM.Stub(name="Dyn", dynamic=True))
-        xml = serialize_to_string(ucm)
+        xml = serialize_to_string(ucm, validate=False)
         self.assertIn('dynamic="true"', xml)
 
     def test_static_stub_omits_dynamic_attribute(self):
@@ -144,7 +151,7 @@ class StubBindingExportTests(unittest.TestCase):
         ucm = UCM(name="S")
         m = ucm.add_map(name="M")
         m.add_node(UCM.Stub(name="Stat", dynamic=False))
-        xml = serialize_to_string(ucm)
+        xml = serialize_to_string(ucm, validate=False)
         self.assertNotIn('dynamic="false"', xml)
 
 

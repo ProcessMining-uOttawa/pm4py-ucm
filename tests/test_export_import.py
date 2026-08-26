@@ -43,6 +43,13 @@ class ExportFilterTests(unittest.TestCase):
     2. EmptyPoints preceding a loop's OR-join are emitted as
        DirectionArrows.
     3. ComponentRefs that have nothing bound to them are omitted.
+    
+    These fixtures are deliberately **fragments**, not whole UCMs: the
+    nodes are unconnected because each assertion is about one serialised
+    attribute, not about a model anyone would open. The exporter refuses a
+    structurally malformed model by default, so they pass
+    ``validate=False`` — the escape hatch exists for exactly this, and for
+    round-tripping a file authored elsewhere.
     """
 
     def test_conditions_suppressed_by_default(self):
@@ -65,7 +72,7 @@ class ExportFilterTests(unittest.TestCase):
                   children=[leaf("body"), leaf(None)],
                   label=None)
         ucm = conv.apply(tree)
-        xml = serialize_to_string(ucm, layout=False)
+        xml = serialize_to_string(ucm, layout=False, validate=False)
         # ``ucm.map:DirectionArrow`` should appear at least twice — one
         # on the entry side of the LoopJoin, one on the redo back-edge.
         self.assertGreaterEqual(
@@ -87,7 +94,7 @@ class ExportFilterTests(unittest.TestCase):
             resp_def=ucm.get_or_add_responsibility("A"), name="A",
         ))
         a.cont_ref = cr
-        xml = serialize_to_string(ucm, layout=False)
+        xml = serialize_to_string(ucm, layout=False, validate=False)
         # Component definition has lineColor + fillColor + filled.
         self.assertRegex(xml,
             r'<components [^>]*name="Team"[^>]*'
@@ -106,7 +113,7 @@ class ExportFilterTests(unittest.TestCase):
                 resp_def=ucm.get_or_add_responsibility("A"), name="A",
             ))
             a.cont_ref = cr
-            xml = serialize_to_string(ucm, layout=False)
+            xml = serialize_to_string(ucm, layout=False, validate=False)
             import re
             line = re.search(r'lineColor="([^"]+)"', xml).group(1)
             fill = re.search(r'fillColor="([^"]+)"', xml).group(1)
@@ -134,7 +141,7 @@ class ExportFilterTests(unittest.TestCase):
         sp.x, sp.y = 50, 100
         a.x, a.y = 150, 100
         ep.x, ep.y = 250, 100
-        xml = serialize_to_string(ucm, layout=False)
+        xml = serialize_to_string(ucm, layout=False, validate=False)
         # The RespRef's <label/> stays empty — no deltaY override.
         self.assertRegex(xml,
             r'<nodes [^>]*name="Solo"[^>]*>\s*<label/>')
@@ -160,7 +167,7 @@ class ExportFilterTests(unittest.TestCase):
         ))
         upper.x, upper.y = 150, 50
         lower.x, lower.y = 150, 100
-        xml = serialize_to_string(ucm, layout=False)
+        xml = serialize_to_string(ucm, layout=False, validate=False)
         # The "Lower" element gets a negative deltaY (label below
         # the symbol in jUCMNav's coordinate convention).
         self.assertRegex(xml,
@@ -186,7 +193,7 @@ class ExportFilterTests(unittest.TestCase):
             name="Other",
         ))
         upper.x, upper.y = 150, 50
-        xml = serialize_to_string(ucm, layout=False)
+        xml = serialize_to_string(ucm, layout=False, validate=False)
         self.assertRegex(xml,
             r'<nodes [^>]*name="BoundResp"[^>]*>\s*<label/>')
 
@@ -197,7 +204,7 @@ class ExportFilterTests(unittest.TestCase):
         comp = ucm.get_or_add_component("Lonely")
         ucm.maps[0].add_component_ref(comp, x=0, y=0, width=100, height=100)
         # Don't bind any node to ``comp``.
-        xml = serialize_to_string(ucm, layout=False)
+        xml = serialize_to_string(ucm, layout=False, validate=False)
         # The component definition stays (it lives at the URN level
         # and may be referenced from other maps later)…
         root = ET.fromstring(xml)
