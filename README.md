@@ -136,12 +136,12 @@ session registry, which they save but do not restore. Point new work at V6.
 | V2 | [`streamlit_app_v2.py`](web/streamlit_app_v2.py) | Deprecated. Model + scenarios; was frozen for a paper, no longer |
 | V4, V1 | — | Removed; they live in git history |
 
-A second deployment, **https://pm4py-ucm-scenarios.streamlit.app/**, used
+A second deployment, `pm4py-ucm-scenarios.streamlit.app` (now gone), used
 to serve the V2 app ([`web/streamlit_app_v2.py`](web/streamlit_app_v2.py),
 model + scenarios). V2 was **frozen** — stricter than deprecated,
 byte-for-byte unchangeable — for as long as a paper under review pointed at
 that URL. The paper was accepted and its final version points at the main app
-instead, so both the freeze and the second deployment have been **retired**:
+instead, so the freeze is over and that deployment has been **deleted**:
 there is now one deployment, serving V6, and V2 is deprecated on the same
 terms as V3 and V5.
 

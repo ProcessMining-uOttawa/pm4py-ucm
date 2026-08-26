@@ -184,7 +184,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (https://pm4py-ucm-scenarios.streamlit.app/) served it to the reviewers of
   a paper under review, and a banner would have changed what they saw. That
   paper has been accepted and its final version points at the main app, so
-  the freeze is lifted, the second deployment is retired, and V2 joins V3 and
+  the freeze is lifted, that deployment has been deleted, and V2 joins V3 and
   V5 as plainly deprecated. There is one deployment now,
   https://pm4py-ucm.streamlit.app/, serving V6. The V2 badge is gone from the
   README.

@@ -15,9 +15,9 @@ are all on `main`, and that plan is now history rather than a to-do.
   Python 3.9–3.12.
 - **One deployment.** https://pm4py-ucm.streamlit.app/ serves V6 through the
   `streamlit_app.py` shim. The second deployment
-  (`pm4py-ucm-scenarios`, which served the frozen V2) is **retired** — the SAM
-  2026 paper that required it was accepted and its final version points at the
-  main app.
+  (`pm4py-ucm-scenarios`, which served the frozen V2) has been **deleted** —
+  the SAM 2026 paper that required it was accepted and its final version
+  points at the main app. That URL now 404s; do not link it.
 
 ## What 0.8.0 delivered
 
