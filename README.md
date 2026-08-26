@@ -9,7 +9,6 @@
 [![Python](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-blue)](https://www.python.org/)
 [![License: GPL v3+](https://img.shields.io/badge/license-GPLv3%2B-blue.svg)](LICENSE)
 [![Streamlit V6](https://img.shields.io/badge/Streamlit-V6%20workspace-FF4B4B?logo=streamlit&logoColor=white)](https://pm4py-ucm.streamlit.app/)
-[![Streamlit V2](https://img.shields.io/badge/Streamlit-V2%20scenarios-FF4B4B?logo=streamlit&logoColor=white)](https://pm4py-ucm-scenarios.streamlit.app/)
 
 **Use Case Map (UCM) extension for [PM4Py](https://github.com/process-intelligence-solutions/pm4py).**
 
@@ -137,13 +136,14 @@ session registry, which they save but do not restore. Point new work at V6.
 | V2 | [`streamlit_app_v2.py`](web/streamlit_app_v2.py) | Deprecated. Model + scenarios; was frozen for a paper, no longer |
 | V4, V1 | — | Removed; they live in git history |
 
-**https://pm4py-ucm-scenarios.streamlit.app/** served the V2 app
-([`web/streamlit_app_v2.py`](web/streamlit_app_v2.py), model + scenarios),
-which was **frozen** — stricter than deprecated, byte-for-byte unchangeable
-— for as long as a paper under review pointed at it. That paper has been
-accepted and its final version points at the main app instead, so the freeze
-is over: V2 is now deprecated on the same terms as V3 and V5, and renders the
-same notice.
+A second deployment, **https://pm4py-ucm-scenarios.streamlit.app/**, used
+to serve the V2 app ([`web/streamlit_app_v2.py`](web/streamlit_app_v2.py),
+model + scenarios). V2 was **frozen** — stricter than deprecated,
+byte-for-byte unchangeable — for as long as a paper under review pointed at
+that URL. The paper was accepted and its final version points at the main app
+instead, so both the freeze and the second deployment have been **retired**:
+there is now one deployment, serving V6, and V2 is deprecated on the same
+terms as V3 and V5.
 
 The **Dashboards** view — measured over the same filtered/renamed log as
 every other view — builds widgets

@@ -118,12 +118,13 @@ button works — but only V6 *restores* the newer ones.
 | V1 | — | Removed at v0.5.1 (model only) |
 
 `streamlit_app_v2.py` (model + scenarios) was **frozen** rather than merely
-deprecated for as long as a paper under review pointed at
-https://pm4py-ucm-scenarios.streamlit.app/: byte-for-byte unchangeable, and
-the one app rendering no deprecation notice, because a banner would have
-changed what the reviewers saw. That paper has been accepted and its final
-version points at the main app, so the freeze is over — V2 is deprecated on
-the same terms as the rest.
+deprecated for as long as a paper under review pointed at the second
+deployment, https://pm4py-ucm-scenarios.streamlit.app/: byte-for-byte
+unchangeable, and the one app rendering no deprecation notice, because a
+banner would have changed what the reviewers saw. That paper has been
+accepted and its final version points at the main app, so the freeze is over
+and the second deployment has been **retired**. There is one deployment now,
+serving V6; V2 is deprecated on the same terms as the rest.
 
 ## The cost screen (V6)
 
