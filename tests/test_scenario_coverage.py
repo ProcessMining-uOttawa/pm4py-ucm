@@ -93,9 +93,22 @@ class TestCoverage:
 
     def test_results_from_another_model_are_rejected(self, forked):
         """Silently reporting coverage against the wrong model would be
-        worse than failing: the percentage would look plausible."""
+        worse than failing: the percentage would look plausible.
+
+        "Another model" has to mean a *differently numbered* one. Ids are
+        allocated in a canonical order (see ``UCM.assign_path_ids``), so a
+        second model built exactly like the first now carries exactly the
+        same keys — and measuring against it is not wrong, it is the very
+        property that lets a traversal and a coverage pass run on separate
+        copies of one model. This test used to rely on two identical models
+        numbering differently, which was the accident the copy bug came
+        from.
+        """
         u, ra, _rb = forked
         other, _sa, _sb = _fork_model()
+        for m in other.maps:
+            for el in list(m.nodes) + list(m.connections):
+                el.set_id(el.id + 500_000)
         with pytest.raises(ValueError, match="do not match"):
             sc.coverage(other, [ra])
 
@@ -302,3 +315,113 @@ class TestComparisonColours:
             r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
             return 0.2126 * r + 0.7152 * g + 0.0722 * b
         assert abs(luma(sc.COLOR_A) - luma(sc.COLOR_B)) > 30
+
+
+def _claims_log():
+    """Path to the bundled claims log, unzipping it on first use."""
+    import zipfile
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    xes = root / "demo" / "ClaimsPaymentLog.xes"
+    if not xes.exists():
+        zf = root / "demo" / "ClaimsPaymentLog.zip"
+        if not zf.exists():
+            pytest.skip("bundled log unavailable")
+        with zipfile.ZipFile(zf) as z:
+            z.extractall(root / "demo")
+    return xes
+
+
+class TestKeysSurviveACopy:
+    """Regression: coverage measured on a *different copy* of the model.
+
+    Reported from the app: A/B comparison appeared to work, then coverage of a
+    single scenario failed with "628 visited element(s) are not in this
+    model". Element ids are allocated **lazily** — an element carries ``None``
+    until something reads ``.id``, then takes the next value from the
+    container's counter — so the ``(type, id)`` key depended on which pass
+    touched the model first. Traversal allocates in traversal order,
+    ``model_elements`` in map order; across Streamlit's cache, which pickles
+    on the way in and out, those are two separate copies and the keys agree on
+    nothing.
+    """
+
+    @staticmethod
+    def _model():
+        pm4py = pytest.importorskip("pm4py")
+        import pm4py_ucm
+        log = pm4py.read_xes(str(_claims_log()))
+        tree = pm4py.discover_process_tree_inductive(log, noise_threshold=0.0)
+        ucm, _ = pm4py_ucm.discover_scenarios(
+            log, parameters={"process_tree": tree})
+        return ucm
+
+    def test_ids_are_unallocated_when_a_model_leaves_synthesis(self):
+        """The precondition that makes the bug possible. If synthesis ever
+        starts assigning ids eagerly this test should be revisited, not
+        deleted — the guarantee is that the *keys* survive a copy, and this
+        records why they did not."""
+        ucm = self._model()
+        elements = [e for m in ucm.maps
+                    for e in list(m.nodes) + list(m.connections)]
+        assert elements
+        assert all(e._id is None for e in elements), (
+            "ids are no longer lazy; the copy-safety guarantee below now "
+            "rests on something else")
+
+    def test_coverage_survives_the_cache_boundary(self):
+        import pickle
+        from pm4py_ucm.algo import scenario_traversal as trav
+
+        ucm = self._model()
+        traversed = pickle.loads(pickle.dumps(ucm))   # what the app traverses
+        measured = pickle.loads(pickle.dumps(ucm))    # what it later measures
+        results = trav.traverse_all(traversed)
+
+        cov = sc.coverage(measured, results[:1])         # used to raise
+        assert cov.covered
+        assert cov.covered <= cov.total
+
+    def test_compare_survives_the_cache_boundary(self):
+        import pickle
+        from pm4py_ucm.algo import scenario_traversal as trav
+
+        ucm = self._model()
+        traversed = pickle.loads(pickle.dumps(ucm))
+        measured = pickle.loads(pickle.dumps(ucm))
+        results = trav.traverse_all(traversed)
+        cmp = sc.compare(measured, results[0], results[1])
+        assert cmp.union <= cmp.total
+        # The half that failed silently: with mismatched keys every stray
+        # still counted towards the partition while ``neither`` swelled with
+        # elements both scenarios had in fact walked.
+        assert cmp.neither == cmp.total - cmp.union
+
+    def test_the_same_element_keys_identically_in_two_copies(self):
+        """The property underneath both: a copy numbers elements the same
+        way, whichever pass reads the ids first."""
+        import pickle
+        from pm4py_ucm.algo import scenario_traversal as trav
+
+        ucm = self._model()
+        a = pickle.loads(pickle.dumps(ucm))
+        b = pickle.loads(pickle.dumps(ucm))
+        trav.traverse_all(a)                  # allocates in traversal order
+        assert set(sc.model_elements(a)) == set(sc.model_elements(b))
+
+    def test_a_genuine_mismatch_is_still_refused(self):
+        """The check must not be weakened into uselessness: results from a
+        different model still fail, in *both* entry points."""
+        from pm4py_ucm.algo import scenario_traversal as trav
+
+        ucm = self._model()
+        results = trav.traverse_all(ucm)
+        other = self._model()
+        # Renumber the second model so no key can coincide.
+        for m in other.maps:
+            for el in list(m.nodes) + list(m.connections):
+                el.set_id(el.id + 500_000)
+        with pytest.raises(ValueError, match="do not match"):
+            sc.coverage(other, results[:1])
+        with pytest.raises(ValueError, match="do not match"):
+            sc.compare(other, results[0], results[1])

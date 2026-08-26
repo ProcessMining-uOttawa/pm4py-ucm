@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Scenario coverage and A/B comparison could measure against the wrong
+  numbering of the same model.** Reported from the app: an A/B comparison
+  appeared to work, then coverage of a single scenario failed with
+  `628 visited element(s) are not in this model`.
+
+  Element ids are allocated **lazily** — an element carries `None` until
+  something reads `.id`, then takes the next value from its container's
+  counter — so the `(type, id)` key that traversal and coverage share depended
+  on *which pass touched the model first, and in what order*. Traversal
+  allocates in traversal order, `model_elements` in map order. Across
+  Streamlit's cache, which pickles on the way in and out, those are two
+  separate copies, and the keys then agree on almost nothing.
+
+  `UCM.assign_path_ids()` pins the allocation order, and both entry points
+  call it before reading any id, so any copy of a model numbers its elements
+  identically. Nothing is renumbered: an id already set — from an imported
+  `.jucm`, or an earlier allocation — is left alone, and maps are left out
+  deliberately so a later export writes what it wrote before.
+
+- **`compare()` did not detect the mismatch that `coverage()` refused**, which
+  is why the A/B view looked like it worked. Every stray key still counted
+  towards A-only / B-only / both, while `neither` swelled with elements both
+  scenarios had in fact walked — on the claims log, 183 of 216 elements were
+  reported as walked by neither when the true figure was 77 — and the diagram
+  came out largely uncoloured, because the render bindings could not resolve
+  the keys. A plausible wrong answer is worse than a refusal; both entry
+  points now perform the same check, and its message names the likely cause.
+
 ### Changed
 
 - **Structural validation is now wired into generation, not just export.**

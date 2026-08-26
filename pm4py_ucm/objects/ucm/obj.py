@@ -1042,6 +1042,40 @@ class UCM:
         for e in self.all_elements():
             _ = e.id  # touch the property to allocate
 
+    def assign_path_ids(self) -> None:
+        """Allocate every map's, path node's and **connection's** id, in a
+        canonical order.
+
+        :meth:`assign_ids` deliberately skips ``NodeConnection`` objects, because
+        jUCMNav gives them no global ID and the exporter references them by
+        XPath. But an id *is* how a connection is addressed from outside this
+        process — the ``(type name, model id)`` key that scenario traversal
+        and coverage share — and ids are allocated **lazily**: an element that
+        has never had ``.id`` read carries ``None`` until something reads it,
+        at which point it takes the next value from the container's counter.
+
+        That makes the key depend on *what touched the model first, and in
+        what order*. Two copies of one model — as Streamlit's cache produces,
+        pickling on the way in and out — allocate different ids for the same
+        logical element if one is traversed (allocating in traversal order)
+        and the other measured (allocating in map order). The keys then agree
+        on nothing, and coverage reports elements the model "does not
+        contain".
+
+        Calling this first pins the order, so any copy of a model allocates
+        identically. It does not renumber: an id already set — from an
+        imported ``.jucm``, or an earlier allocation — is left alone.
+
+        Maps are deliberately left out: they carry no coverage key, and
+        allocating their ids here would move them ahead of their nodes in the
+        counter, changing what a later ``.jucm`` export writes.
+        """
+        for m in self.maps:
+            for n in m.nodes:
+                _ = n.id
+            for c in m.connections:
+                _ = c.id
+
     def find_resp_refs(self, resp: "UCM.Responsibility") -> List["UCM.RespRef"]:
         """All ``RespRef`` nodes (across all maps) that point at ``resp``."""
         return [
