@@ -2781,6 +2781,27 @@ def _rv(key, default):
     return st.session_state.get("_project_restore", {}).pop(key, default)
 
 
+def _seed_choice(key, options, default):
+    """Give a keyed selectbox/radio its default *through session_state*, so the
+    widget itself passes no ``index=``.
+
+    Streamlit warns — "created with a default value but also had its value set
+    via the Session State API" — when a widget both receives a default and has
+    its key written by the app. A restored project writes exactly those keys,
+    so every choice widget the restore path seeds has to take its default this
+    way instead. The warning is only a warning (session_state wins, so the
+    restore does apply), but it is emitted on every load and it marks a real
+    ambiguity about which value is in force.
+
+    Also clamps: a value that is no longer among ``options`` falls back to
+    ``default``. Without that a project saved when an option existed — a
+    metric the current log does not offer, a strategy whose dependency is now
+    missing — would make Streamlit raise on load rather than degrade.
+    """
+    if st.session_state.get(key) not in options:
+        st.session_state[key] = default
+
+
 def _sticky(key, factory, options=None):
     """Make a **main-area** widget's value survive leaving and returning to its
     view.
@@ -3215,10 +3236,14 @@ with st.sidebar:
         "Pre-set: Max=8/Min=4": (8, 4),
         "Pre-set: Max=6/Min=3": (6, 3),
     }
+    _decomp_opts = ["off", "auto"] + list(_DECOMP_PRESETS) + ["Custom"]
+    # Default "auto" — useful out of the box. Seeded through session_state
+    # rather than index=, because a loaded project writes this key.
+    _seed_choice("cfg_decomp_preset", _decomp_opts, "auto")
     decomposition_preset = st.selectbox(
         "Decomposition",
-        options=["off", "auto"] + list(_DECOMP_PRESETS) + ["Custom"],
-        index=1, key="cfg_decomp_preset",   # default "auto" — useful out of the box
+        options=_decomp_opts,
+        key="cfg_decomp_preset",
         help=(
             "Splits the Model tab's UCM into a root map + plug-ins. "
             "**auto** fits the map size to the mined tree's shape; a "
@@ -3245,8 +3270,11 @@ with st.sidebar:
                 ("on_alternative", "Each XOR branch becomes a plug-in."),
                 ("on_loop", "Each loop expansion becomes a plug-in."),
             ]:
+                # On by default, seeded through session_state: a loaded
+                # project writes these keys too.
+                st.session_state.setdefault(f"decomp_{key}", True)
                 _on[key] = st.checkbox(
-                    key, value=True, key=f"decomp_{key}", help=help_txt)
+                    key, key=f"decomp_{key}", help=help_txt)
             if _is_custom:
                 # Hand-set sizes, remembered under the "custom" keys.
                 _mx = st.number_input(
@@ -3314,10 +3342,10 @@ with st.sidebar:
                             icon=":material/group:")
     _RES_BUILTIN = ["org:role", "org:resource"]
     _RES_OTHER = "Other..."
+    _res_opts = _RES_BUILTIN + [_RES_OTHER, "(none)"]
+    _seed_choice("cfg_resource_choice", _res_opts, _RES_BUILTIN[0])
     resource_choice = _perf_exp.selectbox(
-        "Resource attribute",
-        options=_RES_BUILTIN + [_RES_OTHER, "(none)"],
-        index=0, key="cfg_resource_choice",
+        "Resource attribute", options=_res_opts, key="cfg_resource_choice",
     )
     if resource_choice == _RES_OTHER:
         resource_attribute = _perf_exp.text_input(
@@ -3511,12 +3539,14 @@ with st.sidebar:
             "higher. No effect on a layer with no metric."
         ),
     )
+    _scope_opts = ["Local (per map)",
+                   "Per family member (across its maps)",
+                   "Global (across family members)"]
+    _seed_choice(f"overlay_heat_scope::{_ov_hash}", _scope_opts, _scope_opts[0])
     _heat_scope = _ovl_exp.radio(
         "Heat-map scale",
-        options=["Local (per map)",
-                 "Per family member (across its maps)",
-                 "Global (across family members)"],
-        index=0, key=f"overlay_heat_scope::{_ov_hash}",
+        options=_scope_opts,
+        key=f"overlay_heat_scope::{_ov_hash}",
         disabled=not overlay_heatmap,
         captions=[
             "Each single map on its own min/max.",
@@ -3552,8 +3582,9 @@ with st.sidebar:
     # this reads as a section heading like Decomposition rather than as a
     # widget caption. The label is kept (not blank) for screen readers.
     st.subheader(":material/shapes: Notation")
+    _seed_choice("cfg_notation", ["UCM", "BPMN"], "BPMN")
     notation = st.radio(
-        "Notation", options=["UCM", "BPMN"], index=1, key="cfg_notation",
+        "Notation", options=["UCM", "BPMN"], key="cfg_notation",
         label_visibility="collapsed",
     )
 
@@ -5108,10 +5139,13 @@ if _view == "Scenarios":
                 "**variant**: lossless. **data-driven** requires "
                 "`scikit-learn` (not installed in this environment)."
             )
+        # Clamped as well as seeded: a project saved with "data-driven"
+        # loads on a machine without scikit-learn, where that option is not
+        # offered, and Streamlit would raise rather than fall back.
+        _seed_choice("cond_strategy", strategy_opts, strategy_opts[0])
         condition_strategy = st.radio(
             "Condition strategy",
             options=strategy_opts,
-            index=0,
             help=strategy_help,
             horizontal=True,
             key="cond_strategy",
