@@ -34,9 +34,12 @@ python -m venv .venv
 # source .venv/bin/activate       # macOS/Linux
 
 pip install -r web/requirements.txt
-streamlit run web/streamlit_app_v5.py     # V5 — the deployed app
-# streamlit run web/streamlit_app_v6.py   # V6 — the deployed app (adds the cost screen)
-# streamlit run web/streamlit_app_v3.py   # V3 — the earlier four-tab app
+streamlit run web/streamlit_app_v6.py     # V6 — the current app
+# Every older app is DEPRECATED. They still run — and say so on start-up —
+# so older results stay reproducible:
+# streamlit run web/streamlit_app_v5.py   # V5 — deprecated
+# streamlit run web/streamlit_app_v3.py   # V3 — deprecated
+# streamlit run web/streamlit_app_v2.py   # V2 — deprecated AND frozen
 ```
 
 Streamlit opens `http://localhost:8501`.
@@ -49,7 +52,7 @@ condition mining (the option greys out when it is missing).
 
 ## The app and its views
 
-**`streamlit_app_v5.py`** (**V5**) is served at
+**`streamlit_app_v6.py`** (**V6**) is served at
 https://pm4py-ucm.streamlit.app/ via the `streamlit_app.py` shim (that
 deployment's main file). A left rail switches between five views over the
 loaded log:
@@ -96,14 +99,29 @@ loaded log:
 
   ![Dashboards view](PM4Py-UCM-Dashboard.png)
 
-**`streamlit_app_v6.py`** (**V6**) is V5 plus the cost screen below, and is
-what the deployment serves. The earlier workspace **V4** app
-(`streamlit_app_v4.py`) and four-tab **V3** app (`streamlit_app_v3.py`) are
-strict subsets of V5 and stay in git history.
-**`streamlit_app_v2.py` is the FROZEN V2
-app** (model + scenarios) — served at
-https://pm4py-ucm-scenarios.streamlit.app/ for a paper under review; do
-not modernise it. **V1** (model-only) was retired at v0.5.1.
+### App versions — everything before V6 is deprecated
+
+V6 is V5 plus the cost screen below and the Scenarios view's Simulation
+section. **Every older app is deprecated**: kept runnable so older results
+stay reproducible, rendering a notice at the top when you start it, but
+receiving no new features. Concretely, they still *save* every session
+parameter — each keeps a gather covering the whole registry, so their Save
+button works — but only V6 *restores* the newer ones.
+
+| App | File | Status |
+|---|---|---|
+| **V6** | `streamlit_app_v6.py` | **Current**, and what `streamlit_app.py` shims for https://pm4py-ucm.streamlit.app/ |
+| V5 | `streamlit_app_v5.py` | Deprecated. Workspace shell + Dashboards; no cost screen, no Simulation |
+| V3 | `streamlit_app_v3.py` | Deprecated. The four-tab app, a strict subset of V5 |
+| V2 | `streamlit_app_v2.py` | Deprecated **and frozen** — see below |
+| V4 | — | Removed; a strict subset of V5, in git history |
+| V1 | — | Removed at v0.5.1 (model only) |
+
+**`streamlit_app_v2.py` is the FROZEN V2 app** (model + scenarios) — served
+at https://pm4py-ucm-scenarios.streamlit.app/ for a paper under review; do
+not modernise it. Frozen is stricter than deprecated: it may not be changed
+at all, and it is the one app that renders **no** deprecation notice,
+because a banner would change what the reviewers see.
 
 ## The cost screen (V6)
 
@@ -438,6 +456,12 @@ scenarios walked it. The performance overlay's heat-map is suspended while a
 highlight is on — both colour the same elements, so only one can be read at
 a time — and the app says so rather than letting it appear to vanish.
 
+The mode and the selected scenarios are part of the session: a saved project
+resumes into the same highlight, and an exported script reproduces it (§9).
+Scenarios are remembered by **name**, so if you re-mine at a different noise
+threshold and a scenario is gone, the selection falls back to the defaults
+instead of quietly highlighting a different one.
+
 ### 6 · Family
 
 A **💡 Suggested attributes** table ranks the case attributes by
@@ -600,8 +624,8 @@ a colleague. The sidebar's **Project** group offers two saves:
 
 - **⬇ Save settings** → `<log>.ucmproj.json` — the *configuration only* (miner
   settings, CSV mapping, renaming, filters, performers, overlays,
-  decomposition, family and scenario settings, the open view, and your
-  dashboards). Small and email-able; carries **no event data**, so it's the
+  decomposition, family and scenario settings, the Simulation highlight, the
+  open view, and your dashboards). Small and email-able; carries **no event data**, so it's the
   privacy-preserving way to share when the log is sensitive.
 - **⬇ Save project bundle** → `<log>.ucmproj.zip` — everything above **plus the
   event log**, so it is self-contained and one-click to resume (it does ship
@@ -634,7 +658,10 @@ mined model as SVG). The `.ipynb` is laid out as a **tutorial** — each stage
 defines its function, runs it, and shows the result inline (the loaded log, the
 case counts, the mined model and family grid as **SVG**, the variants table, the
 live dashboards). The scenario step pins the same noise-thresholded tree the app
-clusters on, so its variant count matches the Scenarios view. Because a project
+clusters on, so its variant count matches the Scenarios view, and it is
+followed by a **simulation** step that replays those scenarios and writes
+`simulation.svg` — the highlight the app was showing — plus a coverage or
+A/B summary CSV. Because a project
 stores only *inputs*, both are a faithful, deterministic replay (no LLM — a
 template emitter). It's the way to take a GUI exploration to an automatable,
 version-controllable pipeline; see [`docs/code_export.md`](../docs/code_export.md).
@@ -709,8 +736,8 @@ packages.txt                   # apt: graphviz  (Streamlit Cloud reads this at r
   config.toml                  # upload-size cap, telemetry off
 web/
   streamlit_app.py             # entry point (shims V6 — the deployed app)
-  streamlit_app_v5.py          # V5 — workspace shell + Dashboards (superseded)
-  streamlit_app_v6.py          # V6 — V5 + the pre-mining cost screen (deployed)
+  streamlit_app_v5.py          # V5 — DEPRECATED (workspace shell + Dashboards)
+  streamlit_app_v6.py          # V6 — the current app (adds cost screen + Simulation)
   requirements.txt             # streamlit + pm4py + `-e .` (the package itself)
   PM4Py-UCM-Model.png          # per-feature screenshots used in the READMEs
   PM4Py-UCM-Scenarios.png

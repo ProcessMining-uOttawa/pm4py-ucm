@@ -6,6 +6,13 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "web"))
 
+_WEB = Path(__file__).resolve().parent.parent / "web"
+#: The app the drift guards parse — the one ``streamlit_app.py`` shims, i.e.
+#: the one actually deployed. V5 is superseded and only has to keep *saving*
+#: (see ``test_v5_gather_still_satisfies_the_registry``).
+_APP = _WEB / "streamlit_app_v6.py"
+_APP_V5 = _WEB / "streamlit_app_v5.py"
+
 from sessions import (  # noqa: E402
     LogRef,
     ProjectDoc,
@@ -36,6 +43,10 @@ FULL_VALUES = {
     "scenario_group_name": "MyScenarios",
     "scenario_max_loop_iterations": 3,
     "scenario_decision_tree_max_depth": 4,
+    "simulation_mode": "compare",
+    "simulation_scenarios": ["v1_Quick"],
+    "simulation_a": "v1_Quick",
+    "simulation_b": "v2_Analyze",
     "family_attrs": ["case:region"],
     "family_min_cases": 20,
     "family_max_values": 6,
@@ -111,8 +122,7 @@ def test_app_gather_matches_registry():
     statically (no execution), so Streamlit isn't needed."""
     import ast
 
-    app = (Path(__file__).resolve().parent.parent
-           / "web" / "streamlit_app_v5.py").read_text(encoding="utf-8")
+    app = _APP.read_text(encoding="utf-8")
     tree = ast.parse(app)
     keys = None
     for node in ast.walk(tree):
@@ -128,11 +138,10 @@ def test_app_gather_matches_registry():
 
 
 def _app_func_sources(*names):
-    """Source text of the named top-level functions in the V5 app (static)."""
+    """Source text of the named top-level functions in the app (static)."""
     import ast
 
-    app = (Path(__file__).resolve().parent.parent
-           / "web" / "streamlit_app_v5.py").read_text(encoding="utf-8")
+    app = _APP.read_text(encoding="utf-8")
     tree = ast.parse(app)
     out = {}
     for node in ast.walk(tree):
@@ -212,8 +221,7 @@ def test_family_min_cases_survives_saving_from_another_view():
     # The raw key is gone, but the save gather still sees 50, not the default.
     assert ns["_sticky_get"]("cfg_family_min_cases", 10) == 50
     # And the gather is actually wired to _sticky_get for the family sizes.
-    app = (Path(__file__).resolve().parent.parent
-           / "web" / "streamlit_app_v5.py").read_text(encoding="utf-8")
+    app = _APP.read_text(encoding="utf-8")
     for key in ("cfg_family_min_cases", "cfg_family_max_values",
                 "cfg_family_bins"):
         assert f'_sticky_get("{key}"' in app, key
@@ -238,3 +246,155 @@ def test_family_attr_restores_before_its_view_is_opened():
     restore = _app_func_sources("_apply_project_config")["_apply_project_config"]
     assert '_sticky_seed("family_attr1"' in restore
     assert '_sticky_seed("family_attr2"' in restore
+
+
+def test_v5_gather_still_satisfies_the_registry():
+    """The superseded V5 app must keep *saving*. ``collect`` refuses a gather
+    that is missing a registered id, so a Param added for V6 without a
+    corresponding (default-valued) entry in V5 would make V5's Save button
+    raise at runtime. V5 need not restore the newer params — only round-trip
+    them — so this is a gather-only guard."""
+    import ast
+
+    tree = ast.parse(_APP_V5.read_text(encoding="utf-8"))
+    keys = None
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == "_proj_values"
+                        for t in node.targets)
+                and isinstance(node.value, ast.Dict)):
+            keys = {k.value for k in node.value.keys
+                    if isinstance(k, ast.Constant)}
+            break
+    assert keys is not None, "could not find V5's _proj_values gather dict"
+    assert keys == set(param_ids())
+
+
+def test_simulation_mode_is_persisted_as_an_identifier_not_a_label():
+    """The rule this codebase has learned twice: a persisted option value is an
+    identifier, never the words on screen. The Highlight radio's options must
+    be ``_SIM_MODES``' KEYS, with the labels applied through ``format_func`` —
+    otherwise a saved project stores "Compare A vs B" and breaks the moment the
+    wording changes."""
+    import ast
+    import re
+
+    src = _APP.read_text(encoding="utf-8")
+    modes = None
+    for node in ast.walk(ast.parse(src)):
+        if (isinstance(node, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == "_SIM_MODES"
+                        for t in node.targets)):
+            modes = ast.literal_eval(node.value)
+            break
+    assert modes == {"coverage": "Coverage", "compare": "Compare A vs B"}
+    # The registry default is one of the identifiers, not one of the labels.
+    from sessions.registry import defaults
+    assert defaults()["simulation_mode"] in modes
+
+    radio = re.search(r'st\.radio\(\s*"Highlight".*?\n\s*\)',
+                      src, re.S)
+    assert radio, "could not find the Highlight radio"
+    radio = radio.group(0)
+    assert "options=list(_SIM_MODES)" in radio, radio
+    assert "format_func=" in radio, radio
+    # No label may appear as a *value* anywhere the mode is compared or stored.
+    for label in modes.values():
+        assert f'== "{label}"' not in src, label
+
+
+def test_simulation_selection_round_trips_through_a_project():
+    """Save → load → save keeps the highlight the app showed."""
+    cfg = collect({**FULL_VALUES, "simulation_mode": "compare",
+                   "simulation_scenarios": ["v1_Quick", "v3_Escalate"],
+                   "simulation_a": "v1_Quick", "simulation_b": "v2_Analyze"})
+    back = loads(dumps(ProjectDoc(
+        log=LogRef("upload", "l.xes", "xes", "h"), config=cfg)))
+    assert back.config["simulation_mode"] == "compare"
+    assert back.config["simulation_scenarios"] == ["v1_Quick", "v3_Escalate"]
+    assert back.config["simulation_a"] == "v1_Quick"
+    assert back.config["simulation_b"] == "v2_Analyze"
+
+
+def test_simulation_restores_before_the_scenarios_view_is_opened():
+    """The Simulation section sits at the bottom of the Scenarios view, which is
+    usually not the active view when a project loads — so its widget keys would
+    be garbage collected before ever rendering. The restore must go through the
+    durable ``_keep::`` mirror (``_sticky_seed``), and the save through
+    ``_sticky_get``, exactly like the Family attributes."""
+    ns, st = _load_sticky_helpers()
+
+    ns["_sticky_seed"]("sim_mode", "compare")
+    ns["_sticky_seed"]("sim_a", "v2_Analyze")
+    assert "sim_mode" not in st.session_state
+    # First render of the Highlight radio picks up the restored identifier
+    # rather than the "coverage" default.
+    assert ns["_sticky"]("sim_mode", lambda: "coverage",
+                         options=("coverage", "compare")) == "compare"
+    assert ns["_sticky"]("sim_a", lambda: "v1_Quick",
+                         options=["v1_Quick", "v2_Analyze"]) == "v2_Analyze"
+    # And the wiring is really there on both sides.
+    restore = _app_func_sources(
+        "_apply_project_config")["_apply_project_config"]
+    for key in ("sim_mode", "sim_cov_picks", "sim_a", "sim_b"):
+        assert f'_sticky_seed("{key}"' in restore, key
+        assert f'_sticky_get("{key}"' in _APP.read_text(encoding="utf-8"), key
+
+
+def test_restored_scenario_that_no_longer_exists_is_dropped():
+    """A resumed project can name scenarios a re-mine no longer produces.
+    A/B clamp to the default through ``_sticky``'s ``options``; the coverage
+    multiselect must NOT — an empty selection there is a deliberate choice, so
+    the app filters unknown names by hand instead."""
+    ns, st = _load_sticky_helpers()
+    names = ["v1_Quick", "v2_Analyze"]
+
+    # A/B: an unknown name falls back to the factory default.
+    ns["_sticky_seed"]("sim_a", "v9_Gone")
+    assert ns["_sticky"]("sim_a", lambda: names[0], options=names) == "v1_Quick"
+
+    # Coverage picks: unknown names are dropped, known ones kept.
+    ns["_sticky_seed"]("sim_cov_picks", ["v9_Gone", "v2_Analyze"])
+    ns["_sticky"]("sim_cov_picks", lambda: names[:1])
+    st.session_state["sim_cov_picks"] = [
+        n for n in st.session_state["sim_cov_picks"] if n in names]
+    assert st.session_state["sim_cov_picks"] == ["v2_Analyze"]
+
+    # And an emptied selection stays empty — it must not spring back to the
+    # default on the next rerun (which `options=` would have done).
+    st.session_state["sim_cov_picks"] = []
+    ns["_sticky_save"]("sim_cov_picks")
+    del st.session_state["sim_cov_picks"]
+    ns["_sticky"]("sim_cov_picks", lambda: names[:1])
+    assert st.session_state["sim_cov_picks"] == []
+
+
+def test_every_app_older_than_v6_is_marked_deprecated():
+    """V6 is the app under development and the one ``streamlit_app.py`` serves.
+    Every earlier app must say so in its module docstring, so a contributor who
+    opens one is told before they start editing it. V2 additionally carries the
+    FROZEN notice — it backs a public deployment for a paper under review and
+    may not be changed at all, which is stricter than deprecation."""
+    older = sorted(f for f in _WEB.glob("streamlit_app_v*.py")
+                   if f.name != "streamlit_app_v6.py")
+    assert older, "expected at least one pre-V6 app"
+    for f in older:
+        head = f.read_text(encoding="utf-8")[:2000]
+        assert "eprecated" in head, f"{f.name} is not marked deprecated"
+        assert "streamlit_app_v6.py" in head, (
+            f"{f.name} does not point readers at V6")
+    frozen = _WEB / "streamlit_app_v2.py"
+    assert "DO NOT MODERNISE" in frozen.read_text(encoding="utf-8")[:2000]
+
+
+def test_deprecated_apps_say_so_in_their_ui_except_the_frozen_one():
+    """A local run of a superseded app shows a notice at the top. V2 is the
+    exception on purpose: its deployment is what a paper under review points
+    at, so its UI must keep matching the paper."""
+    for name in ("streamlit_app_v3.py", "streamlit_app_v5.py"):
+        src = (_WEB / name).read_text(encoding="utf-8")
+        assert "is deprecated.**" in src, f"{name} renders no notice"
+    v2 = (_WEB / "streamlit_app_v2.py").read_text(encoding="utf-8")
+    assert "is deprecated.**" not in v2, (
+        "V2 must not render a notice — see the FROZEN block in its docstring")
+

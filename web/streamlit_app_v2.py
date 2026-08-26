@@ -1,4 +1,7 @@
-"""PM4Py-UCM web front-end — V2 (scenarios).
+"""PM4Py-UCM web front-end — V2 (scenarios). **Deprecated, and
+frozen** — deprecated like every pre-V6 app, but frozen for a
+reason of its own, below. Deprecated here means "no new features",
+NOT "safe to change": this one may not be touched at all.
 
 .. FROZEN — DO NOT MODERNISE ..............................................
    This file is the V2 (model + scenarios) app exactly as referenced by
@@ -6,8 +9,10 @@
    deployment serves it and must keep matching the paper. Restored
    byte-for-byte from commit 17d333b (the last pre-model-family state);
    only this notice was added. New features belong in
-   ``streamlit_app_v3.py`` — served by ``streamlit_app.py`` /
-   https://pm4py-ucm.streamlit.app/.
+   ``streamlit_app_v6.py`` — served by ``streamlit_app.py`` /
+   https://pm4py-ucm.streamlit.app/. No deprecation banner is
+   rendered in this app's UI: the reviewers' deployment must keep
+   matching the paper, and a banner would change what they see.
 .........................................................................
 
 V2 is a superset of V1: same log-source / inductive-miner / performer /

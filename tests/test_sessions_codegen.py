@@ -140,6 +140,63 @@ def test_scenarios_opt_in():
     assert "parameters=params" in scen_body
 
 
+def test_simulation_emitted_only_with_the_scenarios_section():
+    """The Simulation highlight is part of the scenarios pipeline: it replays
+    the synthesized scenarios, so it can only exist where they do."""
+    off = generate_script(_doc({"simulation_mode": "compare"}))
+    assert "def run_simulation" not in off
+    assert "SIMULATION_MODE" not in off
+
+    on = generate_script(
+        _doc({"simulation_mode": "compare", "simulation_a": "v1_Quick",
+              "simulation_b": "v2_Analyze"}), include_scenarios=True)
+    assert "def run_simulation" in on
+    assert "SIMULATION_MODE = 'compare'" in on
+    assert "SIMULATION_A = 'v1_Quick'" in on
+    assert "SIMULATION_B = 'v2_Analyze'" in on
+    # The synthesized model is threaded straight into the simulation, so the
+    # script replays the scenarios it just built rather than re-mining.
+    assert "run_simulation(run_scenarios(log))" in on
+
+
+def test_simulation_mode_is_emitted_as_an_identifier_not_a_label():
+    """Same rule as the app: what is persisted (and therefore emitted) is the
+    identifier. A generated script must never branch on UI wording."""
+    src = generate_script(_doc({"simulation_mode": "coverage",
+                                "simulation_scenarios": ["v1_Quick"]}),
+                          include_scenarios=True)
+    assert "SIMULATION_MODE = 'coverage'" in src
+    assert "SIMULATION_SCENARIOS = ['v1_Quick']" in src
+    for label in ("Compare A vs B", '"Coverage"', "'Coverage'"):
+        assert label not in src, label
+    assert 'SIMULATION_MODE == "compare"' in src
+
+
+def test_simulation_selection_degrades_when_a_scenario_is_gone(tmp_path):
+    """Static shape check for the graceful path: the emitted code resolves the
+    saved selection by NAME against the run's scenarios, reports what it could
+    not find, and still highlights the rest rather than raising."""
+    src = generate_script(_doc({"simulation_mode": "compare"}),
+                          include_scenarios=True)
+    body = src[src.index("def run_simulation"):]
+    _end = body.find(chr(10) + "def ")
+    body = body[:_end] if _end != -1 else body
+    assert "by_name = {r.scenario: r for r in results}" in body
+    assert "absent = [n for n in want if n not in by_name]" in body
+    assert "chosen = [by_name[n] for n in want if n in by_name]" in body
+    # An unset A/B falls back to the app's own defaults rather than to None.
+    assert "SIMULATION_A or results[0].scenario" in body
+
+
+def test_notebook_runs_the_simulation_on_the_synthesized_model():
+    nb = json.loads(generate_notebook(_doc({}), include_scenarios=True))
+    src = "".join("".join(c["source"]) for c in nb["cells"])
+    # The scenarios cell must BIND the model the simulation cell consumes.
+    assert "ucm_s = run_scenarios(log)" in src
+    assert "simulation = run_simulation(ucm_s)" in src
+    assert 'preview("simulation")' in src
+
+
 def test_all_sections_compile_together():
     src = generate_script(
         _doc({"family_attrs": ["country"],
@@ -367,13 +424,53 @@ def test_generated_script_reproduces_reference_jucm(tmp_path):
     assert _strip_timestamps(gen_jucm) == _strip_timestamps(ref.read_bytes())
 
 
+@pytest.mark.skipif(not _SAMPLE.exists(), reason="bundled sample not present")
+def test_generated_simulation_matches_a_direct_api_run(tmp_path):
+    """Golden, simulation edition: the emitted ``run_simulation`` must produce
+    the same partition a hand-written public-API call does — so an exported
+    script really does reproduce the highlight the app showed."""
+    pytest.importorskip("pm4py")
+    import pm4py_ucm
+
+    doc = _doc({"noise_threshold": 0.2, "notation": "ucm",
+                "scenario_strategy": "variant",
+                "simulation_mode": "compare"},
+               name="IssueTrackerSyntheticLog.zip")
+    out = tmp_path / "gen_out"
+    script = tmp_path / "pipeline.py"
+    script.write_text(
+        generate_script(doc, out_dir=str(out), include_scenarios=True),
+        encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(script), str(_SAMPLE)],
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, f"generated script failed:{chr(10)}{proc.stderr}"
+
+    # The artifacts exist and carry the A/B partition.
+    assert (out / "simulation.svg").exists()
+    rows = (out / "simulation_compare.csv").read_text(encoding="utf-8")
+    assert "both" in rows and "neither" in rows
+
+    # Reference: the same public API, on the model the script wrote.
+    ucm_s = pm4py_ucm.read_ucm(str(out / "scenarios.jucm"))
+    results = pm4py_ucm.traverse_all(ucm_s)
+    assert len(results) >= 2, "sample should synthesize at least two scenarios"
+    ref = pm4py_ucm.compare(ucm_s, results[0], results[1])
+    got = dict(r.split(",") for r in rows.strip().splitlines()[1:])
+    assert int(got["both"]) == len(ref.both)
+    assert int(got["neither"]) == len(ref.neither)
+    # And the printed summary names the two scenarios it actually compared.
+    assert f"{results[0].scenario} vs {results[1].scenario}" in proc.stdout
+
+
 def test_emitted_transform_covers_all_app_filter_keys():
     """The emitted ``apply_log_filters`` must handle every ``filter_spec`` key
     the app's ``_apply_log_filters`` reads, so a new app filter can't be silently
     dropped from generated scripts (as ``duration_pct`` — the cycle-time filter —
     nearly was). This is the §6a drift guard: the transform is inlined, so it has
     to track the app by test rather than by import."""
-    app = (_ROOT / "web" / "streamlit_app_v5.py").read_text(encoding="utf-8")
+    # The deployed app (the one ``streamlit_app.py`` shims), not the
+    # superseded V5.
+    app = (_ROOT / "web" / "streamlit_app_v6.py").read_text(encoding="utf-8")
     m = re.search(r"\ndef _apply_log_filters\(.*?(?=\ndef )", app, re.S)
     assert m, "could not locate _apply_log_filters in the app"
     app_keys = set(re.findall(r'spec\.get\(\s*["\']([a-z_]+)["\']', m.group(0)))

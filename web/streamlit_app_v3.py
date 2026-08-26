@@ -1,5 +1,13 @@
 """PM4Py-UCM web front-end — V3 (model + scenarios + families +
-reports). THE app: every deployment path serves this file.
+reports). **Deprecated** — the four-tab app V5 and then V6 replaced.
+
+.. DEPRECATED — superseded by V6 ......................................
+   ``streamlit_app_v6.py`` is the app under development and the one
+   ``streamlit_app.py`` serves. This file is kept runnable so older
+   results stay reproducible; it gets no new features, and a setting
+   added to the session registry is saved here but only *restored* by
+   V6. Point new work at V6.
+......................................................................
 
 Tabs: **Model** (inductive-mine a UCM, preview in UCM or BPMN
 notation, download PNG/.jucm), **Scenarios** (concurrency-aware
@@ -1019,6 +1027,18 @@ def _fmt_duration_s(seconds) -> str:
 
 st.set_page_config(page_title="PM4Py-UCM (V3 · Families)", layout="wide")
 st.title("PM4Py-UCM")
+
+# Deprecation notice. Rendered immediately after the page config (which
+# must be the first Streamlit call), so anyone who runs this app locally
+# is told once, at the top, that it is not where the work is.
+st.warning(
+    "**V3 is deprecated.** The four-tab app was superseded by the V5 "
+    "workspace shell, and V5 by V6. "
+    "It is kept runnable so older results stay reproducible, but it "
+    "receives no new features — run `web/streamlit_app_v6.py` "
+    "instead (that is what https://pm4py-ucm.streamlit.app/ serves).",
+    icon=":material/history:",
+)
 
 
 # Show the ACTUAL running package version (not the latest GitHub

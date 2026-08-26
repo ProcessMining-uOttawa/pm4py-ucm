@@ -154,6 +154,14 @@ _LOGO_PATH = Path(__file__).resolve().parent / "assets" / "logo.png"
 _DISPLAY_WIDTH_PX = 1100
 _NONE_OPT = "(none)"
 
+# The Simulation section's highlight modes: ``{identifier: label}``. The KEY is
+# what the widget carries and what a saved project stores (registry param
+# ``simulation_mode``); the label is display only, applied through the radio's
+# ``format_func`` — the same identifiers-not-labels rule as ``_VIEWS`` /
+# ``active_view``. Defined up here because ``_apply_project_config`` validates
+# a loaded project against it, and that runs long before the views are built.
+_SIM_MODES = {"coverage": "Coverage", "compare": "Compare A vs B"}
+
 # (session key, candidate names, include_none flag). Used by the CSV
 # column auto-detection.
 _CSV_AUTOPICK = [
@@ -908,7 +916,6 @@ def _synthesize(
     }
 
 
-@st.cache_data(show_spinner=False)
 @st.cache_data(show_spinner=False)
 def _simulate_scenarios(synth_fingerprint: str, _ucm):
     """Run every scenario on the synthesized model, jUCMNav-style.
@@ -3007,6 +3014,23 @@ def _apply_project_config(cfg, fh, csv_columns=None):
         pr["cfg_scn_max_loop"] = int(cfg["scenario_max_loop_iterations"])
     if "scenario_decision_tree_max_depth" in cfg:
         pr["cfg_scn_dt_depth"] = int(cfg["scenario_decision_tree_max_depth"])
+    # Simulation highlight. The section lives at the bottom of the Scenarios
+    # view, which is usually not the active view on load, so its widget keys
+    # would be garbage collected before they were ever rendered — seed the
+    # durable sticky mirror (_sticky_seed), like the Family attributes above.
+    # The mode is an identifier; anything else in the file is ignored rather
+    # than fed to the radio, whose options are identifiers too.
+    if cfg.get("simulation_mode") in _SIM_MODES:
+        _sticky_seed("sim_mode", cfg["simulation_mode"])
+    if cfg.get("simulation_scenarios"):
+        _sticky_seed("sim_cov_picks", list(cfg["simulation_scenarios"]))
+    # A/B are scenario names; the widgets clamp an unknown one to their default
+    # once the synthesis has run, so a re-mine that drops a scenario degrades
+    # to the default pair instead of erroring.
+    if cfg.get("simulation_a"):
+        _sticky_seed("sim_a", cfg["simulation_a"])
+    if cfg.get("simulation_b"):
+        _sticky_seed("sim_b", cfg["simulation_b"])
     _fa = cfg.get("family_attrs") or []
     if _fa:
         # The Family view's attribute selectboxes are main-area widgets, so
@@ -4661,6 +4685,14 @@ with st.sidebar:
                 "cfg_scn_max_loop", 2)),
             "scenario_decision_tree_max_depth": int(st.session_state.get(
                 "cfg_scn_dt_depth", 3)),
+            # Simulation highlight. Read through the sticky mirror: this
+            # gather runs in the sidebar on every view, and the Simulation
+            # widgets only exist while the Scenarios view is rendered.
+            "simulation_mode": _sticky_get("sim_mode", "coverage"),
+            "simulation_scenarios": list(
+                _sticky_get("sim_cov_picks", []) or []),
+            "simulation_a": _sticky_get("sim_a", None),
+            "simulation_b": _sticky_get("sim_b", None),
             "family_attrs": list(st.session_state.get("cfg_family_attrs", [])),
             # Read the sticky mirror, not the raw widget keys: those are
             # garbage collected while the Family view isn't the active one, so
@@ -5334,32 +5366,50 @@ if _view == "Scenarios":
                         ]), width="stretch")
 
             _names = [r.scenario for r in _sim_results]
-            _mode = st.radio(
-                "Highlight", options=["Coverage", "Compare A vs B"],
-                horizontal=True, key="sim_mode",
+            # These are main-area widgets, so their state must be sticky (see
+            # _sticky) or leaving the view resets them — and they are persisted
+            # in a saved project, so the radio's VALUES are the identifiers
+            # ("coverage" / "compare") that the registry stores, with the words
+            # supplied by format_func. Same discipline as the view radio: never
+            # persist a label.
+            _sticky("sim_mode", lambda: "coverage",
+                    options=tuple(_SIM_MODES))
+            _sim_mode_key = st.radio(
+                "Highlight", options=list(_SIM_MODES), horizontal=True,
+                key="sim_mode", format_func=lambda _m: _SIM_MODES[_m],
                 help="**Coverage** paints what any of the selected scenarios "
                      "walked. **Compare A vs B** paints one scenario "
                      "green, the other orange, and what both walked purple.",
             )
+            _sticky_save("sim_mode")
 
-            if _mode == "Coverage":
-                _picks = st.multiselect(
+            if _sim_mode_key == "coverage":
+                _sticky("sim_cov_picks", lambda: _names[:1])
+                # Clamp to the scenarios this synthesis actually produced — a
+                # resumed project can name scenarios a re-mine no longer has.
+                # Done here rather than through _sticky's ``options`` because
+                # that treats an empty list as "restore the default", which
+                # would undo a deliberately cleared selection on every rerun.
+                st.session_state["sim_cov_picks"] = [
+                    _n for _n in st.session_state["sim_cov_picks"]
+                    if _n in _names]
+                _picks = tuple(st.multiselect(
                     "Scenarios to highlight", options=_names,
-                    default=_names[:1], key="sim_cov_picks",
+                    key="sim_cov_picks",
                     help="Coverage is a set: an element a loop enters nine "
                          "times is covered once.",
-                )
-                _picks = tuple(_picks)
-                _sim_mode_key = "coverage"
+                ))
+                _sticky_save("sim_cov_picks")
             else:
                 ab1, ab2 = st.columns(2)
-                _a = ab1.selectbox("A (green)", options=_names, index=0,
-                                   key="sim_a")
-                _b = ab2.selectbox(
-                    "B (orange)", options=_names,
-                    index=1 if len(_names) > 1 else 0, key="sim_b")
+                _sticky("sim_a", lambda: _names[0], options=_names)
+                _a = ab1.selectbox("A (green)", options=_names, key="sim_a")
+                _sticky_save("sim_a")
+                _sticky("sim_b", lambda: _names[min(1, len(_names) - 1)],
+                        options=_names)
+                _b = ab2.selectbox("B (orange)", options=_names, key="sim_b")
+                _sticky_save("sim_b")
                 _picks = (_a, _b)
-                _sim_mode_key = "compare"
                 if _a == _b:
                     st.info(
                         "A and B are the same scenario, so everything it "

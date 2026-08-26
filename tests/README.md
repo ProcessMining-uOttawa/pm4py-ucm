@@ -1,6 +1,6 @@
 # Test suite
 
-**1114 tests** across **35 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
+**1131 tests** across **35 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
 
 > Regenerate this file with `python tests/gen_readme.py` after adding or removing tests. Purposes are the first sentence of each module's docstring; edit the docstring, not this table.
 
@@ -21,9 +21,9 @@
 | | _Discovery & conversion subtotal_ | | **120** |
 | **Resources & performers** | [`test_resources.py`](test_resources.py) | Tests for resource mining and performer binding. | 22 |
 | **Scenario synthesis** | [`test_scenario_synthesis.py`](test_scenario_synthesis.py) | End-to-end smoke tests for variant clustering + scenario synthesis. | 59 |
-| **Scenario simulation & coverage** | [`test_scenario_coverage.py`](test_scenario_coverage.py) | Coverage over a set of scenarios, and the A/B comparison. | 17 |
+| **Scenario simulation & coverage** | [`test_scenario_coverage.py`](test_scenario_coverage.py) | Coverage over a set of scenarios, and the A/B comparison. | 24 |
 |  | [`test_scenario_traversal.py`](test_scenario_traversal.py) | Offline simulation of jUCMNav's scenario traversal. | 40 |
-| | _Scenario simulation & coverage subtotal_ | | **57** |
+| | _Scenario simulation & coverage subtotal_ | | **64** |
 | **Model families** | [`test_family.py`](test_family.py) | Tests for attribute-based model families. | 49 |
 |  | [`test_family_stats.py`](test_family_stats.py) | Tests for the family statistics layer and the HTML report. | 32 |
 |  | [`test_partition_advisor.py`](test_partition_advisor.py) | Tests for the deterministic partition advisor (docs/ai_insights.md §4.1b). | 8 |
@@ -46,10 +46,10 @@
 | | _Visualization subtotal_ | | **67** |
 | **Dashboards** | [`test_dashboards.py`](test_dashboards.py) | Tests for user-defined dashboards: the client contract, the metric engine, and the parity of the Python engine with its JS counterpart. | 399 |
 | **Sessions (save / share / resume)** | [`test_sessions.py`](test_sessions.py) | Tests for the project save/share/resume core (``web/sessions``). | 14 |
-|  | [`test_sessions_codegen.py`](test_sessions_codegen.py) | Tests for the Python code exporter (``web/sessions/codegen.py``). | 26 |
-|  | [`test_sessions_registry.py`](test_sessions_registry.py) | Tests for the Session Parameter Registry (``web/sessions/registry.py``). | 10 |
-| | _Sessions (save / share / resume) subtotal_ | | **50** |
+|  | [`test_sessions_codegen.py`](test_sessions_codegen.py) | Tests for the Python code exporter (``web/sessions/codegen.py``). | 31 |
+|  | [`test_sessions_registry.py`](test_sessions_registry.py) | Tests for the Session Parameter Registry (``web/sessions/registry.py``). | 15 |
+| | _Sessions (save / share / resume) subtotal_ | | **60** |
 | **Progress / infrastructure** | [`test_progress.py`](test_progress.py) | Tests for the progress-reporting layer and the vectorized DataFrame resource miner. | 15 |
-| | **Total** | | **1114** |
+| | **Total** | | **1131** |
 
 See the repository [`README.md`](../README.md#testing) for how to run the suite, and [`docs/metrics.md`](../docs/metrics.md) for the metric definitions the validation tests enforce.

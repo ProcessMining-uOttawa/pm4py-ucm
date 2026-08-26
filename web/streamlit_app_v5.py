@@ -1,5 +1,14 @@
 """PM4Py-UCM web front-end — V5 (workspace shell + user-defined
-dashboards + log filtering & activity renaming). **The deployed app.**
+dashboards + log filtering & activity renaming). **Deprecated** — V6
+superseded it and is what the deployment serves.
+
+.. DEPRECATED — superseded by V6 ......................................
+   ``streamlit_app_v6.py`` is the app under development and the one
+   ``streamlit_app.py`` serves. This file is kept runnable so older
+   results stay reproducible; it gets no new features, and a setting
+   added to the session registry is saved here but only *restored* by
+   V6. Point new work at V6.
+......................................................................
 
 V5 is V4's workspace shell and Dashboards view, plus two pre-mining
 transforms that apply globally to every view and export: a **log
@@ -2251,6 +2260,18 @@ st.set_page_config(
     layout="wide", initial_sidebar_state="expanded",
 )
 
+# Deprecation notice. Rendered immediately after the page config (which
+# must be the first Streamlit call), so anyone who runs this app locally
+# is told once, at the top, that it is not where the work is.
+st.warning(
+    "**V5 is deprecated.** V6 superseded it, adding the pre-mining cost "
+    "screen and the Scenarios view’s Simulation section. "
+    "It is kept runnable so older results stay reproducible, but it "
+    "receives no new features — run `web/streamlit_app_v6.py` "
+    "instead (that is what https://pm4py-ucm.streamlit.app/ serves).",
+    icon=":material/history:",
+)
+
 # Which theme Streamlit is actually rendering. Asking Streamlit beats
 # reading the OS preference: the app can be set to dark on a light
 # machine (or pinned in config.toml), and then the OS is the wrong
@@ -3906,6 +3927,14 @@ with st.sidebar:
                 "cfg_scn_max_loop", 2)),
             "scenario_decision_tree_max_depth": int(st.session_state.get(
                 "cfg_scn_dt_depth", 3)),
+            # V5 has no Simulation section (it arrived in V6, the deployed
+            # app). Gather the registry defaults so `collect` — which refuses a
+            # gather missing a registered id — still accepts V5's save; a
+            # project saved here simply carries no highlight.
+            "simulation_mode": "coverage",
+            "simulation_scenarios": [],
+            "simulation_a": None,
+            "simulation_b": None,
             "family_attrs": list(st.session_state.get("cfg_family_attrs", [])),
             # Read the sticky mirror, not the raw widget keys: those are
             # garbage collected while the Family view isn't the active one, so

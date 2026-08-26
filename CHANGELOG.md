@@ -47,6 +47,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   performance heat-map is suspended while a highlight is on, with a notice
   saying so — it defaults on whenever overlay metrics are picked, so it
   would otherwise appear to vanish unexplained.
+- The Simulation highlight is **saved with a project and reproduced by an
+  exported script.** Four new session parameters — `simulation_mode`,
+  `simulation_scenarios`, `simulation_a`, `simulation_b` — resume the
+  Scenarios view into the mode and selection it was saved in, from any view
+  (the widgets live in the main area, so they save and restore through the
+  durable sticky mirror). The mode is stored as an identifier, not the
+  radio's words, so the wording can change without invalidating saved files;
+  the scenarios are stored by name, so a re-mine that drops one degrades to
+  the defaults rather than highlighting a different scenario.
+- Exported Python scripts and notebooks now carry **`run_simulation()`**,
+  chained onto the scenario synthesis. It replays the scenarios on the model
+  it just built and writes `simulation.svg` — the same highlight the app
+  showed — plus `simulation_coverage.csv` (covered / total per element kind)
+  or `simulation_compare.csv` (the A-only / B-only / both / neither
+  partition), reporting on stdout any scenario the saved selection named that
+  this run no longer has.
 - Scenario **coverage** and **A/B comparison**
   (`pm4py_ucm.algo.scenario_coverage`, exported as `coverage`, `compare`,
   `Coverage`, `Comparison`): what fraction of the whole model a set of
@@ -83,9 +99,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and A/B comparison planned for 0.8.0 — see
   [`docs/scenario_simulation.md`](docs/scenario_simulation.md).
 
+### Deprecated
+
+- **Every web app older than V6 is deprecated.** V6 is the app under
+  development and the one `streamlit_app.py` shims for
+  https://pm4py-ucm.streamlit.app/; V5, V3 and V2 are kept runnable so older
+  results stay reproducible, but they receive no new features. Each says so
+  in its module docstring, and V5 and V3 now render a notice at the top when
+  started. Concretely the line is drawn at persistence: they still *save*
+  every session parameter — each keeps a gather covering the whole registry,
+  so `collect()` accepts it and their Save button works — but only V6
+  *restores* the newer ones.
+
+  **V2 is the exception, and renders no notice**: it backs
+  https://pm4py-ucm-scenarios.streamlit.app/ for a paper under review, so a
+  banner would change what the reviewers see. Frozen is stricter than
+  deprecated — that file may not be changed at all.
+
 ### Changed
 
 
+- The **hierarchical decomposition** reference caught up with the code. It
+  named two entry points taking `decomposition=`; there are four
+  (`discover_ucm_inductive`, `convert_to_ucm`, `discover_scenarios`,
+  `discover_ucm_family`), all reading it identically. The shape fit made by
+  `suggest_decomposition` is now stated in full — both clamps
+  (cap into 6–40, floor into 3–12 and never above cap−1), the `level="fine"`
+  variant, and the 8/4 fallback for an empty tree — rather than just the two
+  formulas, and the `ValueError` on an unrecognised spec is documented
+  alongside the one on unknown dict keys. The parameter table itself was
+  already correct.
 - The A/B comparison uses **dark green / dark orange / purple** instead of
   red / blue / purple. The pair separates by lightness as well as hue (a
   44-point luma gap), so it survives a greyscale printout and does not lean
@@ -98,6 +141,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   what is left uncovered is real behaviour or just empty paths. On
   `ClaimsPaymentLog` with every scenario: elements 100%, paths 97.3%. The
   redundant "never walked" count is gone.
+- **Documentation caught up with the simulator.** The root README gains a
+  *Scenario simulation, coverage and A/B comparison* section (running the
+  scenarios, the elements/paths split, the A/B partition, painting either onto
+  the diagram) with numbers measured on `ClaimsPaymentLog`, and its
+  Structural-validation cross-reference — which pointed at the cost screen —
+  now resolves. `scenario_synthesis_tutorial.ipynb` gains a matching §10 that
+  runs, measures and renders; `sessions_tutorial.ipynb` shows the
+  identifiers-not-labels rule in a runnable gather; the main tutorial notes the
+  new write-time validation and links the other four. Every README and
+  notebook that still called V5 the deployed app now says V6.
 - The Family view's grid render reports progress per cell
   (`Rendering family grid (BPMN) — 4 of 8 cells: Direct`) instead of a mute
   spinner. Each cell is its own graphviz run, so on a family with many
@@ -105,6 +158,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+
+- **The session drift guards were checking the wrong app.** The tests that
+  enforce "every registry parameter is both saved and restored" still parsed
+  `streamlit_app_v5.py`, which V6 superseded as the deployed app — so the
+  contract was being enforced against a file nobody runs. They now parse V6.
+  V5 keeps a gather of the registry defaults for the newer ids, with its own
+  test, because `collect()` refuses a gather missing a registered id and V5's
+  Save button would otherwise raise.
+- `_simulate_scenarios` in the web app carried `@st.cache_data` twice.
 
 - **Scenario synthesis produced structurally invalid models.** Emitting
   loop conditions splices a `LoopEntryGuard` OR-fork whose bypass arc

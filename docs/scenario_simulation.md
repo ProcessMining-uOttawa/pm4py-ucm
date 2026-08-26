@@ -266,13 +266,40 @@ coverage mode 54.7% (128/234); A/B `v1_QuickAssessment` vs
 neither; and inside the viewer, an SVG carrying all three colours and 254
 hover titles.
 
-### Stage 5 — persistence and export
+### Stage 5 — persistence and export — **done**
 
-* Registry parameters for the selection and mode, so a saved project resumes
-  into the same simulation. Mind the existing rule: persisted option values
-  are **identifiers, not labels** — see `docs/sessions.md`.
-* `codegen` emits the equivalent calls, so an exported script reproduces the
-  simulation the app showed.
+* Four registry parameters — `simulation_mode`, `simulation_scenarios`,
+  `simulation_a`, `simulation_b` — so a saved project resumes into the same
+  simulation. The rule held: the mode is stored as an **identifier**, with the
+  radio's words supplied by `format_func` from `_SIM_MODES`, the same shape
+  `active_view` uses. The scenarios are stored by **name**; a re-mine that
+  drops one degrades (A/B fall back to their defaults, Coverage filters the
+  pick list) rather than highlighting the wrong scenario.
+* All four are main-area widgets in a view that is usually not the active one
+  when a project loads, so they take the Family route: `_sticky_get` on save,
+  `_sticky_seed` on restore. The one deviation is the Coverage multiselect,
+  which is clamped by hand instead of through `_sticky`'s `options=` — that
+  treats an empty list as "restore the default", which would undo a
+  deliberately cleared selection on the next rerun.
+* `codegen` emits `run_simulation(ucm_s)`, chained onto `run_scenarios`, which
+  replays the scenarios and writes `simulation.svg` plus a summary CSV
+  (`simulation_coverage.csv` by kind, or `simulation_compare.csv` with the
+  A-only / B-only / both / neither partition). The notebook gets the same as a
+  cell, previewed inline.
+
+Verified in the running app on `ClaimsPaymentLog`: Compare mode with
+`v1_QuickAssessment` vs `v5_QuickAssessment` (40 / 30 / 90 at 56% agreement)
+saved from the **Model** view — with the simulation widgets garbage collected
+— wrote `"simulation_mode": "compare"` and both names; resuming that file into
+a fresh session and re-synthesizing came back on the same pair with the same
+numbers.
+
+**The drift guards were parsing the wrong app.** `test_sessions_registry.py`
+and one guard in `test_sessions_codegen.py` still read `streamlit_app_v5.py`,
+which V6 superseded, so the gather/restore contract was being enforced against
+a file nobody deploys. They now read V6; V5 keeps a gather of the registry
+defaults for the new ids (and a test of its own), because `collect` refuses a
+gather missing a registered id and V5's Save would otherwise raise.
 
 ## Risks
 
