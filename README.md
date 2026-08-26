@@ -1088,6 +1088,8 @@ reach you in the first place:
 | `discover_ucm_inductive` | the mined model |
 | `discover_scenarios` | via synthesis, below |
 | `synthesize_scenarios` | after splicing loop guards and condition forks |
+| `discover_ucm_family` | each cell as it is mined, naming the cell |
+| `assemble_ucm_family` | the finished container, both modes |
 | `write_ucm` | before writing; nothing is written if it fails |
 
 Each takes `validate=True` by default and raises `ValueError` otherwise.
@@ -1112,6 +1114,13 @@ from detectable into unobservable downstream. Synthesis carries its own gate
 rather than relying on `discover_scenarios`, because it is what *mutates* an
 already-sound model, and callers reach it directly: the web app builds the UCM
 and calls it itself.
+
+Family assembly is checked **once, on the completed model** rather than per
+map: mid-assembly a stub is legitimately arity-invalid until its plug-in
+bindings are wired. And nothing is checked while *rendering* — cells are
+validated once at mine time, so drawing the family grid, which is the
+expensive step and the one repeated on every redraw, pays nothing. Validating
+a whole family costs about a thousandth of the mining it sits beside.
 
 The check is structural only. Whether a model deadlocks, or whether its
 guards select exactly one branch, is

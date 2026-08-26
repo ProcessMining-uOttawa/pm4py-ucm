@@ -403,20 +403,35 @@ class TestGeneratorGate:
         than by breaking the synthesizer: patching ``synthesize_scenarios``
         would replace the very code under test. Without the gate this raises
         nothing and the test fails.
+
+        The fault is injected on the LAST check only, so the build phase's
+        gate passes and the failure can only have come from synthesis. Report
+        a problem unconditionally and ``discover_ucm_inductive`` raises first,
+        which would prove nothing about this function.
         """
         pm4py = pytest.importorskip("pm4py")
         import pm4py_ucm
         from pm4py_ucm.objects.ucm import validate as vmod
 
-        monkeypatch.setattr(vmod, "validate_ucm", lambda ucm: [
-            StructuralProblem(map_name="m", node_type="RespRef", node_id="7",
-                              node_name="A", detail="2 incoming (expected 1)")])
+        real = vmod.validate_ucm
+        seen = []
+
+        def only_at_synthesis(ucm):
+            seen.append(ucm)
+            if len(seen) == 1:            # the build phase: report the truth
+                return real(ucm)
+            return [StructuralProblem(
+                map_name="m", node_type="RespRef", node_id="7",
+                node_name="A", detail="2 incoming (expected 1)")]
+
+        monkeypatch.setattr(vmod, "validate_ucm", only_at_synthesis)
         log = pm4py.read_xes(str(_claims_path()))
         with pytest.raises(ValueError) as exc:
             pm4py_ucm.discover_scenarios(log)
         msg = str(exc.value)
-        assert "scenario synthesis" in msg
+        assert "scenario synthesis" in msg, msg
         assert "bug in pm4py-ucm" in msg
+        assert len(seen) == 2, "expected exactly two gates: build, then synthesis"
 
     def test_the_app_path_is_gated_too(self, monkeypatch):
         """The web app builds the UCM and calls ``synthesize_scenarios``
@@ -440,3 +455,108 @@ class TestGeneratorGate:
                               node_name="", detail="2 incoming (expected 1)")])
         with pytest.raises(ValueError, match="scenario synthesis"):
             synth.synthesize_scenarios(ucm, tree, clustering)
+
+
+class TestFamilyGate:
+    """The gate on family mining and assembly.
+
+    Families were the last generation path left ungated, and the one that
+    mattered most: ``family_umbrella.jucm`` is where the 0.8.0 loop-guard
+    defect spread across fourteen maps at once.
+    """
+
+    @pytest.fixture(scope="class")
+    def family(self):
+        pm4py = pytest.importorskip("pm4py")
+        import pm4py_ucm
+        log = pm4py.read_xes(str(_claims_path()))
+        return pm4py_ucm.discover_ucm_family(log, ["Country"], min_cases=5)
+
+    def test_every_mined_cell_is_well_formed(self, family):
+        assert family.cells, "sanity: the family has cells"
+        for cell in family.cells:
+            assert validate_ucm(cell.ucm) == [], cell.label
+
+    @pytest.mark.parametrize("mode,kwargs", [
+        ("combined", {}),
+        ("umbrella", {}),
+        ("umbrella", {"skeleton": False}),
+        ("umbrella", {"path_scenarios": False}),
+        ("umbrella", {"dedup": False}),
+    ])
+    def test_every_assembly_mode_is_well_formed(self, family, mode, kwargs):
+        """Not one shape: the umbrella's variation-point machinery, its
+        pass-through ``skip`` plug-ins and its path-scenario synthesis are
+        separate code paths, and each can splice differently."""
+        import pm4py_ucm
+        ucm = pm4py_ucm.assemble_ucm_family(family, mode, **kwargs)
+        assert validate_ucm(ucm) == []
+
+    def test_a_malformed_cell_is_refused_and_named(self, monkeypatch):
+        """The gate FIRES, and says which cell — a family has many, and
+        'somewhere in here' would be a poor error. Without the gate the
+        malformed family is returned happily and this test fails."""
+        pm4py = pytest.importorskip("pm4py")
+        import pm4py_ucm
+        from pm4py_ucm.objects.ucm import validate as vmod
+
+        monkeypatch.setattr(vmod, "validate_ucm", lambda u: [
+            StructuralProblem(map_name="m", node_type="RespRef", node_id="3",
+                              node_name="A", detail="2 incoming (expected 1)")])
+        log = pm4py.read_xes(str(_claims_path()))
+        with pytest.raises(ValueError) as exc:
+            pm4py_ucm.discover_ucm_family(log, ["Country"], min_cases=5)
+        assert "family cell" in str(exc.value)
+
+    def test_the_umbrella_is_checked_once_when_finished(self, family,
+                                                        monkeypatch):
+        """Assembly is checked on the COMPLETED container, not per map.
+
+        Mid-assembly a stub is legitimately arity-invalid until its plug-in
+        bindings are wired, so a per-step check would report models the
+        assembler had not finished. Exactly one call, and it sees every map.
+        """
+        import pm4py_ucm
+        from pm4py_ucm.objects.ucm import validate as vmod
+
+        real = vmod.validate_ucm
+        calls = []
+
+        def counting(ucm):
+            calls.append(len(ucm.maps))
+            return real(ucm)
+
+        monkeypatch.setattr(vmod, "validate_ucm", counting)
+        ucm = pm4py_ucm.assemble_ucm_family(family)
+        assert len(calls) == 1, f"expected one gate, got {len(calls)}"
+        assert calls[0] == len(ucm.maps) > 1
+
+    def test_rendering_the_grid_does_not_validate(self, family, monkeypatch):
+        """The performance contract. Cells are checked once at mine time; the
+        renderer consumes models that were already checked, so drawing the
+        family grid — the expensive part, seconds to tens of seconds — must
+        not pay for validation at all, however often it is redrawn."""
+        from pm4py_ucm.objects.ucm import validate as vmod
+        from pm4py_ucm.visualization.ucm import family_grid as grid
+
+        def forbidden(ucm):                       # pragma: no cover - guard
+            raise AssertionError(
+                "the grid renderer validated a model; the gate belongs at "
+                "mine/assembly time, not on the render path")
+
+        monkeypatch.setattr(vmod, "validate_ucm", forbidden)
+        assert grid.render_svg(family)
+
+    def test_the_escape_hatch_reaches_mining_and_assembly(self, monkeypatch):
+        """``validate=False`` really means off on both halves."""
+        pm4py = pytest.importorskip("pm4py")
+        import pm4py_ucm
+        from pm4py_ucm.objects.ucm import validate as vmod
+
+        monkeypatch.setattr(vmod, "validate_ucm", lambda u: [
+            StructuralProblem(map_name="m", node_type="RespRef", node_id="3",
+                              node_name="A", detail="2 incoming (expected 1)")])
+        log = pm4py.read_xes(str(_claims_path()))
+        fam = pm4py_ucm.discover_ucm_family(
+            log, ["Country"], min_cases=5, validate=False)
+        assert pm4py_ucm.assemble_ucm_family(fam, validate=False) is not None

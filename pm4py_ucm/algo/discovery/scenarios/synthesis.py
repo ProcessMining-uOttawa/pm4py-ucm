@@ -346,18 +346,8 @@ def synthesize_scenarios(
     # The splicing above is done: gate before handing the model back, so a
     # malformed result can never reach an exporter, a renderer or a traversal.
     if validate:
-        from ....objects.ucm.validate import validate_ucm as _validate_ucm
-        problems = _validate_ucm(ucm)
-        if problems:
-            joined = chr(10).join("  " + str(x) for x in problems)
-            raise ValueError(
-                f"scenario synthesis produced a structurally invalid UCM "
-                f"({len(problems)} problem(s) against jUCMNav's metamodel). "
-                f"This is a bug in pm4py-ucm rather than a problem with your "
-                f"log — please report it, with the settings used. Pass "
-                f"validate=False to receive the model anyway."
-                + chr(10) + joined
-            )
+        from ....objects.ucm.validate import check_generated
+        check_generated(ucm, "scenario synthesis")
 
     return group
 
