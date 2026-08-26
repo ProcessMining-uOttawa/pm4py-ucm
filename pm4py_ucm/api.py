@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
 from .objects.ucm.obj import UCM
+from .objects.ucm.validate import validate_ucm as _validate_ucm
 from .objects.ucm.exporter.variants import jucm as _jucm_exporter
 from .objects.ucm.importer.variants import jucm as _jucm_importer
 from .objects.ucm.conversion import from_process_tree as _tree_converter
@@ -64,10 +65,42 @@ def write_ucm(
 # Discovery
 # ---------------------------------------------------------------------------
 
+def _check_generated(ucm: UCM, produced_by: str) -> UCM:
+    """Refuse to hand back a structurally invalid model this library just built.
+
+    The exporters already gate on :func:`~pm4py_ucm.validate_ucm`, but that is
+    the *last* place the fault can be caught, and it is one a caller can walk
+    straight past by never exporting. Checking at the point of generation makes
+    the whole class of fault impossible to observe downstream rather than
+    merely detectable: a malformed UCM serialises, renders and even traverses
+    without complaint, so nothing else notices.
+
+    The escape hatch differs from the exporter's, and so does the message. An
+    exporter may legitimately be handed a malformed model — jUCMNav accepts
+    files this check rejects, so round-tripping one imported from elsewhere has
+    to stay possible. Here the model was built *by this library from a process
+    tree*, so a failure is a bug in pm4py-ucm and never bad input: it says so,
+    and asks for a report. ``validate=False`` still exists, so a generator bug
+    degrades to the old behaviour instead of blocking the work entirely.
+    """
+    problems = _validate_ucm(ucm)
+    if not problems:
+        return ucm
+    joined = "\n  ".join(str(x) for x in problems)
+    raise ValueError(
+        f"{produced_by} produced a structurally invalid UCM "
+        f"({len(problems)} problem(s) against jUCMNav's metamodel). This is a "
+        f"bug in pm4py-ucm rather than a problem with your log — please "
+        f"report it, with the settings used. Pass validate=False to receive "
+        f"the model anyway.\n  {joined}"
+    )
+
+
 def discover_ucm_inductive(
     log,
     parameters: Optional[Dict[str, Any]] = None,
     decomposition=None,
+    validate: bool = True,
 ) -> UCM:
     """Discover a UCM from an event log using the inductive miner.
 
@@ -80,15 +113,21 @@ def discover_ucm_inductive(
     ``"off"`` / ``None`` (single map — current behaviour), ``"auto"``,
     ``"aggressive"``, or a dict — see
     :mod:`pm4py_ucm.objects.ucm.conversion.decomposition` for the
-    full parameter shape."""
+    full parameter shape.
+
+    ``validate`` (default ``True``) checks the result is structurally
+    well-formed before returning it, and raises :class:`ValueError` if not.
+    A failure means a bug in this library, not in your log — see
+    :func:`_check_generated`. Pass ``False`` to skip the check."""
     params = dict(parameters or {})
     if decomposition is not None:
         params["decomposition"] = decomposition
-    return _discovery.apply(
+    ucm = _discovery.apply(
         log,
         variant=_discovery.Variants.INDUCTIVE,
         parameters=params,
     )
+    return _check_generated(ucm, "discover_ucm_inductive") if validate else ucm
 
 
 def discover_resources(
@@ -172,11 +211,17 @@ def convert_to_ucm(
     obj,
     parameters: Optional[Dict[str, Any]] = None,
     decomposition=None,
+    validate: bool = True,
 ) -> UCM:
     """Convert a supported object (currently process trees) to a UCM.
 
     The ``decomposition`` argument has the same meaning as in
     :func:`discover_ucm_inductive` — see that function for details.
+
+    ``validate`` (default ``True``) checks the converted model is structurally
+    well-formed and raises :class:`ValueError` if not. A UCM passed straight
+    through is **not** checked: it was not produced here, so it is the
+    exporter's business, not the converter's.
     """
     if isinstance(obj, UCM):
         return obj
@@ -185,7 +230,8 @@ def convert_to_ucm(
         params["decomposition"] = decomposition
     # Duck-type a process tree: it has ``operator`` / ``children`` / ``label``.
     if all(hasattr(obj, a) for a in ("operator", "children", "label")):
-        return _tree_converter.apply(obj, parameters=params)
+        ucm = _tree_converter.apply(obj, parameters=params)
+        return _check_generated(ucm, "convert_to_ucm") if validate else ucm
     raise TypeError(
         f"convert_to_ucm: don't know how to convert {type(obj).__name__} "
         "to a Use Case Map."
@@ -260,6 +306,7 @@ def discover_scenarios(
     condition_strategy: str = "variant",
     decision_tree_max_depth: int = 3,
     progress_callback=None,
+    validate: bool = True,
 ):
     """End-to-end discovery of an executable UCM with scenarios from a log.
 
@@ -323,6 +370,14 @@ def discover_scenarios(
         :func:`pm4py_ucm.algo.discovery.scenarios.synthesis.\
 synthesize_scenarios` for details.
 
+    validate
+        When ``True`` (default), check the synthesized model is structurally
+        well-formed and raise :class:`ValueError` if not. Synthesis is the
+        step that mutates an already-sound UCM — splicing loop guards and
+        condition forks — so it is where a generator can break the arity
+        rules; that is precisely what happened before 0.8.0. Also forwarded
+        to the UCM build phase, so ``False`` really means "no checks".
+
     Returns
     -------
     tuple
@@ -356,6 +411,7 @@ synthesize_scenarios` for details.
         log,
         parameters={**params, "process_tree": tree},
         decomposition=decomposition,
+        validate=validate,
     )
 
     # 3. Cluster the log on the tree. Replay is the dominant cost of
@@ -385,6 +441,11 @@ synthesize_scenarios` for details.
         log=log if condition_strategy == "data-driven" else None,
         decision_tree_max_depth=decision_tree_max_depth,
         parses=parse_table,
+        # Gated inside synthesis rather than re-checked here: that is where
+        # the model is mutated, and it is reached directly by callers that
+        # never come through this function -- the web app builds the UCM and
+        # calls synthesize_scenarios itself. One gate, at the work.
+        validate=validate,
     )
 
     return ucm, clustering

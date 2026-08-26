@@ -127,9 +127,13 @@ events; ~10 min to mine after reduction).
 
 ## Open items, by value
 
-1. **`validate_ucm` is not called anywhere except the exporters.** Wiring it
-   into conversion or synthesis would make the bug class impossible rather than
-   merely detectable — a behaviour change worth deciding deliberately.
+1. **`discover_ucm_family` is not gated by `validate_ucm`.** Conversion,
+   discovery and synthesis now are (see the changelog), but family mining
+   reaches the converter module directly rather than through the public API,
+   and the assembled umbrella is nobody's checked output. That is the
+   remaining hole in "the bug class is impossible", and it is the one that
+   matters most, because `family_umbrella.jucm` is exactly where the 0.8.0
+   defect spread across 14 maps.
 2. **Stale `.jucm` artifacts.** Any `.jucm` exported before #108 is likely
    malformed; `family_umbrella.jucm` carried the defect across 14 maps.
    Anything archived is worth regenerating.

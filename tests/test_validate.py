@@ -292,3 +292,151 @@ class TestExportGate:
         out = tmp_path / "mined.jucm"
         pm4py_ucm.write_ucm(ucm, str(out))
         assert out.exists()
+
+
+def _claims_path():
+    """Path to the bundled claims log, unzipping it on first use."""
+    import zipfile
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    xes = root / "demo" / "ClaimsPaymentLog.xes"
+    if not xes.exists():
+        zf = root / "demo" / "ClaimsPaymentLog.zip"
+        if not zf.exists():
+            pytest.skip("bundled log unavailable")
+        with zipfile.ZipFile(zf) as z:
+            z.extractall(root / "demo")
+    return xes
+
+
+class TestGeneratorGate:
+    """The gate on conversion and synthesis (``validate=`` on the public API).
+
+    The exporters catch a malformed model on the way out, but that is the last
+    possible moment and a caller who never exports walks straight past it.
+    Checking where the model is *generated* is what turns the fault from
+    detectable into impossible-to-observe-downstream.
+    """
+
+    @staticmethod
+    def _tree():
+        """A process tree the converter turns into a well-formed UCM."""
+        pm4py = pytest.importorskip("pm4py")
+        from pm4py.objects.process_tree.obj import ProcessTree, Operator
+        root = ProcessTree(operator=Operator.SEQUENCE)
+        for label in ("A", "B"):
+            root.children.append(ProcessTree(parent=root, label=label))
+        return root
+
+    def test_conversion_returns_a_validated_model(self):
+        import pm4py_ucm
+        ucm = pm4py_ucm.convert_to_ucm(self._tree())
+        assert validate_ucm(ucm) == []
+
+    def test_conversion_refuses_a_malformed_result(self, monkeypatch):
+        """The gate FIRES. Break the converter so it emits a responsibility
+        with two incoming segments — the exact shape of the 0.8.0 bug — and
+        the public entry point must refuse rather than hand it back.
+
+        Without the gate this test fails: the malformed model is returned
+        happily, which is the whole problem.
+        """
+        import pm4py_ucm
+        from pm4py_ucm.objects.ucm.conversion import from_process_tree as conv
+
+        real = conv.apply
+
+        def sabotage(tree, parameters=None):
+            ucm = real(tree, parameters=parameters)
+            m = ucm.maps[0]
+            # A second arc into whatever the start point points at.
+            start = next(n for n in m.nodes if isinstance(n, UCM.StartPoint))
+            victim = next(c.target for c in m.connections if c.source is start)
+            stray = m.add_node(UCM.StartPoint(name="stray"))
+            m.add_connection(stray, victim)
+            return ucm
+
+        monkeypatch.setattr(conv, "apply", sabotage)
+        with pytest.raises(ValueError) as exc:
+            pm4py_ucm.convert_to_ucm(self._tree())
+        # The message must say whose fault it is: the caller cannot fix a
+        # generator bug by changing their log.
+        assert "bug in pm4py-ucm" in str(exc.value)
+        assert "convert_to_ucm" in str(exc.value)
+
+    def test_the_escape_hatch_still_returns_the_model(self, monkeypatch):
+        """``validate=False`` degrades to the old behaviour, so a generator
+        bug does not block the work outright."""
+        import pm4py_ucm
+        from pm4py_ucm.objects.ucm.conversion import from_process_tree as conv
+
+        real = conv.apply
+
+        def sabotage(tree, parameters=None):
+            ucm = real(tree, parameters=parameters)
+            m = ucm.maps[0]
+            start = next(n for n in m.nodes if isinstance(n, UCM.StartPoint))
+            victim = next(c.target for c in m.connections if c.source is start)
+            m.add_connection(m.add_node(UCM.StartPoint(name="stray")), victim)
+            return ucm
+
+        monkeypatch.setattr(conv, "apply", sabotage)
+        ucm = pm4py_ucm.convert_to_ucm(self._tree(), validate=False)
+        assert validate_ucm(ucm), "sanity: the sabotage really is malformed"
+
+    def test_a_ucm_passed_through_is_not_gated(self):
+        """``convert_to_ucm`` returns a UCM input unchanged. It was not
+        produced here, so it is the exporter's business — and a model
+        imported from jUCMNav may legitimately break these rules."""
+        import pm4py_ucm
+        u, m, sp, a, _ep = _linear()
+        m.add_connection(m.add_node(UCM.StartPoint(name="stray")), a)
+        assert validate_ucm(u), "sanity: this model really is malformed"
+        assert pm4py_ucm.convert_to_ucm(u) is u
+
+    def test_synthesis_gates_the_model_it_mutated(self, monkeypatch):
+        """Synthesis EDITS an already-valid model — the build phase's check
+        passed, and the damage is done afterwards — so the gate has to sit on
+        synthesis itself.
+
+        The gate is checked by making the validator report a problem, rather
+        than by breaking the synthesizer: patching ``synthesize_scenarios``
+        would replace the very code under test. Without the gate this raises
+        nothing and the test fails.
+        """
+        pm4py = pytest.importorskip("pm4py")
+        import pm4py_ucm
+        from pm4py_ucm.objects.ucm import validate as vmod
+
+        monkeypatch.setattr(vmod, "validate_ucm", lambda ucm: [
+            StructuralProblem(map_name="m", node_type="RespRef", node_id="7",
+                              node_name="A", detail="2 incoming (expected 1)")])
+        log = pm4py.read_xes(str(_claims_path()))
+        with pytest.raises(ValueError) as exc:
+            pm4py_ucm.discover_scenarios(log)
+        msg = str(exc.value)
+        assert "scenario synthesis" in msg
+        assert "bug in pm4py-ucm" in msg
+
+    def test_the_app_path_is_gated_too(self, monkeypatch):
+        """The web app builds the UCM and calls ``synthesize_scenarios``
+        directly, never going through ``discover_scenarios``. Gating only the
+        convenience wrapper would leave the library's main consumer unguarded,
+        so the check must fire on the direct call as well."""
+        pm4py = pytest.importorskip("pm4py")
+        import pm4py_ucm
+        from pm4py_ucm.algo.discovery.scenarios import synthesis as synth
+        from pm4py_ucm.algo.discovery.variants import clustering as clus
+        from pm4py_ucm.objects.ucm import validate as vmod
+
+        log = pm4py.read_xes(str(_claims_path()))
+        tree = pm4py.discover_process_tree_inductive(log)
+        ucm = pm4py_ucm.discover_ucm_inductive(
+            log, parameters={"process_tree": tree})
+        clustering = clus.cluster(log, tree)
+
+        monkeypatch.setattr(vmod, "validate_ucm", lambda u: [
+            StructuralProblem(map_name="m", node_type="AndFork", node_id="9",
+                              node_name="", detail="2 incoming (expected 1)")])
+        with pytest.raises(ValueError, match="scenario synthesis"):
+            synth.synthesize_scenarios(ucm, tree, clustering)

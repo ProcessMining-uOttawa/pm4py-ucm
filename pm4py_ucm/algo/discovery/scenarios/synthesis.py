@@ -68,6 +68,7 @@ def synthesize_scenarios(
     log=None,
     decision_tree_max_depth: int = 3,
     parses: "Optional[_parses.ParseTable]" = None,
+    validate: bool = True,
 ) -> UCM.ScenarioGroup:
     """Populate ``ucm`` with one scenario per variant in ``clustering``.
 
@@ -160,8 +161,23 @@ def synthesize_scenarios(
     UCM.ScenarioGroup
         The new scenario group, also registered under
         ``ucm.scenario_groups``.
+
+    Raises
+    ------
+    ValueError
+        When ``validate`` (default ``True``) and the mutations below leave
+        ``ucm`` structurally malformed. This function is the one that *edits*
+        an already-sound model — splicing a ``LoopEntryGuard`` fork, its
+        bypass arc, and the decrement responsibility — so it is where the
+        arity rules get broken, as they were before 0.8.0. The check lives
+        here rather than only in :func:`pm4py_ucm.discover_scenarios` because
+        callers reach synthesis directly: the web app builds the UCM and calls
+        this function itself, and gating only the convenience wrapper would
+        leave the library's main consumer unguarded.
     """
     if not clustering.variants:
+        # Nothing is spliced, so nothing can be broken; the early return
+        # skips the check deliberately rather than by omission.
         return ucm.add_scenario_group(name=group_name)
 
     if condition_strategy not in ("variant", "data-driven"):
@@ -326,6 +342,22 @@ def synthesize_scenarios(
     # them (the group is the only object the caller keeps a reference to
     # in the variant-driven path).
     group._mining_results = or_fork_mining_results  # type: ignore[attr-defined]
+
+    # The splicing above is done: gate before handing the model back, so a
+    # malformed result can never reach an exporter, a renderer or a traversal.
+    if validate:
+        from ....objects.ucm.validate import validate_ucm as _validate_ucm
+        problems = _validate_ucm(ucm)
+        if problems:
+            joined = chr(10).join("  " + str(x) for x in problems)
+            raise ValueError(
+                f"scenario synthesis produced a structurally invalid UCM "
+                f"({len(problems)} problem(s) against jUCMNav's metamodel). "
+                f"This is a bug in pm4py-ucm rather than a problem with your "
+                f"log — please report it, with the settings used. Pass "
+                f"validate=False to receive the model anyway."
+                + chr(10) + joined
+            )
 
     return group
 

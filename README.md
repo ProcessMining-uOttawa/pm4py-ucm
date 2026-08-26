@@ -1078,18 +1078,40 @@ for p in problems:
 check_ucm(ucm)                    # or raise, for a caller that would rather fail
 ```
 
-**`write_ucm` applies this automatically and refuses to write a malformed
-model.** That is deliberate: a malformed UCM serialises, renders and even
-traverses without complaint, so without the gate the error surfaces only
-when someone opens the `.jucm` in jUCMNav and notices the picture is wrong.
-Nothing is written when the check fails.
+**You do not normally call either.** The check is wired into the points where
+a model is *generated* and where it is *written*, so a malformed UCM cannot
+reach you in the first place:
 
-jUCMNav itself accepts files this check rejects, so a model imported from
-elsewhere may be malformed through no fault of yours. To round-trip one:
+| Function | When it checks |
+|---|---|
+| `convert_to_ucm` | the converted result (a `UCM` passed straight through is not checked — it was not produced here) |
+| `discover_ucm_inductive` | the mined model |
+| `discover_scenarios` | via synthesis, below |
+| `synthesize_scenarios` | after splicing loop guards and condition forks |
+| `write_ucm` | before writing; nothing is written if it fails |
+
+Each takes `validate=True` by default and raises `ValueError` otherwise.
+
+Generation and export fail for **different reasons**, and say so. A generator
+failure is a bug in this library — it built the model from your process tree,
+so no input of yours can be at fault — and the message asks you to report it.
+An export failure need not be: jUCMNav accepts files this check rejects, so a
+model imported from elsewhere may be malformed through no fault of anyone
+here, and round-tripping it has to stay possible:
 
 ```python
 pm4py_ucm.write_ucm(ucm, "out.jucm", parameters={"validate": False})
+ucm = pm4py_ucm.discover_ucm_inductive(log, validate=False)   # and at generation
 ```
+
+Why gate generation at all, when export already refuses? Because export is the
+*last* moment the fault can be caught, and a caller who never exports walks
+straight past it — a malformed UCM renders and even traverses without
+complaint. Checking where the model is built turns the whole class of fault
+from detectable into unobservable downstream. Synthesis carries its own gate
+rather than relying on `discover_scenarios`, because it is what *mutates* an
+already-sound model, and callers reach it directly: the web app builds the UCM
+and calls it itself.
 
 The check is structural only. Whether a model deadlocks, or whether its
 guards select exactly one branch, is
