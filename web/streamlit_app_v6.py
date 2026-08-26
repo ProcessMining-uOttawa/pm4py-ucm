@@ -896,6 +896,11 @@ def _synthesize(
 
     return {
         "ucm": ucm,
+        # Kept whole (not just the CSV reports derived from it) so the
+        # Simulation section can select the log down to chosen variants
+        # through the library's own filter rather than re-deriving the
+        # case -> variant mapping here. ~48 KB pickled on a 5,600-case log.
+        "clustering": clustering,
         "variants_csv": variants_csv,
         "case_map_csv": case_map_csv,
         "condition_csv": condition_csv,
@@ -1450,6 +1455,30 @@ def _filtered_log_export(log_bytes: bytes, log_kind: str, csv_columns,
         xes_bytes = xes_path.read_bytes()
     n_cases = int(df["case:concept:name"].nunique())
     return xes_bytes, csv_bytes, n_cases, int(len(df))
+
+
+@st.cache_data(show_spinner=False)
+def _variant_log_export(synth_fingerprint: str, picks: Tuple[str, ...],
+                        log_bytes: bytes, log_kind: str, csv_columns,
+                        filter_spec: Tuple, _file_hash: str, _clustering):
+    """The event log cut down to the cases in ``picks``, as
+    ``(xes_bytes, csv_bytes, n_cases, n_events)``.
+
+    Built from the SAME filtered log the scenarios were mined from, so the
+    result re-mines into the model the user is looking at. Cached on the
+    synthesis fingerprint plus the selection, and only when asked: XES
+    serialization is not free on a large log.
+    """
+    df = _filtered_log_df(log_bytes, log_kind, csv_columns, filter_spec,
+                          _file_hash)
+    sub = pm4py_ucm.filter_log_by_variants(df, _clustering, picks)
+    csv_bytes = sub.to_csv(index=False).encode("utf-8")
+    with tempfile.TemporaryDirectory() as td:
+        xes_path = Path(td) / "log.xes"
+        pm4py.write_xes(sub, str(xes_path), case_id_key="case:concept:name")
+        xes_bytes = xes_path.read_bytes()
+    return (xes_bytes, csv_bytes,
+            int(sub["case:concept:name"].nunique()), int(len(sub)))
 
 
 # ---------------------------------------------------------------------------
@@ -5478,6 +5507,66 @@ if _view == "Scenarios":
                         f"{len(_payload.neither):,} element(s) were walked "
                         "by neither."
                     )
+
+                # ---- the selection as a sub-log ------------------------
+                # The selection above is a set of behavioural variants, and
+                # clustering already knows which cases fell into each. So the
+                # same picker that says "highlight these" also says "keep
+                # these": selecting the variants worth trusting and exporting
+                # their cases is how a noisy log gets cleaned, and cases that
+                # replayed as noise belong to no variant, so they drop out by
+                # construction rather than by a threshold.
+                # Stay open once a build has been asked for: the button
+                # triggers a rerun, and an expander that defaults closed would
+                # fold the result away the moment it was ready.
+                _sublog_ready = (st.session_state.get("sim_sublog_for")
+                                 == (_synth_fp, _picks))
+                with st.expander(
+                        ":material/filter_alt: Export the log for the "
+                        "selected variants", expanded=_sublog_ready):
+                    _n_sel = len({_p.split("_", 1)[0] for _p in _picks})
+                    st.caption(
+                        f"The event log reduced to the cases belonging to the "
+                        f"**{_n_sel}** selected variant(s) — same columns, "
+                        f"same order, and the global log filter already "
+                        f"applied, so it re-mines exactly like the model "
+                        f"above. Cases that replayed as noise belong to no "
+                        f"variant and are excluded."
+                    )
+                    if st.button("Prepare the filtered log",
+                                 key="sim_sublog_go",
+                                 help="Serializing XES is not free on a large "
+                                      "log, so it is built on request."):
+                        st.session_state["sim_sublog_for"] = (_synth_fp, _picks)
+                    _want = st.session_state.get("sim_sublog_for")
+                    if _want == (_synth_fp, _picks):
+                        try:
+                            _xes, _csv, _nc, _ne = _variant_log_export(
+                                _synth_fp, _picks, log_bytes, log_kind,
+                                csv_columns, filter_spec, file_hash,
+                                synth["clustering"])
+                        except Exception as exc:      # pragma: no cover - env
+                            st.error(f"Could not build the filtered log: "
+                                     f"{type(exc).__name__}: {exc}")
+                        else:
+                            m1, m2 = st.columns(2)
+                            m1.metric("Cases kept", f"{_nc:,}",
+                                      f"{_nc - mined['n_cases']:+,}",
+                                      delta_color="off")
+                            m2.metric("Events kept", f"{_ne:,}",
+                                      f"{_ne - mined['n_events']:+,}",
+                                      delta_color="off")
+                            f1, f2 = st.columns(2)
+                            f1.download_button(
+                                "⬇ filtered log (.xes)", data=_xes,
+                                file_name=_safe_download_name(
+                                    f"{stem}_variants", ".xes"),
+                                mime="application/xml", width="stretch")
+                            f2.download_button(
+                                "⬇ filtered log (.csv)", data=_csv,
+                                file_name=_safe_download_name(
+                                    f"{stem}_variants", ".csv"),
+                                mime="text/csv", width="stretch")
 
                 if overlay_heatmap:
                     st.info(
