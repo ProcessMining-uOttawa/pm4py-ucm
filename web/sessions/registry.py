@@ -21,7 +21,8 @@ class Param:
 
     id: str
     category: str          # "miner" | "transform" | "performers" | "overlay"
-    #                        | "csv" | "scenarios" | "family" | "compare" | "view"
+    #                        | "csv" | "scenarios" | "simulation" | "family"
+    #                        | "compare" | "view"
     default: Any = None
 
 
@@ -59,6 +60,16 @@ REGISTRY: Tuple[Param, ...] = (
     Param("scenario_group_name", "scenarios", "MinedScenarios"),
     Param("scenario_max_loop_iterations", "scenarios", 2),
     Param("scenario_decision_tree_max_depth", "scenarios", 3),
+    # Scenario simulation (the Scenarios view's Simulation section). The mode
+    # is stored as an IDENTIFIER, never the radio's label — see docs/sessions.md
+    # and the ``active_view`` note below.
+    Param("simulation_mode", "simulation", "coverage"),   # "coverage" | "compare"
+    # Scenario NAMES, not indices: a resumed project may re-mine to a different
+    # scenario count, and a name that no longer exists is dropped on restore
+    # rather than silently selecting somebody else's scenario.
+    Param("simulation_scenarios", "simulation", []),      # coverage highlight
+    Param("simulation_a", "simulation", None),            # compare mode
+    Param("simulation_b", "simulation", None),
     # Model families.
     Param("family_attrs", "family", []),
     Param("family_min_cases", "family", 10),

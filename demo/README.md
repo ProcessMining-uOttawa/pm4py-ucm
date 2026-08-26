@@ -59,6 +59,11 @@ real log:
 6. What the three CSV reports contain and how to audit a run.
 7. A capstone running **both encodings on `ClaimsPaymentLog`** with
    real numbers, written side by side for jUCMNav.
+8. **Running** the synthesized scenarios offline under jUCMNav's own
+   traversal semantics, then measuring **coverage** (elements and path
+   segments, separately, against the whole model) and comparing two
+   scenarios **A vs B** — including painting either highlight onto the
+   diagram as SVG.
 
 Requires `pm4py` (for reading XES). The data-driven sections and the
 capstone use `scikit-learn`, which since 0.7.11 installs with the package
@@ -111,7 +116,7 @@ Outputs land in `output/dashboards/`. See
 [`docs/dashboards.md`](../docs/dashboards.md) for the semantic contract
 (every metric's exact definition, the ƒ grammar, and the engine's
 rounding / weighting decisions). Everything is also point-and-click in the
-V5 web app (`web/streamlit_app_v5.py`, **Dashboards** view).
+deployed web app (`web/streamlit_app_v6.py`, **Dashboards** view).
 
 ## Mine-and-export script
 

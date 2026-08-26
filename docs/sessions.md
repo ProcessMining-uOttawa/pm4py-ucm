@@ -137,6 +137,19 @@ param whose widget key is `flt_arank::<hash>` can build the right key for the
   same variants and `.jucm`: `condition_strategy` (`variant` | `data-driven`),
   `group_name` (the scenario-group name), `max_loop_iterations`, and
   `decision_tree_max_depth`.
+- `simulation` — the Scenarios view's highlight, so a resumed project comes
+  back showing what it showed: `simulation_mode`, `simulation_scenarios` (the
+  Coverage multiselect) and `simulation_a` / `simulation_b` (Compare mode).
+  Two rules apply and both were learned the hard way. The **mode is an
+  identifier** (`"coverage"` / `"compare"`), never the radio's words — the
+  labels come from `_SIM_MODES` through `format_func`, exactly as `active_view`
+  does; a label in a file breaks the day the wording changes. And the
+  scenarios are stored **by name, not by index**, because a re-mine can rename
+  or drop one: the A/B selectboxes clamp an unknown name to their default and
+  the Coverage picks are filtered, so a stale selection degrades instead of
+  silently highlighting a different scenario. All four are main-area widgets
+  in a view that is usually *not* the active one on load, so they save through
+  `_sticky_get` and restore through `_sticky_seed` (§7).
 - `compare` — the two selected members, `cmp_cell_a` and `cmp_cell_b` (Process
   A / Process B). These reference *family cells*, so they only mean anything
   once the family is re-mined; they are applied **best-effort after** family

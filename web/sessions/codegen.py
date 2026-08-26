@@ -450,6 +450,13 @@ def _config(
             f"{int(cfg['scenario_max_loop_iterations'])!r}",
             "SCENARIO_DECISION_TREE_MAX_DEPTH = "
             f"{int(cfg['scenario_decision_tree_max_depth'])!r}",
+            "",
+            "# The Simulation highlight, as the app had it. The mode is "
+            "the stored identifier, never a UI label.",
+            f"SIMULATION_MODE = {cfg['simulation_mode']!r}",
+            f"SIMULATION_SCENARIOS = {list(cfg['simulation_scenarios'])!r}",
+            f"SIMULATION_A = {cfg['simulation_a']!r}",
+            f"SIMULATION_B = {cfg['simulation_b']!r}",
         ]
     if include_family:
         inc = cfg["family_include_values"]
@@ -537,6 +544,99 @@ def _scenarios_fn() -> str:
         '          f"({len(clustering.variants)} variant(s))")\n'
         "    return ucm_s"
     )
+
+
+_SIMULATION_FN = '''def run_simulation(ucm_s):
+    """Replay the synthesized scenarios and export the highlight the app showed.
+
+    Mirrors the Scenarios view's Simulation section: every scenario is
+    traversed jUCMNav-style, then either the *coverage* of the selected
+    scenarios or the A-only / B-only / both partition of two of them is
+    written out as ``simulation.svg`` plus a small CSV. Returns the
+    ``Coverage`` / ``Comparison`` object so a notebook can inspect it.
+    """
+    from pm4py_ucm.algo import scenario_coverage as _sc
+    from pm4py_ucm.visualization.ucm import svg as _svgmod
+
+    try:
+        results = pm4py_ucm.traverse_all(ucm_s)
+    except Exception as exc:  # noqa: BLE001 - no scenarios, or a broken model
+        print(f"[simulation] skipped ({type(exc).__name__}: {exc})")
+        return None
+    if not results:
+        print("[simulation] skipped: the model carries no scenarios")
+        return None
+    broken = [r for r in results if not r.ok]
+    print(f"[simulation] ran {len(results)} scenario(s), "
+          f"{len(results) - len(broken)} clean")
+    for r in broken:
+        for pr in r.problems:
+            print(f"[simulation]   {r.scenario}: {pr.kind} at "
+                  f"{pr.node_type} {pr.node_name}")
+
+    # Resolve the saved selection against THIS run's scenarios. Names, not
+    # indices, so a re-mine that renames or drops one is reported rather than
+    # silently highlighting somebody else's scenario. An unset selection falls
+    # back to the app's own defaults (first scenario; first two for A/B).
+    by_name = {r.scenario: r for r in results}
+    if SIMULATION_MODE == "compare":
+        want = [SIMULATION_A or results[0].scenario,
+                SIMULATION_B or results[min(1, len(results) - 1)].scenario]
+    else:
+        want = list(SIMULATION_SCENARIOS) or [results[0].scenario]
+    absent = [n for n in want if n not in by_name]
+    if absent:
+        print(f"[simulation] not in this model, skipped: {absent}")
+    chosen = [by_name[n] for n in want if n in by_name]
+    if not chosen:
+        print("[simulation] nothing left to highlight")
+        return None
+
+    if SIMULATION_MODE == "compare" and len(chosen) == 2:
+        report = pm4py_ucm.compare(ucm_s, chosen[0], chosen[1])
+        render = _sc.comparison_render(ucm_s, report)
+        pd.DataFrame([
+            {"partition": f"only {report.a_name}",
+             "elements": len(report.a_only)},
+            {"partition": f"only {report.b_name}",
+             "elements": len(report.b_only)},
+            {"partition": "both", "elements": len(report.both)},
+            {"partition": "neither", "elements": len(report.neither)},
+        ]).to_csv(OUT_DIR / "simulation_compare.csv", index=False)
+        print(f"[simulation] {report.a_name} vs {report.b_name}: "
+              f"{len(report.a_only)} / {len(report.b_only)} / "
+              f"{len(report.both)} (A-only / B-only / both), "
+              f"{report.agreement * 100:.0f}% agreement")
+    else:
+        # Also the fall-back when compare mode lost one of its two scenarios:
+        # covering the survivor is more useful than emitting nothing.
+        report = pm4py_ucm.coverage(ucm_s, chosen)
+        render = _sc.coverage_render(ucm_s, report)
+        pd.DataFrame([
+            {"element": k, "covered": v[0], "total": v[1]}
+            for k, v in report.by_kind().items()
+        ]).to_csv(OUT_DIR / "simulation_coverage.csv", index=False)
+        ec, et = report.elements
+        pc, pt = report.paths
+        print(f"[simulation] coverage of {len(report.scenarios)} scenario(s) "
+              f"over the whole model: elements {ec}/{et} "
+              f"({report.element_fraction * 100:.1f}%), paths {pc}/{pt} "
+              f"({report.path_fraction * 100:.1f}%)")
+
+    # The highlight and the performance heat-map compete for the same colour
+    # channel, so this render deliberately carries no heat kwargs.
+    try:
+        (OUT_DIR / "simulation.svg").write_text(
+            _svgmod.model_to_svg(ucm_s, NOTATION, coverage=render),
+            encoding="utf-8")
+        print(f"[simulation] wrote {OUT_DIR / 'simulation.svg'}")
+    except Exception as exc:  # noqa: BLE001 - graphviz may be absent
+        print(f"[warn] simulation SVG skipped ({type(exc).__name__}: {exc})")
+    return report'''
+
+
+def _simulation_fn() -> str:
+    return _SIMULATION_FN
 
 
 def _family_fn() -> str:
@@ -653,7 +753,8 @@ def _run_fn(include_scenarios: bool, include_family: bool,
         "    ucm = run_model(log)",
     ]
     if include_scenarios:
-        body.append("    run_scenarios(log)")
+        # The simulation consumes the synthesized model, so the two chain.
+        body.append("    run_simulation(run_scenarios(log))")
     if include_family:
         body.append(
             "    if FAMILY_ATTRS:\n"
@@ -709,6 +810,7 @@ def _blocks(
     ]
     if include_scenarios:
         blocks.append(("scenarios", _scenarios_fn()))
+        blocks.append(("simulation", _simulation_fn()))
     if include_family:
         blocks.append(("family", _family_fn()))
     if include_dashboards:
@@ -861,9 +963,18 @@ def generate_notebook(
             _nb_md("## 4 · Scenario synthesis\n\nOne executable `ScenarioDef` "
                    "per behavioural variant. Writes `scenarios.jucm` and the "
                    "variant CSVs."),
-            _nb_code(_scenarios_fn() + "\n\nrun_scenarios(log)"),
+            _nb_code(_scenarios_fn() + "\n\nucm_s = run_scenarios(log)"),
             _nb_md("The behavioural variants that drive the scenarios:"),
             _nb_code('pd.read_csv(OUT_DIR / "variants.csv").head(10)'),
+            _nb_md("### Simulation\n\nRun those scenarios on the "
+                   "model the way jUCMNav does, and paint what they walked — "
+                   "either the **coverage** of the selected scenarios or an "
+                   "**A vs B** partition, whichever the session had. Writes "
+                   "`simulation.svg` and a summary CSV."),
+            _nb_code(_simulation_fn()
+                     + "\n\nsimulation = run_simulation(ucm_s)"),
+            _nb_md("The highlighted model — hover any element for its detail:"),
+            _nb_code('preview("simulation")'),
         ]
     if inc_family:
         cells += [
