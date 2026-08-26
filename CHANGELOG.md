@@ -40,10 +40,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   thresholds and both decomposition modes, and 1,200 random process-tree
   conversions.
 
-  Not covered: `discover_ucm_family` builds its cells through the converter
-  module directly rather than the public API, so family mining and the
-  umbrella assembly are still ungated. Their per-cell conversions are the same
-  code path, but the assembled umbrella is not checked.
+- **Model families are gated too**, closing the last generation path.
+  `discover_ucm_family` checks each cell as it is mined (naming the cell if
+  one fails), and `assemble_ucm_family` checks the finished container in both
+  modes. Both take `validate=True` by default.
+
+  Families mattered most: `family_umbrella.jucm` is where the 0.8.0 loop-guard
+  defect spread across fourteen maps at once, and the umbrella's own machinery
+  — variation points, pass-through `skip` plug-ins, path-scenario synthesis —
+  splices structure of its own.
+
+  **Assembly is checked once, on the completed model**, not per map or per
+  step. Mid-assembly a stub is legitimately arity-invalid until its plug-in
+  bindings are wired, so only the finished container is a fair subject; a
+  test pins the single call.
+
+  **Nothing is checked on the render path.** Cells are validated once, at mine
+  time; the grid renderer re-reads models that were already checked, so
+  drawing the family grid — the expensive step, seconds to tens of seconds,
+  and the one repeated on every redraw — pays nothing. A test asserts this by
+  making the validator raise if the renderer calls it.
+
+  Measured on `ClaimsPaymentLog` partitioned by `Country`: validating every
+  cell takes 0.8–1.6 ms against 806–863 ms of mining (0.1–0.2%), and the
+  umbrella 0.8–1.0 ms against 1.35–1.45 s of assembly (0.06%). End to end the
+  difference is below this benchmark's noise floor — several runs come out
+  *faster* with the gates on.
+
+  Verified structurally sound before gating, not after: every assembly mode
+  (`combined`, `umbrella`, `skeleton=False`, `path_scenarios=False`,
+  `dedup=False`) on both flat and decomposed families reports zero problems
+  today, so the gate refuses nothing that used to work.
 
 ## [0.8.0] — 2026-08-25
 

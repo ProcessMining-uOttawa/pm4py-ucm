@@ -127,19 +127,12 @@ events; ~10 min to mine after reduction).
 
 ## Open items, by value
 
-1. **`discover_ucm_family` is not gated by `validate_ucm`.** Conversion,
-   discovery and synthesis now are (see the changelog), but family mining
-   reaches the converter module directly rather than through the public API,
-   and the assembled umbrella is nobody's checked output. That is the
-   remaining hole in "the bug class is impossible", and it is the one that
-   matters most, because `family_umbrella.jucm` is exactly where the 0.8.0
-   defect spread across 14 maps.
-2. **Stale `.jucm` artifacts.** Any `.jucm` exported before #108 is likely
+1. **Stale `.jucm` artifacts.** Any `.jucm` exported before #108 is likely
    malformed; `family_umbrella.jucm` carried the defect across 14 maps.
    Anything archived is worth regenerating.
-3. **The default noise threshold of 0.20.** A clinical log fits zero cases at
+2. **The default noise threshold of 0.20.** A clinical log fits zero cases at
    it. Still unresolved, and still the oldest open question here.
-4. **`demo/model_families_tutorial.ipynb` writes ~2 MB of embedded SVG.** Fine,
+3. **`demo/model_families_tutorial.ipynb` writes ~2 MB of embedded SVG.** Fine,
    but the notebook grew from 909 KB when it moved to vector output.
 
 Struck from this list at 0.8.0: V5's "Notation (Model tab)" label. V5 is

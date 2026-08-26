@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
 from .objects.ucm.obj import UCM
-from .objects.ucm.validate import validate_ucm as _validate_ucm
+from .objects.ucm.validate import check_generated as _check_generated
 from .objects.ucm.exporter.variants import jucm as _jucm_exporter
 from .objects.ucm.importer.variants import jucm as _jucm_importer
 from .objects.ucm.conversion import from_process_tree as _tree_converter
@@ -64,37 +64,6 @@ def write_ucm(
 # ---------------------------------------------------------------------------
 # Discovery
 # ---------------------------------------------------------------------------
-
-def _check_generated(ucm: UCM, produced_by: str) -> UCM:
-    """Refuse to hand back a structurally invalid model this library just built.
-
-    The exporters already gate on :func:`~pm4py_ucm.validate_ucm`, but that is
-    the *last* place the fault can be caught, and it is one a caller can walk
-    straight past by never exporting. Checking at the point of generation makes
-    the whole class of fault impossible to observe downstream rather than
-    merely detectable: a malformed UCM serialises, renders and even traverses
-    without complaint, so nothing else notices.
-
-    The escape hatch differs from the exporter's, and so does the message. An
-    exporter may legitimately be handed a malformed model — jUCMNav accepts
-    files this check rejects, so round-tripping one imported from elsewhere has
-    to stay possible. Here the model was built *by this library from a process
-    tree*, so a failure is a bug in pm4py-ucm and never bad input: it says so,
-    and asks for a report. ``validate=False`` still exists, so a generator bug
-    degrades to the old behaviour instead of blocking the work entirely.
-    """
-    problems = _validate_ucm(ucm)
-    if not problems:
-        return ucm
-    joined = "\n  ".join(str(x) for x in problems)
-    raise ValueError(
-        f"{produced_by} produced a structurally invalid UCM "
-        f"({len(problems)} problem(s) against jUCMNav's metamodel). This is a "
-        f"bug in pm4py-ucm rather than a problem with your log — please "
-        f"report it, with the settings used. Pass validate=False to receive "
-        f"the model anyway.\n  {joined}"
-    )
-
 
 def discover_ucm_inductive(
     log,
@@ -615,6 +584,7 @@ def discover_ucm_family(
     case_id_col: str = "case:concept:name",
     parameters: Optional[Dict[str, Any]] = None,
     progress_callback=None,
+    validate: bool = True,
 ):
     """Mine a *family* of UCM models: partition ``log`` by the values
     of 1–2 case-level attributes (e.g. cancer type × age group) and
@@ -638,6 +608,13 @@ def discover_ucm_family(
     with fewer than ``min_cases`` cases are skipped (recorded on the
     family, shown grayed in the grid rendering).
 
+    ``validate=True`` (the default) checks each cell's model as it is mined
+    and raises :class:`ValueError` if one is malformed, naming the cell. The
+    cost is a single pass over that cell's nodes and connections — around a
+    thousandth of the mining it sits beside — and it is paid **once, at mine
+    time**: rendering the family grid re-reads models that were already
+    checked here, so the SVG and PNG paths are untouched.
+
     Returns a
     :class:`~pm4py_ucm.algo.discovery.families.family.ModelFamily`;
     feed it to :func:`write_ucm_family`, :func:`save_vis_ucm_family`,
@@ -658,6 +635,7 @@ def discover_ucm_family(
         case_id_col=case_id_col,
         parameters=parameters,
         progress_callback=progress_callback,
+        validate=validate,
     )
 
 
@@ -711,7 +689,13 @@ def assemble_ucm_family(
     ``path_scenarios``, ``max_variants_per_cell``,
     ``max_loop_iterations``) or
     :func:`~pm4py_ucm.algo.discovery.families.assembly.assemble_combined`
-    (``urn_name``)."""
+    (``urn_name``).
+
+    Both modes accept ``validate=True`` (the default), which checks the
+    **finished** container and raises :class:`ValueError` if it is not
+    structurally well-formed. The check runs once, on the completed model:
+    mid-assembly a stub is legitimately arity-invalid until its plug-in
+    bindings are wired, so only the finished model is a fair subject."""
     if mode == "combined":
         return _families.assemble_combined(family, **kwargs)
     if mode == "umbrella":

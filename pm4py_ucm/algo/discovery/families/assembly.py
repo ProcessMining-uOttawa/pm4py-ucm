@@ -255,6 +255,7 @@ def assemble_combined(
     urn_name: Optional[str] = None,
     node_metrics: Sequence[str] = (),
     edge_metrics: Sequence[str] = (),
+    validate: bool = True,
 ) -> UCM:
     """One URN spec containing every cell model as an independent root
     map (named after the cell's value combination), with shared
@@ -273,6 +274,14 @@ def assemble_combined(
         for cell, maps in cell_maps:
             _annotate_maps(container, family, maps, [cell],
                            node_metrics, edge_metrics)
+    if validate:
+        # ONCE, on the finished container. Checking mid-assembly would be
+        # wrong as well as wasteful: a stub is legitimately arity-invalid
+        # until its plug-in bindings are wired, so only the completed model
+        # is a fair subject. One pass over every map costs about a
+        # thousandth of the assembly it follows.
+        from ....objects.ucm.validate import check_generated
+        check_generated(container, "family assembly (combined)")
     return container
 
 
@@ -688,6 +697,7 @@ def assemble_umbrella(
     node_metrics: Sequence[str] = (),
     edge_metrics: Sequence[str] = (),
     progress_callback=None,
+    validate: bool = True,
 ) -> UCM:
     """Assemble the family into one overarching model whose root map is
     the **shared skeleton** of the cell processes, with a dynamic stub
@@ -922,4 +932,12 @@ def assemble_umbrella(
         for cells, maps in group_maps:
             _annotate_maps(container, family, maps, cells,
                            node_metrics, edge_metrics)
+    if validate:
+        # ONCE, on the finished container. Checking mid-assembly would be
+        # wrong as well as wasteful: a stub is legitimately arity-invalid
+        # until its plug-in bindings are wired, so only the completed model
+        # is a fair subject. One pass over every map costs about a
+        # thousandth of the assembly it follows.
+        from ....objects.ucm.validate import check_generated
+        check_generated(container, "family assembly (umbrella)")
     return container

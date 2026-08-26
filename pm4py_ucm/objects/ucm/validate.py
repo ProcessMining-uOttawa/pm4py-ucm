@@ -156,3 +156,31 @@ def check_ucm(ucm: UCM) -> None:
         joined = "\n  ".join(str(p) for p in problems)
         raise ValueError(
             f"{len(problems)} structural problem(s) in this UCM:\n  {joined}")
+
+
+def check_generated(ucm: UCM, produced_by: str) -> UCM:
+    """Refuse to hand back a structurally invalid model this library just built.
+
+    The counterpart to :func:`check_ucm`, for the *generators* rather than the
+    exporters, and the difference is whose fault a failure is. An exporter may
+    legitimately be handed a malformed model — jUCMNav accepts files this check
+    rejects, so round-tripping one imported from elsewhere has to stay
+    possible. A generator built the model here, from a process tree, so no
+    input of the caller's can be at fault: the message says so and asks for a
+    report, and ``produced_by`` names the step to report.
+
+    Internal to the library's generation paths (conversion, discovery,
+    synthesis, family mining and assembly); callers use the ``validate=``
+    keyword on those functions rather than this directly.
+    """
+    problems = validate_ucm(ucm)
+    if not problems:
+        return ucm
+    joined = "\n  ".join(str(x) for x in problems)
+    raise ValueError(
+        f"{produced_by} produced a structurally invalid UCM "
+        f"({len(problems)} problem(s) against jUCMNav's metamodel). This is a "
+        f"bug in pm4py-ucm rather than a problem with your log — please "
+        f"report it, with the settings used. Pass validate=False to receive "
+        f"the model anyway.\n  {joined}"
+    )

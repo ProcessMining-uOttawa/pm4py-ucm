@@ -125,6 +125,7 @@ def discover(
     case_id_col: str = "case:concept:name",
     parameters: Optional[Dict[str, Any]] = None,
     progress_callback=None,
+    validate: bool = True,
 ) -> ModelFamily:
     """Mine a :class:`ModelFamily` from ``log`` partitioned by 1–2
     case-level attributes.
@@ -159,6 +160,13 @@ def discover(
         Optional ``callback(stage, done, total)`` fired after each
         mined cell — per-cell mining dominates the family pipeline's
         cost. See :mod:`pm4py_ucm.util.progress`.
+    validate
+        When ``True`` (default), check each cell's model is structurally
+        well-formed as it is mined, and raise :class:`ValueError` otherwise.
+        The check is a single pass over each cell's nodes and connections,
+        run **once, at mine time** — it costs about a thousandth of the
+        mining it sits beside, and nothing at all at render time, since the
+        grid renderer consumes models that were already checked here.
     """
     parameters = dict(parameters or {})
     tree_miner = parameters.pop("tree_miner", None)
@@ -206,6 +214,13 @@ def discover(
         if decomposition is not None:
             conv_params["decomposition"] = decomposition
         ucm = _converter.apply(tree, parameters=conv_params)
+        if validate:
+            # A cell's model is finished the moment it is converted -- unlike
+            # the umbrella below, there is no partially-wired state to trip
+            # over -- so this is the earliest honest place to check, and the
+            # one that names the offending cell while we still know it.
+            from ....objects.ucm.validate import check_generated
+            check_generated(ucm, f"family cell {pcell.label!r}")
 
         cells.append(FamilyCell(
             values=pcell.values,
