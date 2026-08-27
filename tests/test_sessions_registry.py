@@ -493,3 +493,70 @@ def test_no_restored_widget_also_passes_its_own_default():
         + "\n  ".join(clashes)
         + "\nSeed the default through session_state (_seed_choice / "
           "setdefault) and drop the index=/value=/default= argument.")
+
+
+def test_progress_callbacks_into_cached_functions_only_update_labels():
+    """A callback handed to an ``@st.cache_data`` function may only mutate its
+    status container's label — never create a child element on it.
+
+    Streamlit records every element a cached function touches so it can replay
+    them on a cache hit. A child element created on a block that was made
+    *outside* the function replays into a block that no longer exists, and the
+    hit raises ``CacheReplayClosureError``. Mutating the container's own label
+    replays safely.
+
+    This is written down in ``_ProgressUI``'s docstring, and was then broken
+    anyway by a later per-cell progress bar on the family grid: it worked on
+    the first render and failed on every cache hit afterwards. Hence a test.
+    """
+    import ast
+
+    src = _APP.read_text(encoding="utf-8")
+    tree = ast.parse(src)
+
+    # Names of the @st.cache_data functions that accept a progress handle.
+    cached = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.FunctionDef)
+                and any("cache_data" in ast.unparse(d)
+                        for d in node.decorator_list)):
+            params = [a.arg for a in node.args.args + node.args.kwonlyargs]
+            if any(p.lstrip("_") in ("progress", "status", "bar")
+                   for p in params):
+                cached.add(node.name)
+    assert cached, "expected some cached functions to take a progress handle"
+
+    # Callback names passed to those functions as _progress=/_status=.
+    passed = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in cached):
+            continue
+        for kw in node.keywords:
+            if kw.arg in ("_progress", "_status") and isinstance(kw.value, ast.Name):
+                passed.add(kw.value.id)
+
+    # Every locally-defined callback among them may only call `.update(...)`.
+    ALLOWED = {"update"}
+    offenders = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.FunctionDef) and node.name in passed):
+            continue
+        for call in ast.walk(node):
+            if not (isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Attribute)):
+                continue
+            if call.func.attr in ALLOWED:
+                continue
+            # Ignore plain builtins on locals (e.g. "".join, dict.get).
+            if call.func.attr in ("join", "get", "format", "append", "keys"):
+                continue
+            offenders.append(
+                f"line {call.lineno}: {node.name}() calls "
+                f".{call.func.attr}(...) on a container")
+    assert not offenders, (
+        "a progress callback passed into a cached function touches something "
+        "other than its status label:\n  " + "\n  ".join(offenders)
+        + "\nOnly `.update(label=...)` replays safely on a cache hit; see "
+          "_ProgressUI's docstring.")

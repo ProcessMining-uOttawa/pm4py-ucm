@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Viewing a model family twice raised `CacheReplayClosureError`.** The family
+  grid's per-cell progress, added in 0.8.0, created an `st.progress` bar as a
+  child of the caller's `st.status` block and drove it from inside
+  `_render_family_grid_svg`, which is `@st.cache_data`. Streamlit records every
+  element a cached function touches so it can replay them on a cache hit — and
+  a child element created on an *external* block replays into a block that no
+  longer exists. The first render worked; every later one with the same family
+  and notation failed, so simply leaving the Family view and coming back broke
+  it.
+
+  The rule was already written down in `_ProgressUI`'s docstring, which exists
+  precisely because the long-running miners hit this: mutating the status's own
+  label replays safely, creating a child element on it does not. The grid
+  progress now follows that rule, and reports `N of M cells (P%)` in the label
+  instead of a bar. A test enforces it — a callback passed into a cached
+  function may only call `.update(...)`.
+
+
 ## [0.8.1] — 2026-08-26
 
 > **Upgrading from 0.8.0 — one behaviour change.** Conversion, discovery,
