@@ -1533,12 +1533,21 @@ def _dashboard_html_cached(_table, specs_json: str, name: str,
                            storage_key: str, read_only: bool,
                            theme: str,
                            model_svg: Tuple[Tuple[str, str], ...],
-                           family_report: str = "") -> str:
+                           family_report: str = "",
+                           filter_spec: Tuple = ()) -> str:
     """The dashboard artifact.
 
     ``_table`` is underscore-prefixed so Streamlit does not try to hash a
-    FactTable of numpy buffers; ``storage_key`` already identifies the
-    log, and the remaining arguments are hashable, so the key is sound.
+    FactTable of numpy buffers, which means the remaining arguments have to
+    determine it: whatever the key does not capture, the cache will happily
+    serve from a run with different data.
+
+    ``storage_key`` is the log's file hash, so it identifies the *file* — not
+    the filtered log the fact table is actually built from. ``filter_spec`` is
+    therefore part of the key too. It was not, and the omission was masked
+    only because ``model_svg`` happens to vary with the data as well (through
+    the mined structure and the performer colours); a key should not depend on
+    another argument's incidental correlation to be sound.
     """
     from pm4py_ucm.algo.dashboards import dashboard_html
     import json as _json
@@ -6648,6 +6657,10 @@ if _view == "Dashboards":
         tuple(sorted(_renders.items())), file_hash, False, _theme,
         tuple(sorted(_model_svgs.items())),
         _family_report_html,
+        # The fact table is built from the FILTERED log; the file hash above
+        # only identifies the file. Without this the cache can serve a
+        # dashboard built from a different filter's data.
+        filter_spec,
     )
 
     # A pin carries a fresh id per click, so it must not reach the cache

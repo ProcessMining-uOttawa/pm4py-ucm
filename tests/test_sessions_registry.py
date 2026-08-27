@@ -560,3 +560,27 @@ def test_progress_callbacks_into_cached_functions_only_update_labels():
         "other than its status label:\n  " + "\n  ".join(offenders)
         + "\nOnly `.update(label=...)` replays safely on a cache hit; see "
           "_ProgressUI's docstring.")
+
+
+def test_cache_audit_finds_nothing_in_the_deployed_app():
+    """Run ``tools/cache_audit.py`` over V6 and require a clean report.
+
+    The audit encodes the two Streamlit cache faults this project has actually
+    shipped — a cached function drawing into a block created outside it, and a
+    call site letting a cache-key parameter fall back to its default. Both are
+    invisible to the rest of the suite: the first only fails on the *second*
+    call, and the second never fails at all, it just returns the wrong data.
+
+    Running it here means the audit cannot rot, and a new cached function that
+    reintroduces either fault fails CI rather than a user's session.
+    """
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parent.parent
+    proc = subprocess.run(
+        [sys.executable, str(root / "tools" / "cache_audit.py"), str(_APP)],
+        capture_output=True, text=True, cwd=str(root))
+    assert proc.returncode == 0, (
+        "tools/cache_audit.py reported a cache hazard:\n" + proc.stdout
+        + proc.stderr)
