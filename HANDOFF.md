@@ -1,19 +1,20 @@
-# Handoff — after 0.8.1
+# Handoff — after 0.8.2
 
-**0.8.1 is released.** Scenario simulation, coverage and A/B comparison are
+**0.8.2 is released.** Scenario simulation, coverage and A/B comparison are
 complete: stages 1–5 of [`docs/scenario_simulation.md`](docs/scenario_simulation.md)
 are all on `main`, and that plan is now history rather than a to-do. 0.8.1
-adds the validation gates, the variant-filtered log export, and two fixes
-found by using the app.
+added the validation gates, the variant-filtered log export, and two fixes
+found by using the app; 0.8.2 is a single-fix patch for a 0.8.0 regression
+that broke the Family view on every second look.
 
 ## State on arrival
 
-- `main` carries 0.8.1, tagged `v0.8.1`, published to PyPI.
-- All three version sites read **0.8.1** and are kept in lock-step by a test:
+- `main` carries 0.8.2, tagged `v0.8.2`, published to PyPI.
+- All three version sites read **0.8.2** and are kept in lock-step by a test:
   `pyproject.toml`, `pm4py_ucm/__init__.py`, `web/sessions/codegen.py`
   (`GENERATOR_VERSION`).
 - `CHANGELOG.md` has a fresh empty `[Unreleased]`.
-- Suite: **1169 passed, 0 failed, 0 skipped** (~5½ min locally); CI green on
+- Suite: **1170 passed, 0 failed, 0 skipped** (~5½ min locally); CI green on
   Python 3.9–3.12.
 - **One deployment.** https://pm4py-ucm.streamlit.app/ serves V6 through the
   `streamlit_app.py` shim. The second deployment
@@ -94,6 +95,14 @@ Carried forward because each one bit during development:
   wording changes. This rule has now been learned three times.
 - **Selections are recorded by name, not rank or index.** A rank is relative to
   a population and any other setting moves that population.
+- **A cached function may not touch an element created outside it.** Streamlit
+  records every element an `@st.cache_data` function writes so it can replay
+  them on a hit; a child element created on an *external* block replays into a
+  block that no longer exists and raises `CacheReplayClosureError`. The first
+  call always works, so this only shows up on the second. `status.update(
+  label=…)` mutates the status itself and is safe; `status.progress(…)` is not.
+  Documented in `_ProgressUI`, broken anyway by the 0.8.0 family-grid progress,
+  and now enforced by a test.
 - **Streamlit owns widget state and may discard it on a rerun that changes
   nothing**, and drops the state of any keyed widget not rendered this run. A
   main-area widget that must survive leaving its view needs the `_sticky`
