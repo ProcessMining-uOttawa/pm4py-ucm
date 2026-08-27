@@ -5940,14 +5940,21 @@ if _view == "Family":
                 # whether anything is happening. Count them instead.
                 _grid_status = st.status(
                     f"Rendering family grid ({notation})…", expanded=False)
-                _grid_bar = _grid_status.progress(0.0)
 
                 def _grid_progress(done, total, label):
+                    # LABEL ONLY. This callback fires inside a @st.cache_data
+                    # function, so every element it touches is recorded for
+                    # cache replay -- and a child element created on this
+                    # status block (a progress bar was the original sin here)
+                    # replays into a block that no longer exists, raising
+                    # CacheReplayClosureError on the next cache hit. Mutating
+                    # the status's own label replays safely. Same rule, and
+                    # the same reason, as _ProgressUI.
                     total = max(total, 1)
-                    _grid_bar.progress(min(done / total, 1.0))
+                    pct = int(round(100 * min(done / total, 1.0)))
                     _grid_status.update(
                         label=f"Rendering family grid ({notation}) — "
-                              f"{done} of {total} cells"
+                              f"{done} of {total} cells ({pct}%)"
                               + (f": {label}" if label else ""))
 
                 grid_svg, grid_svg_err = _render_family_grid_svg(
