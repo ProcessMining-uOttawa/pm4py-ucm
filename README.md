@@ -78,13 +78,17 @@ the deprecated V5 and four-tab V3 apps), with a global **log filter** and
   single **Prepare downloads** button, offers four downloads: the `.jucm`
   with the synthesized scenario group, `variants.csv`,
   `case_variant_map.csv`, and (data-driven mode) `condition_mining.csv`.
-  Runs on flat and decomposed UCMs alike. A **Simulation** section at the
-  bottom then *runs* those scenarios the way jUCMNav does and colours the
-  model with what they walked — either the **coverage** of any subset, or an
-  **A vs B** comparison of two — with every element hoverable. The choice is
-  saved with the project and reproduced by an exported script.
+  Runs on flat and decomposed UCMs alike.
 
   ![Scenarios view](web/PM4Py-UCM-Scenarios.png)
+
+  A **Simulation** section at the bottom then *runs* those scenarios the way
+  jUCMNav does and colours the model with what they walked — either the
+  **coverage** of any subset, or an **A vs B** comparison of two — with every
+  element hoverable. The choice is saved with the project and reproduced by an
+  exported script.
+
+  ![Scenario execution](web/PM4Py-UCM-Simulation.png)
 
 - **Family** — a **deterministic advisor** ranks the case attributes by
   discriminative power (which one yields genuinely different processes), then
@@ -801,8 +805,6 @@ scenarios, or **Compare A vs B** for two. Coverage is split into *elements*
 (the path nodes) and *paths* (the segments between them), because a run can
 walk every node and still miss segments — and the same picker also exports
 the event log reduced to the selected variants.
-
-![Scenario execution](web/PM4Py-UCM-Simulation.png)
 
 ```python
 import pm4py_ucm
