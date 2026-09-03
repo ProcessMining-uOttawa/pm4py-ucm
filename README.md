@@ -794,6 +794,23 @@ leaves each enabled start point; an OR-fork takes the branch whose guard
 holds, an AND-fork spawns one token per arm, an AND-join waits for all of
 them, and a stub descends into its plug-in.
 
+In the web app this is the **Simulation** section at the bottom of the
+Scenarios view. It reports how many scenarios ran and how many ran cleanly,
+then paints the model with what they walked: **Coverage** for any subset of
+scenarios, or **Compare A vs B** for two. Coverage is split into *elements*
+(the path nodes) and *paths* (the segments between them), because a run can
+walk every node and still miss segments — and the same picker also exports
+the event log reduced to the selected variants.
+
+<!-- SCREENSHOT PLACEHOLDER — image supplied by the maintainer.
+     File:  web/PM4Py-UCM-Simulation.png
+     Shows: the Scenarios view scrolled to the Simulation section, with the
+            scenarios-run counts, the Highlight radio, the Elements/Paths
+            coverage split, and the highlighted model below.
+     Then replace this comment with:
+       ![Scenario execution](web/PM4Py-UCM-Simulation.png)
+     A test checks that every image path resolves, so add the file first. -->
+
 ```python
 import pm4py_ucm
 
@@ -1021,20 +1038,34 @@ pm4py_ucm/
 ├── api.py                                 # high-level read_/write_/discover_/view_
 ├── objects/ucm/
 │   ├── obj.py                             # UCM object model (URN metamodel)
+│   ├── validate.py                        # structural well-formedness (jUCMNav arity rules)
 │   ├── conversion/from_process_tree.py    # PM4Py process tree → UCM
 │   ├── conversion/decomposition.py        # hierarchical decomposition rules + presets
 │   ├── exporter/variants/jucm.py          # UCM → jUCMNav .jucm (XMI 2.0)
 │   ├── importer/variants/jucm.py          # jUCMNav .jucm → UCM
-│   └── layout/layouter.py                 # auto-layout for jUCMNav graphical view
+│   ├── layout/layouter.py                 # built-in layered auto-layout
+│   ├── layout/graphviz_layouter.py        # graphviz positions, matching the PNG
+│   └── util/                              # name wrapping, component colours
 ├── algo/
 │   ├── complexity.py                      # cost screening: profile / risk / replay estimate
 │   ├── performance.py                     # frequency/time overlays on activities + edges
+│   ├── traversal.py                       # conserving traversal counts from a replay
+│   ├── scenario_traversal.py              # jUCMNav's scenario execution, offline
+│   ├── scenario_coverage.py               # coverage + A/B comparison over a traversal
+│   ├── dashboards/                        # user-defined dashboards over a fact table
+│   │   ├── contract.py                    # widget/spec schema shared with the browser island
+│   │   ├── catalog.py                     # the metric catalog
+│   │   ├── engine.py                      # fact table + metric evaluation
+│   │   ├── formula.py                     # the ƒ custom-formula language
+│   │   └── view.py                        # self-contained interactive HTML export
 │   └── discovery/
 │       ├── ucm/
 │       │   ├── algorithm.py               # discovery dispatcher (mirrors BPMN)
 │       │   └── variants/inductive.py      # inductive-miner-based discovery
+│       ├── resources/                     # activity → performer mining
 │       ├── variants/                      # concurrency-aware variant clustering
 │       │   ├── choice_signature.py        # replay algorithm + signature canonicalisation
+│       │   ├── parses.py                  # the shared replay, computed once per log+tree
 │       │   └── clustering.py              # per-variant clustering + fitness / compression
 │       ├── scenarios/                     # scenario synthesis on top of a UCM + clustering
 │       │   ├── synthesis.py               # variables, ScenarioDefs, LoopEntryGuard, conditions
@@ -1043,16 +1074,20 @@ pm4py_ucm/
 │       │   └── reports.py                 # variants.csv / case_variant_map.csv / condition_mining.csv
 │       └── families/                      # attribute-partitioned model families
 │           ├── partition.py               # case-attribute detection + log partitioning
+│           ├── advisor.py                 # which attributes are worth partitioning on
 │           ├── family.py                  # ModelFamily container + zip/dir export
 │           ├── algorithm.py               # per-cell discovery driver
 │           ├── assembly.py                # combined + skeleton-umbrella assembly
 │           ├── scenarios.py               # per-cell path scenarios on the umbrella
 │           ├── stats.py                   # FamilyStats: process/activity/choice comparison
 │           └── report.py                  # self-contained interactive HTML report
+├── util/progress.py                       # progress_callback plumbing for the long loops
 └── visualization/ucm/
     ├── visualizer.py                      # apply / view / save (mirrors BPMN)
+    ├── svg.py                             # navigable inline SVG (stub links, hover text)
     ├── stacked.py                         # vertical multi-map composition
     ├── family_grid.py                     # family stack/matrix rendering (adaptive DPI)
+    ├── parameters.py                      # render parameter names
     └── variants/classic.py                # graphviz-based renderer
 ```
 
