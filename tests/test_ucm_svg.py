@@ -7,6 +7,7 @@ id namespacing (no cross-member links), and well-formed output. Skipped
 without graphviz on PATH."""
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 from xml.dom import minidom
@@ -262,3 +263,82 @@ class TestFamilyGridSvg:
         _wellformed(svg)
         for pid in _re.findall(r'id="pm-map-([^"]+)"', svg):
             assert _re.match(r"r\d+c\d+-\d+$", pid), pid
+
+
+class TestNoInternalNamesLeak:
+    """graphviz writes its own object name into every ``<title>`` — ``n1402…``
+    for a node, ``cluster_c1402…`` for a component cluster — and each embeds
+    ``id()`` of a Python object, i.e. a memory address. Browsers show a
+    ``<title>`` on hover, and the SVG is embedded verbatim in exported
+    dashboards and session reports, so the address travels with the file.
+
+    0.8.0 rewrote the titles it had hover text for, which covered the
+    coverage-painted path; a plain render kept all of them, and ``cluster_*``
+    survived on both. These pin that no render leaks one.
+    """
+
+    ADDRESS = re.compile(r"<title>[^<]*\d{9,}[^<]*</title>")
+
+    @staticmethod
+    def _mined():
+        pm4py = pytest.importorskip("pm4py")
+        import pm4py_ucm
+        from pathlib import Path
+        import zipfile
+        root = Path(__file__).resolve().parent.parent
+        xes = root / "demo" / "ClaimsPaymentLog.xes"
+        if not xes.exists():
+            zf = root / "demo" / "ClaimsPaymentLog.zip"
+            if not zf.exists():
+                pytest.skip("bundled log unavailable")
+            with zipfile.ZipFile(zf) as z:
+                z.extractall(root / "demo")
+        log = pm4py.read_xes(str(xes))
+        tree = pm4py.discover_process_tree_inductive(log, noise_threshold=0.2)
+        return log, tree
+
+    @pytest.mark.parametrize("style", ["ucm", "bpmn"])
+    def test_a_plain_render_leaks_no_address(self, style):
+        pytest.importorskip("graphviz")
+        import pm4py_ucm
+        from pm4py_ucm.visualization.ucm import svg as ucm_svg
+        log, tree = self._mined()
+        ucm = pm4py_ucm.discover_ucm_inductive(
+            log, parameters={"process_tree": tree})
+        out = ucm_svg.model_to_svg(ucm, style)
+        found = self.ADDRESS.findall(out)
+        assert not found, f"{len(found)} address titles, e.g. {found[:2]}"
+
+    def test_a_coverage_render_leaks_no_address_either(self):
+        """The cluster titles survived the 0.8.0 fix on this path too."""
+        pytest.importorskip("graphviz")
+        import pm4py_ucm
+        from pm4py_ucm.visualization.ucm import svg as ucm_svg
+        from pm4py_ucm.algo import scenario_traversal as trav
+        from pm4py_ucm.algo import scenario_coverage as cov
+        log, tree = self._mined()
+        ucm, _ = pm4py_ucm.discover_scenarios(
+            log, parameters={"process_tree": tree})
+        results = trav.traverse_all(ucm)
+        render = cov.coverage_render(ucm, cov.coverage(ucm, results[:1]))
+        out = ucm_svg.model_to_svg(ucm, "bpmn", coverage=render)
+        found = self.ADDRESS.findall(out)
+        assert not found, f"{len(found)} address titles, e.g. {found[:2]}"
+
+    def test_coverage_hover_text_still_arrives(self):
+        """The leak is fixed by DROPPING uninformative titles, so the ones
+        that carry real hover text must survive untouched."""
+        pytest.importorskip("graphviz")
+        import pm4py_ucm
+        from pm4py_ucm.visualization.ucm import svg as ucm_svg
+        from pm4py_ucm.algo import scenario_traversal as trav
+        from pm4py_ucm.algo import scenario_coverage as cov
+        log, tree = self._mined()
+        ucm, _ = pm4py_ucm.discover_scenarios(
+            log, parameters={"process_tree": tree})
+        results = trav.traverse_all(ucm)
+        render = cov.coverage_render(ucm, cov.coverage(ucm, results[:1]))
+        out = ucm_svg.model_to_svg(ucm, "bpmn", coverage=render)
+        assert out.count("covered") > 50
+        import xml.etree.ElementTree as ET
+        ET.fromstring(out)          # and it is still well-formed

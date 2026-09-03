@@ -369,130 +369,10 @@ def test_restored_scenario_that_no_longer_exists_is_dropped():
     assert st.session_state["sim_cov_picks"] == []
 
 
-def _older_apps():
-    """Every app file superseded by V6."""
-    return sorted(f for f in _WEB.glob("streamlit_app_v*.py")
-                  if f.name != "streamlit_app_v6.py")
-
-
-def test_every_app_older_than_v6_is_marked_deprecated():
-    """V6 is the app under development and the one ``streamlit_app.py`` serves.
-    Every earlier app must say so in its module docstring, so a contributor who
-    opens one is told before they start editing it."""
-    older = _older_apps()
-    assert older, "expected at least one pre-V6 app"
-    for f in older:
-        head = f.read_text(encoding="utf-8")[:2500]
-        assert "eprecated" in head, f"{f.name} is not marked deprecated"
-        assert "streamlit_app_v6.py" in head, (
-            f"{f.name} does not point readers at V6")
-
-
-def test_every_deprecated_app_says_so_in_its_ui():
-    """A run of any superseded app shows a notice at the top — the docstring
-    only reaches someone who opens the file.
-
-    V2 used to be the exception: it was frozen for a paper under review, and a
-    banner would have changed what the reviewers saw. That paper was accepted
-    and its final version points at the main app, so the exception is gone and
-    V2 carries the notice like the rest."""
-    for f in _older_apps():
-        src = f.read_text(encoding="utf-8")
-        assert "is deprecated.**" in src, f"{f.name} renders no notice"
-
-
-
-def _restore_written_keys():
-    """Session-state keys the restore path writes DIRECTLY (``ss[...] = ...``).
-
-    Literal keys come back as-is; an f-string key comes back as its literal
-    prefix, since the suffix is a log hash or a loop variable.
-    """
-    import ast
-
-    tree = ast.parse(_APP.read_text(encoding="utf-8"))
-    out = {}
-    for fn in ast.walk(tree):
-        if not (isinstance(fn, ast.FunctionDef) and fn.name in (
-                "_apply_project_config", "_apply_filter_spec_to_state")):
-            continue
-        for node in ast.walk(fn):
-            if not isinstance(node, ast.Assign):
-                continue
-            for t in node.targets:
-                if not (isinstance(t, ast.Subscript)
-                        and isinstance(t.value, ast.Name)
-                        and t.value.id == "ss"):
-                    continue
-                k = t.slice
-                if isinstance(k, ast.Constant):
-                    out[k.value] = "literal"
-                elif isinstance(k, ast.JoinedStr):
-                    out["".join(p.value for p in k.values
-                                if isinstance(p, ast.Constant))] = "prefix"
-    return out
-
-
-def test_no_restored_widget_also_passes_its_own_default():
-    """Streamlit warns — "created with a default value but also had its value
-    set via the Session State API" — for any widget that both receives a
-    default and has its key written by the app. A loaded project writes
-    exactly those keys, so every such widget must take its default *through*
-    session_state (``_seed_choice`` / ``setdefault``) and pass none itself.
-
-    Reported from a real load: nine widgets were in that state, of which the
-    user saw only ``cfg_decomp_preset`` because it renders first. The warning
-    is only a warning — session_state wins, so the restore does apply — but it
-    fires on every load and marks a genuine ambiguity about which value is in
-    force.
-
-    The exception is a widget that takes its default from ``_rv``: that IS the
-    restore channel for value=/default= widgets (see ``_rv``), and the restore
-    path seeds a slot for it rather than writing its key.
-    """
-    import ast
-
-    src = _APP.read_text(encoding="utf-8")
-    written = _restore_written_keys()
-    assert written, "could not find the restore path's direct key writes"
-
-    DEFAULTS = {"index", "value", "default"}
-    WIDGETS = {"selectbox", "radio", "multiselect", "checkbox", "slider",
-               "text_input", "number_input", "select_slider", "toggle"}
-    clashes = []
-    for node in ast.walk(ast.parse(src)):
-        if not isinstance(node, ast.Call):
-            continue
-        if getattr(node.func, "attr", None) not in WIDGETS:
-            continue
-        kw = {k.arg: k for k in node.keywords if k.arg}
-        if "key" not in kw:
-            continue
-        kn = kw["key"].value
-        if isinstance(kn, ast.Constant):
-            key = kn.value
-        elif isinstance(kn, ast.JoinedStr):
-            key = "".join(p.value for p in kn.values
-                          if isinstance(p, ast.Constant))
-        else:
-            continue
-        passed = sorted(DEFAULTS & set(kw))
-        if not passed:
-            continue
-        # A default sourced from _rv is the restore slot, not a clash.
-        if any("_rv(" in (ast.unparse(kw[d].value)) for d in passed):
-            continue
-        for prefix, kind in written.items():
-            if key == prefix or (kind == "prefix" and key.startswith(prefix)):
-                clashes.append(
-                    f"line {node.lineno}: st.{node.func.attr}(key={key!r}) "
-                    f"passes {passed} but the restore path writes it")
-                break
-    assert not clashes, (
-        "widgets both restored and given their own default:\n  "
-        + "\n  ".join(clashes)
-        + "\nSeed the default through session_state (_seed_choice / "
-          "setdefault) and drop the index=/value=/default= argument.")
+# The pre-V6 deprecation checks that used to live here moved to
+# tests/test_release_consistency.py, where they derive the current app
+# from the shim instead of hard-coding V6 -- so they follow the next
+# major app version rather than guarding a file nobody runs.
 
 
 def test_progress_callbacks_into_cached_functions_only_update_labels():
@@ -560,3 +440,27 @@ def test_progress_callbacks_into_cached_functions_only_update_labels():
         "other than its status label:\n  " + "\n  ".join(offenders)
         + "\nOnly `.update(label=...)` replays safely on a cache hit; see "
           "_ProgressUI's docstring.")
+
+
+def test_cache_audit_finds_nothing_in_the_deployed_app():
+    """Run ``tools/cache_audit.py`` over V6 and require a clean report.
+
+    The audit encodes the two Streamlit cache faults this project has actually
+    shipped — a cached function drawing into a block created outside it, and a
+    call site letting a cache-key parameter fall back to its default. Both are
+    invisible to the rest of the suite: the first only fails on the *second*
+    call, and the second never fails at all, it just returns the wrong data.
+
+    Running it here means the audit cannot rot, and a new cached function that
+    reintroduces either fault fails CI rather than a user's session.
+    """
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parent.parent
+    proc = subprocess.run(
+        [sys.executable, str(root / "tools" / "cache_audit.py"), str(_APP)],
+        capture_output=True, text=True, cwd=str(root))
+    assert proc.returncode == 0, (
+        "tools/cache_audit.py reported a cache hazard:\n" + proc.stdout
+        + proc.stderr)

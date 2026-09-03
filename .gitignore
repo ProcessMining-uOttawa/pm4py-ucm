@@ -85,7 +85,11 @@ demo/*.png
 !demo/*.sample
 
 # Claude Code / agent-harness local settings
-.claude/
+.claude/*
+# ...except the project's own skills, which belong to the repo and
+# have to travel with it. (Re-including a child needs the PARENT
+# not to be excluded, hence `.claude/*` rather than `.claude/`.)
+!.claude/skills/
 
 # Tutorial notebook output (regenerated on each run)
 demo/output/

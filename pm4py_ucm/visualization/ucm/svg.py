@@ -142,6 +142,14 @@ def stack_svgs(panels: List[Tuple[str, str]], *, id_prefix: str = "",
 
 _TITLE_RE = re.compile(r"(<title>)(.*?)(</title>)", re.S)
 
+#: graphviz's own object names, which it writes into every ``<title>``: a node
+#: (``n140234…``), an edge (``n140234&#45;&gt;n140235``), a component cluster
+#: (``cluster_c140236…``) or the graph itself (``%3``). Each embeds ``id()`` of
+#: a Python object — a memory address — and browsers show it on hover. There is
+#: nothing to show a reader here, so these are dropped rather than rewritten.
+_INTERNAL_TITLE_RE = re.compile(
+    r"^(?:n\d+(?:&#45;&gt;n\d+)?|cluster_[A-Za-z]*\d+|%\d+)$")
+
 
 def _tooltip_names(ucm: "UCM", by_element_id: Dict[int, str]) -> Dict[str, str]:
     """Re-key hover text from ``id(element)`` to the graphviz object name.
@@ -175,17 +183,24 @@ def _inject_tooltips(svg: str, tips: Dict[str, str]) -> str:
     that name embeds a memory address. Rewriting it is both how the
     tooltip arrives and a small improvement on what was there.
 
-    Only titles with an entry in ``tips`` are touched; everything else is
-    left exactly as graphviz wrote it.
+    A title with an entry in ``tips`` becomes that text. A title still holding
+    one of graphviz's internal names is **dropped**: it is an address, it says
+    nothing to a reader, and leaving it means every diagram — not just a
+    coverage-painted one — shows an address on hover and bakes one into every
+    exported dashboard and report. Anything else is left exactly as graphviz
+    wrote it.
+
+    This runs even when ``tips`` is empty, which is the plain Model-view
+    render: dropping the addresses is worth doing on its own.
     """
-    if not tips:
-        return svg
 
     def repl(mo):
         text = tips.get(mo.group(2))
-        if text is None:
-            return mo.group(0)
-        return f"{mo.group(1)}{escape(text)}{mo.group(3)}"
+        if text is not None:
+            return f"{mo.group(1)}{escape(text)}{mo.group(3)}"
+        if _INTERNAL_TITLE_RE.match(mo.group(2).strip()):
+            return ""
+        return mo.group(0)
 
     return _TITLE_RE.sub(repl, svg)
 

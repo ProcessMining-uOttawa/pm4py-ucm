@@ -66,24 +66,24 @@ The frozen-V2 rule is **over**. Nothing needs to stay byte-stable for it any
 more. (`.jucm` byte-stability for jUCMNav interop is a separate, still-live
 goal — do not confuse the two.)
 
-## Release checklist (for the next one)
+## Releasing
 
-1. Bump **three** sites, kept in lock-step by a test: `pyproject.toml`,
-   `pm4py_ucm/__init__.py` (`__version__`), `web/sessions/codegen.py`
-   (`GENERATOR_VERSION`).
-2. Retitle `[Unreleased]` and open a fresh empty one.
-3. Full suite, then PR → merge.
-4. `gh release create vX.Y.Z --target main` — the tag's commit must contain
-   `.github/workflows/publish.yml`, or the release-triggered run is created
-   **silently not at all**.
-5. Check the tag does not already exist, with a **version sort**:
-   `git ls-remote --tags origin | sed 's#.*refs/tags/##' | sort -V | tail`.
-   Lexical order puts `v0.7.10` before `v0.7.5`.
-6. Approve the `pypi` environment gate. It is a required-reviewer
-   checkpoint; the build job passes first and the upload waits.
-7. Verify with `pip install pm4py-ucm==X.Y.Z --dry-run --ignore-installed
-   --no-cache-dir`. **Use `--no-cache-dir`** — a stale local pip index
-   reported "no matching distribution" for a release that was already live.
+Use the **`release` skill** (`.claude/skills/release/SKILL.md`) — it performs
+the cut and stops at the two gates that need a human, the `pypi` approval and
+anything a check reports.
+
+Start with `python tools/release_check.py <version>`: version sites, changelog
+state, branch and tree, whether the tag is free **by version order** (a lexical
+sort puts `v0.7.10` before `v0.7.5`), and whether `publish.yml` is present at
+HEAD — without it the release-triggered run is created *silently not at all*.
+
+The cross-cutting claims are guarded by `tests/test_release_consistency.py`
+rather than by a checklist: a superseded app described as deployed, a retired
+deployment left linked, a broken local link, an app the shim does not run. That
+split is deliberate — an audit of this repo found that **everything with an
+executable guard held, and everything that was prose drifted**. What still
+needs judgement (HANDOFF, the notebooks, the screenshots the maintainer
+captures by hand) is listed in the skill.
 
 ## Traps, and what they cost
 

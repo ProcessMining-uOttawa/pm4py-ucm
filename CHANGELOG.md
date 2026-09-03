@@ -7,6 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A systematic release mechanism, split by what can be checked.** An audit of
+  what drifted in this repo versus what did not gave an unambiguous answer:
+  everything with an executable guard held — the version sites, the session
+  registry's gather and restore, the filter keys — while everything that was
+  prose drifted, including the root README calling V5 the deployed app for
+  weeks after V6 shipped. So the mechanical claims became checks, and only what
+  genuinely needs judgement became a procedure.
+
+  - `tests/test_release_consistency.py` — a superseded app described as
+    deployed, a retired deployment still linked, a broken local link, an app
+    the shim does not run, documentation naming a session parameter that no
+    longer exists. Each rule was verified against a real past mistake, and
+    each was confirmed to fail when that mistake is reintroduced.
+  - `tools/release_check.py` — one command reporting readiness: version sites,
+    changelog state, tree and branch, whether the tag is free *by version
+    order*, and whether `publish.yml` is present at HEAD.
+  - `.claude/skills/release/SKILL.md` — the cut itself, stopping at the `pypi`
+    gate. `.gitignore` now admits `.claude/skills/` so the procedure travels
+    with the repo.
+
+  Three plausible rules were **discarded** during the audit because the project
+  does not promise them: exhaustive registry documentation (§5 of
+  `docs/sessions.md` is an example list, and says so), current version pins in
+  the notebooks (theirs are historical "As of …" notes), and regenerated
+  screenshots (captured by hand, deliberately). A guard encoding a rule nobody
+  made is worse than none.
+
+  The V6-specific deprecation check moved here and now derives the current app
+  from the shim, so it follows the next major app version instead of quietly
+  guarding a file nobody runs.
+
+- **`tools/cache_audit.py`** — a static audit of the web app for the ways
+  `@st.cache_data` goes wrong, run as part of the suite. It checks the two
+  faults this project has actually shipped: a cached function drawing into a
+  block created outside it (loud, but only on the *second* call), and a call
+  site letting a cache-key parameter fall back to its default (silent). Both
+  were invisible to the rest of the suite, and both took a user report to find.
+  The third fault it documents — values keyed on object identity or lazily
+  allocated state, which differ across the cache's pickle boundary — cannot be
+  found statically, so it is written down for the reviewer instead.
+
+### Fixed
+
+- **Every rendered diagram leaked Python memory addresses.** graphviz writes
+  its own object name into each `<title>` — `n140234…` for a node,
+  `cluster_c140236…` for a component cluster — and each embeds `id()` of a
+  Python object. Browsers show a `<title>` on hover, and the SVG is embedded
+  verbatim in exported dashboards and session reports, so the address travelled
+  with the file.
+
+  0.8.0 rewrote the titles it had hover text for, which covered the
+  coverage-painted path and was where the claim "stopped every diagram exposing
+  memory addresses on hover" came from. It did not: a plain Model-view render
+  kept **109** of them on `ClaimsPaymentLog`, and `cluster_*` titles survived on
+  both paths (**21** even with coverage). Titles holding one of graphviz's
+  internal names are now dropped outright — there is nothing in them for a
+  reader — while titles carrying real hover text are untouched.
+
+- **The dashboard's cache key did not include the log filter.** Its own
+  docstring argued the key was sound because `storage_key` identifies the log,
+  but that is the file's hash, while the fact table it caches is built from the
+  *filtered* log. No collision could be constructed — `model_svg`, also in the
+  key, happens to vary with the data through the mined structure and the
+  performer colours — but a key should not rest on another argument's
+  incidental correlation. `filter_spec` is now part of it.
+
+
 ## [0.8.2] — 2026-08-27
 
 ### Fixed
