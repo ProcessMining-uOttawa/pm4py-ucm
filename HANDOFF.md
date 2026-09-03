@@ -162,12 +162,25 @@ events; ~10 min to mine after reduction).
 
 ## Open items, by value
 
-1. **Stale `.jucm` artifacts.** Any `.jucm` exported before #108 is likely
+1. **The five README screenshots show a UI that no longer exists.**
+   `web/PM4Py-UCM-*.png` were captured at **v0.5.2**: the tabbed layout, a
+   "Decomposition (Model tab only)" heading, no left rail, no cost screen, no
+   Simulation. They are three releases and a redesign out of date, and there is
+   no shot of the Scenarios view's Simulation section at all.
+
+   The maintainer captures these by hand, and that is the arrangement — but
+   note **an agent cannot do it**: the browser pane caps a screenshot at
+   ~800×525 (region crop is unsupported, and the emulated viewport is
+   downscaled), against 2525×1277 for the current files, and it cannot write
+   the captured image to disk at all. Driving the app into the right state for
+   each shot is the part an agent *can* do.
+
+2. **Stale `.jucm` artifacts.** Any `.jucm` exported before #108 is likely
    malformed; `family_umbrella.jucm` carried the defect across 14 maps.
    Anything archived is worth regenerating.
-2. **The default noise threshold of 0.20.** A clinical log fits zero cases at
+3. **The default noise threshold of 0.20.** A clinical log fits zero cases at
    it. Still unresolved, and still the oldest open question here.
-3. **`demo/model_families_tutorial.ipynb` writes ~2 MB of embedded SVG.** Fine,
+4. **`demo/model_families_tutorial.ipynb` writes ~2 MB of embedded SVG.** Fine,
    but the notebook grew from 909 KB when it moved to vector output.
 
 Struck from this list at 0.8.0: V5's "Notation (Model tab)" label. V5 is
