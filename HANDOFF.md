@@ -1,20 +1,21 @@
-# Handoff — after 0.8.2
+# Handoff — after 0.8.3
 
-**0.8.2 is released.** Scenario simulation, coverage and A/B comparison are
+**0.8.3 is released.** Scenario simulation, coverage and A/B comparison are
 complete: stages 1–5 of [`docs/scenario_simulation.md`](docs/scenario_simulation.md)
 are all on `main`, and that plan is now history rather than a to-do. 0.8.1
 added the validation gates, the variant-filtered log export, and two fixes
-found by using the app; 0.8.2 is a single-fix patch for a 0.8.0 regression
-that broke the Family view on every second look.
+found by using the app; 0.8.2 was a single-fix patch for a 0.8.0 regression that
+broke the Family view on every second look; 0.8.3 stops every rendered diagram
+leaking memory addresses, and adds the release tooling described below.
 
 ## State on arrival
 
-- `main` carries 0.8.2, tagged `v0.8.2`, published to PyPI.
-- All three version sites read **0.8.2** and are kept in lock-step by a test:
+- `main` carries 0.8.3, tagged `v0.8.3`, published to PyPI.
+- All three version sites read **0.8.3** and are kept in lock-step by a test:
   `pyproject.toml`, `pm4py_ucm/__init__.py`, `web/sessions/codegen.py`
   (`GENERATOR_VERSION`).
 - `CHANGELOG.md` has a fresh empty `[Unreleased]`.
-- Suite: **1170 passed, 0 failed, 0 skipped** (~5½ min locally); CI green on
+- Suite: **1180 passed, 0 failed, 0 skipped** (~6 min locally); CI green on
   Python 3.9–3.12.
 - **One deployment.** https://pm4py-ucm.streamlit.app/ serves V6 through the
   `streamlit_app.py` shim. The second deployment
@@ -95,6 +96,10 @@ Carried forward because each one bit during development:
   wording changes. This rule has now been learned three times.
 - **Selections are recorded by name, not rank or index.** A rank is relative to
   a population and any other setting moves that population.
+- **A cache key must be determined by what is hashed.** A ``_``-prefixed
+  parameter is excluded from the key; if the hashed ones do not determine it,
+  the cache serves a result computed for different inputs, silently. Run
+  `python tools/cache_audit.py web/streamlit_app_v6.py` — the suite does.
 - **A cached function may not touch an element created outside it.** Streamlit
   records every element an `@st.cache_data` function writes so it can replay
   them on a hit; a child element created on an *external* block replays into a
