@@ -76,6 +76,18 @@ loaded log:
 
   ![Scenarios view](PM4Py-UCM-Scenarios.png)
 
+  A **Simulation** section at the bottom then *runs* those scenarios the way
+  jUCMNav does — a token per enabled start point, an OR-fork taking the branch
+  whose guard holds, an AND-join waiting for every arm — and reports what
+  jUCMNav's Problems view would. It then colours the model with what the run
+  walked: **Coverage** of any subset of scenarios, split into elements and
+  paths, or **Compare A vs B** painting one scenario green, the other orange
+  and the shared part purple. Every element is hoverable, the choice is saved
+  with the project, and the same selection exports the event log reduced to
+  those variants.
+
+  ![Scenario execution](PM4Py-UCM-Simulation.png)
+
 - **Family** — partition the log by 1–2 case attributes and mine one model
   per combination. A single **Prepare downloads** button then builds the
   per-cell zip / combined `.jucm` / dynamic-stub umbrella `.jucm` / grid PNG

@@ -160,8 +160,12 @@ def test_local_links_and_images_resolve():
         if not doc.exists():
             continue
         base = doc.parent
-        for m in re.finditer(r"\]\(([^)#][^)]*)\)",
-                             doc.read_text(encoding="utf-8")):
+        # An HTML comment is not rendered, so a link inside one is not a live
+        # link -- that is how a screenshot placeholder names the file it is
+        # waiting for without the guard calling it broken.
+        text = re.sub(r"<!--.*?-->", "", doc.read_text(encoding="utf-8"),
+                      flags=re.S)
+        for m in re.finditer(r"\]\(([^)#][^)]*)\)", text):
             target = m.group(1).split("#")[0].strip()
             if not target or target.startswith(("http", "mailto:")):
                 continue

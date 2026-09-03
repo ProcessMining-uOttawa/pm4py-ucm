@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The README's Module layout was three subsystems out of date.** Nothing it
+  listed had been removed, but eighteen modules were missing — the whole
+  `algo/dashboards/` layer, the 0.8.0 simulator and coverage
+  (`scenario_traversal.py`, `scenario_coverage.py`), structural validation
+  (`validate.py`), the SVG renderer, the graphviz layouter, the shared replay
+  table and the partition advisor. Rewritten against the real tree; leaf
+  directories are still summarised in one line, as before.
+- Both READMEs now describe the **Simulation** section — `web/README.md` never
+  mentioned it at all — and carry a **scenario-execution screenshot** beside it.
+- **All six view screenshots are current.** The previous five were captured at
+  v0.5.2: the tabbed layout, no left rail, no cost screen, no Simulation. They
+  now show V6 as it ships, and there is a shot of the Simulation section for
+  the first time. The link guard skips HTML comments, so a placeholder can name
+  an image it is waiting for without being read as a broken link.
+
+
 ## [0.8.3] — 2026-08-27
 
 ### Added
