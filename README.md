@@ -802,14 +802,7 @@ scenarios, or **Compare A vs B** for two. Coverage is split into *elements*
 walk every node and still miss segments — and the same picker also exports
 the event log reduced to the selected variants.
 
-<!-- SCREENSHOT PLACEHOLDER — image supplied by the maintainer.
-     File:  web/PM4Py-UCM-Simulation.png
-     Shows: the Scenarios view scrolled to the Simulation section, with the
-            scenarios-run counts, the Highlight radio, the Elements/Paths
-            coverage split, and the highlighted model below.
-     Then replace this comment with:
-       ![Scenario execution](web/PM4Py-UCM-Simulation.png)
-     A test checks that every image path resolves, so add the file first. -->
+![Scenario execution](web/PM4Py-UCM-Simulation.png)
 
 ```python
 import pm4py_ucm

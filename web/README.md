@@ -86,13 +86,7 @@ loaded log:
   with the project, and the same selection exports the event log reduced to
   those variants.
 
-  <!-- SCREENSHOT PLACEHOLDER — image supplied by the maintainer.
-       File:  PM4Py-UCM-Simulation.png  (this directory)
-       Shows: the Simulation section with the run counts, the Highlight radio,
-              the Elements/Paths split and the highlighted model.
-       Then replace this comment with:
-         ![Scenario execution](PM4Py-UCM-Simulation.png)
-       A test checks that every image path resolves, so add the file first. -->
+  ![Scenario execution](PM4Py-UCM-Simulation.png)
 
 - **Family** — partition the log by 1–2 case attributes and mine one model
   per combination. A single **Prepare downloads** button then builds the
