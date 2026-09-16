@@ -84,6 +84,7 @@ import tempfile
 import time
 import traceback
 import uuid
+import warnings
 import zipfile
 from datetime import date
 from pathlib import Path
@@ -246,6 +247,24 @@ def _csv_columns(csv_bytes: bytes, _file_hash: str) -> List[str]:
             return []
         reader = _csv.reader(text[:1])
         return next(reader, [])
+
+
+@st.cache_data(show_spinner="Checking the column mapping...")
+def _csv_mapping_problem(csv_bytes: bytes, csv_columns, _file_hash: str):
+    """A one-line reason the applied CSV mapping cannot be mined, or None.
+
+    Formats the first few thousand rows exactly as the mining path does
+    (:func:`_format_csv_df`), so a timestamp column that does not parse — or
+    an id/activity column that is missing — is reported in the mapping panel
+    the moment the mapping is applied, instead of as an opaque crash from the
+    first pm4py call several screens later.
+    """
+    try:
+        head = pd.read_csv(io.BytesIO(csv_bytes), nrows=5000, low_memory=False)
+        _format_csv_df(head, *csv_columns)
+    except Exception as exc:
+        return str(exc)
+    return None
 
 
 def _html_escape_min(text: str) -> str:
@@ -740,7 +759,77 @@ def _format_csv_df(df, case_col, activity_col, ts_col, role_col, resource_col):
     df = pm4py.format_dataframe(
         df, case_id=case_col, activity_key=activity_col, timestamp_key=ts_col,
     )
+    df = _ensure_datetime_timestamp(df, ts_col)
     return _coerce_str_object(df)
+
+
+def _ensure_datetime_timestamp(df, ts_col):
+    """Make sure the mapped timestamp column really is a datetime.
+
+    ``pm4py.format_dataframe`` converts text columns with a *silent*
+    ``try/except: pass``, and only text columns — so a timestamp it cannot
+    parse under its default format, or an integer epoch column, comes back
+    unchanged. Nothing complains until the first mine, deep inside pm4py
+    ("the dataframe should (at least) contain a column of type date"), which
+    on Streamlit Cloud is a redacted crash with no hint that the column
+    mapping is the problem. This happened on the bundled ``devlog.csv``,
+    whose ISO-8601 ``2026-07-17T20:27:06.425Z`` stamps the deployed pm4py
+    left as strings.
+
+    Parse it here instead: ISO-8601 first (the fast path), then pandas'
+    per-element ``mixed`` parser, then integer epochs (unit guessed from the
+    magnitude). Rows whose stamp cannot be read are dropped, as
+    ``format_dataframe`` does for its own parse. If *no* row parses, raise a
+    ``ValueError`` that names the chosen column, so the mapping panel can
+    show it next to the selector that caused it.
+    """
+    ts_key = "time:timestamp"
+    if ts_key not in df.columns or pd.api.types.is_datetime64_any_dtype(df[ts_key]):
+        return df
+    raw = df[ts_key]
+    parsed = None
+    if pd.api.types.is_numeric_dtype(raw):
+        try:
+            peak = float(pd.to_numeric(raw, errors="coerce").abs().max())
+        except (TypeError, ValueError):
+            peak = float("nan")
+        if peak == peak:  # not NaN
+            unit = ("s" if peak < 1e11 else "ms" if peak < 1e14
+                    else "us" if peak < 1e17 else "ns")
+            try:
+                parsed = pd.to_datetime(raw, unit=unit, utc=True, errors="coerce")
+            except (TypeError, ValueError, OverflowError):
+                parsed = None
+    else:
+        text = raw.astype(str).str.strip()
+        for kwargs in ({"format": "ISO8601"}, {"format": "mixed"}, {}):
+            try:
+                with warnings.catch_warnings():
+                    # The last resort infers per element; its "could not
+                    # infer format" warning is expected here, not news.
+                    warnings.simplefilter("ignore")
+                    parsed = pd.to_datetime(
+                        text, utc=True, errors="coerce", **kwargs)
+            except (TypeError, ValueError):
+                parsed = None
+                continue
+            if parsed.notna().any():
+                break
+    # Accept only when most of the present values read as dates: a free-text
+    # column with the odd date in it is a wrong mapping, not a timestamp.
+    n_present = int(raw.notna().sum())
+    n_parsed = int(parsed.notna().sum()) if parsed is not None else 0
+    if n_parsed == 0 or n_parsed < 0.5 * n_present:
+        sample = ", ".join(repr(v) for v in raw.dropna().astype(str).head(3))
+        raise ValueError(
+            f"The column mapped as timestamp, `{ts_col}`, does not contain "
+            f"dates or times (first values: {sample or 'empty'}). Choose the "
+            "column that holds each event's date/time under CSV columns and "
+            "apply the mapping again."
+        )
+    df = df.copy()
+    df[ts_key] = parsed
+    return df[df[ts_key].notna()]
 
 
 def _read_log_for_scenarios(log_bytes: bytes, log_kind: str, csv_columns):
@@ -3848,6 +3937,11 @@ if log_kind == "csv":
 
     applied_csv_columns = st.session_state.get("applied_csv_columns")
     if applied_csv_columns is None:
+        # A mapping that was applied and then rejected (see below) is
+        # explained here, beside the selectors that need changing.
+        _bad = st.session_state.get("csv_mapping_error")
+        if _bad and _bad[0] == file_hash:
+            _src_exp.error(f"That column mapping cannot be mined: {_bad[1]}")
         _src_exp.info("Review the column mapping above, then click "
                       "**Apply column mapping** to start mining.")
         if _src_exp.button("Apply column mapping", type="primary",
@@ -3862,6 +3956,15 @@ if log_kind == "csv":
             st.session_state["applied_csv_columns"] = candidate_csv_columns
             st.rerun()
     csv_columns = st.session_state["applied_csv_columns"]
+    # Reject a mapping that cannot be mined *here*, before any of the
+    # pre-mining screens (cost screen, replay estimate) hit it unguarded.
+    # Un-apply it and rerun so the panel reopens with the reason shown.
+    _problem = _csv_mapping_problem(log_bytes, csv_columns, file_hash)
+    if _problem:
+        st.session_state["csv_mapping_error"] = (file_hash, _problem)
+        st.session_state.pop("applied_csv_columns", None)
+        st.rerun()
+    st.session_state.pop("csv_mapping_error", None)
 
 effective_min_support = 0.0 if _min_support_disabled else min_support
 decomposition_spec = st.session_state["applied_decomp"]

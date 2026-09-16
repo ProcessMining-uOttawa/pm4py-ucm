@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A CSV whose timestamp pm4py could not parse crashed the app at its first
+  mine** — on Streamlit Cloud as a redacted "the dataframe should (at least)
+  contain a column of type date", with no hint that the column mapping was
+  the cause. Seen on the bundled `devlog.csv` (ISO-8601 stamps with `T` and
+  `Z`) after a session on another CSV. `pm4py.format_dataframe` converts text
+  columns inside a silent `try/except: pass` and never converts numeric
+  ones, so an unparsed timestamp reached the miner as strings. The CSV
+  import now parses the mapped timestamp itself (ISO-8601, then pandas'
+  per-element parser, then integer epochs by magnitude), drops rows that do
+  not read, and when nothing in the column reads as a date names the column
+  in a `ValueError`. That check also runs on the first rows the moment a
+  mapping is applied: a mapping that cannot be mined is un-applied and the
+  reason shown in the **Log source & columns** panel, instead of the
+  pre-mining screens hitting it unguarded.
+
 ### Changed
 
 - **The README's Module layout was three subsystems out of date.** Nothing it
