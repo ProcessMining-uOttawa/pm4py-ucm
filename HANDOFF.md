@@ -1,27 +1,76 @@
-# Handoff — after 0.8.3
+# Handoff — after 0.8.4
 
-**0.8.3 is released.** Scenario simulation, coverage and A/B comparison are
-complete: stages 1–5 of [`docs/scenario_simulation.md`](docs/scenario_simulation.md)
-are all on `main`, and that plan is now history rather than a to-do. 0.8.1
-added the validation gates, the variant-filtered log export, and two fixes
-found by using the app; 0.8.2 was a single-fix patch for a 0.8.0 regression that
-broke the Family view on every second look; 0.8.3 stops every rendered diagram
-leaking memory addresses, and adds the release tooling described below.
+**0.8.4 is released.** It is a file-loading hardening patch: three PRs
+(#127, #130, #131) fixed two upload crashes reported from the deployed app
+and five more found by auditing the loaders, and guarded the first parse of
+any upload so what is left becomes a message rather than a crash. Before it,
+0.8.0–0.8.3 delivered scenario simulation, coverage and A/B comparison
+(stages 1–5 of [`docs/scenario_simulation.md`](docs/scenario_simulation.md)),
+the validation gates, the variant-filtered log export, and the release
+tooling described below.
 
 ## State on arrival
 
-- `main` carries 0.8.3, tagged `v0.8.3`, published to PyPI.
-- All three version sites read **0.8.3** and are kept in lock-step by a test:
+- `main` carries 0.8.4, tagged `v0.8.4`, published to PyPI.
+- All three version sites read **0.8.4** and are kept in lock-step by a test:
   `pyproject.toml`, `pm4py_ucm/__init__.py`, `web/sessions/codegen.py`
   (`GENERATOR_VERSION`).
 - `CHANGELOG.md` has a fresh empty `[Unreleased]`.
-- Suite: **1180 passed, 0 failed, 0 skipped** (~6 min locally); CI green on
+- Suite: **1217 passed, 0 failed, 0 skipped** (~6 min locally); CI green on
   Python 3.9–3.12.
 - **One deployment.** https://pm4py-ucm.streamlit.app/ serves V6 through the
   `streamlit_app.py` shim. The second deployment
   (`pm4py-ucm-scenarios`, which served the frozen V2) has been **deleted** —
   the SAM 2026 paper that required it was accepted and its final version
   points at the main app. That URL now 404s; do not link it.
+
+## What 0.8.4 added
+
+All of it is in the web app's upload path; the library is untouched.
+
+- **The CSV import owns its timestamp.** `pm4py.format_dataframe` converts
+  text columns inside a silent `try/except: pass` and never converts numeric
+  ones, so a timestamp it could not read reached the miner as strings and
+  died deep in pm4py ("the dataframe should (at least) contain a column of
+  type date") — redacted on Streamlit Cloud. `_format_csv_df` now parses the
+  mapped column itself (ISO-8601 strictly, then `mixed`, then integer epochs)
+  and names the column in a `ValueError` when nothing reads. The mapping panel
+  runs that formatter on the first 5000 rows on **Apply** and refuses an
+  unminable mapping with the reason shown.
+- **Every XES read goes through `_plain_xes_bytes`**, which unwraps zip and
+  gzip by magic bytes. The temp file pm4py reads is always called `log.xes`,
+  and pm4py picks its reader by extension, so a `.xes.gz` used to go to the
+  XML parser (`NoTopLevelLog`). Finder's `__MACOSX/._x` twins are skipped.
+- **Every CSV read goes through `_read_csv_bytes`**, which sniffs encoding
+  (BOM, UTF-8, UTF-16, cp1252) and delimiter (`,` `;` tab `|`). A `.csv.gz`
+  is inflated in `_accept_log_bytes` and judged by content.
+- **Day-first dates** are a switch in the mapping panel, carried as an
+  optional **sixth element of `csv_columns`** (only present when on, so
+  five-element projects compare equal). Unpack sites use `csv_columns[:5]`.
+  The exported script honours it.
+- **The cost screen's `_screen_log` call is guarded.** It is the first full
+  parse of any upload; a reader failure is now a *Could not read …* message
+  with a hint per file kind, then `st.stop()`.
+
+Traps this release taught:
+
+- **dateutil applies `dayfirst` to ISO dates too**: `2024-06-03` becomes 6
+  March. Parse ISO8601 strictly first and only hand the remainder to `mixed`
+  (`_parse_stamps`). The ambiguity detector compares the two readings on a
+  sample and must never flag ISO logs.
+- **pm4py's `check_pandas_dataframe_columns` has two different messages** for
+  a bad timestamp. "the timestamp column should be of type datetime" means
+  some *other* column parsed as a date; "should (at least) contain a column of
+  type date" means none did. The second is the one a lone unparsed timestamp
+  produces.
+- **Code emitted into the exported script is a template**: `"\n"` and `b"\xef"`
+  escapes inside `web/sessions/codegen.py`'s reader body become literal
+  characters in the generated file and break it. Use `chr(10)` /
+  `codecs.BOM_UTF8`; `tests/test_sessions_codegen.py` compiles the output.
+- **The Cloud's pm4py could not be pinned down** from the traceback (its
+  `pandas_utils.py` differs by one line from every 2.7.18–2.7.23.8 release
+  tried); the fix covers the failure mode regardless of cause. "Manage app"
+  logs would name the build if it ever matters.
 
 ## What 0.8.1 added
 

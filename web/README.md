@@ -224,15 +224,22 @@ When the uploaded file is CSV, five dropdowns appear under **CSV columns**:
 |---|---|---|
 | Case id column | ✓ | Trace identifier |
 | Activity column | ✓ | Event name |
-| Timestamp column | ✓ | Parsed with pandas/`pm4py.format_dataframe` |
+| Timestamp column | ✓ | ISO-8601, most other date formats, or integer epochs (seconds → ns) |
 | Role column (optional) | — | Renamed to `org:role` for performer mining |
 | Resource column (optional) | — | Renamed to `org:resource` for performer mining |
+| Day-first dates | — | Read `03/06/2024` as 3 June, not 6 March. ISO dates are unaffected. A warning appears when the column reads differently both ways. |
 
 Sensible defaults are auto-detected from common column names
 (`case:concept:name`, `concept:name`, `time:timestamp`, `org:role`, `Resource`,
 `Assignee`, …). Review them, adjust if needed, then click **Apply column
 mapping** to start mining. Mining is *blocked* until this button is clicked
 on a fresh upload, so the miner never runs against a wrongly-guessed mapping.
+A mapping whose timestamp column does not read as dates is refused on Apply,
+with the column named and its first values shown.
+
+The file itself may be comma-, semicolon-, tab- or pipe-delimited, in UTF-8
+(with or without BOM), UTF-16 or Windows-1252 — both are detected. A
+`.csv.gz` is accepted and inflated on upload.
 
 Any column may fill any role — including one already named `concept:name`,
 `org:role`, etc. The role/resource columns are mapped to `org:role` /
