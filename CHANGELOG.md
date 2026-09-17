@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Uploading a `.xes.gz` failed with a bare `NoTopLevelLog`.** The app
+  writes an upload to a temp file called `log.xes` and pm4py picks its reader
+  by that extension, so the gzip bytes went straight to the XML parser. The
+  same happened to a `.xes.gz` entry inside a zip. All XES read paths now go
+  through one helper that detects zip and gzip wrappers by their magic bytes
+  and unwraps both.
 - **A CSV whose timestamp pm4py could not parse crashed the app at its first
   mine** — on Streamlit Cloud as a redacted "the dataframe should (at least)
   contain a column of type date", with no hint that the column mapping was

@@ -217,6 +217,25 @@ def _extract_xes_from_zip(zip_bytes: bytes) -> bytes:
     )
 
 
+def _plain_xes_bytes(log_bytes: bytes, log_kind: str) -> bytes:
+    """The uploaded log as uncompressed XES XML, whatever wrapper it came in.
+
+    A ``.zip`` is opened for its single XES entry; a gzip stream (a
+    ``.xes.gz`` upload, or a ``.xes.gz`` entry inside the zip) is inflated.
+    Detection is by magic bytes, not by name: the app writes the result to a
+    temp file called ``log.xes`` for pm4py, and pm4py picks its reader by
+    that extension — so gzip bytes behind a ``.xes`` name reached the XML
+    parser and died with a bare ``NoTopLevelLog``.
+    """
+    raw = log_bytes
+    if log_kind == "zip" or (len(raw) >= 2 and raw[:2] == b"PK"):
+        raw = _extract_xes_from_zip(raw)
+    if len(raw) >= 2 and raw[:2] == b"\x1f\x8b":
+        import gzip
+        raw = gzip.decompress(raw)
+    return raw
+
+
 def _autopick_column(columns, candidates, *, include_none, fallback_index):
     lower = {c.lower(): c for c in columns}
     for cand in candidates:
@@ -332,15 +351,8 @@ def _log_and_tree(
             log = _format_csv_df(
                 df, case_col, activity_col, ts_col, role_col, resource_col)
         else:
-            is_zip = (
-                log_kind == "zip"
-                or (len(log_bytes) >= 2 and log_bytes[:2] == b"PK")
-            )
-            if is_zip:
-                _phase("Extracting XES from zip...")
-                xes_bytes = _extract_xes_from_zip(log_bytes)
-            else:
-                xes_bytes = log_bytes
+            _phase("Unpacking XES...")
+            xes_bytes = _plain_xes_bytes(log_bytes, log_kind)
             xes_path = td / "log.xes"
             xes_path.write_bytes(xes_bytes)
             _phase("Reading XES...")
@@ -847,14 +859,7 @@ def _read_log_for_scenarios(log_bytes: bytes, log_kind: str, csv_columns):
         return _format_csv_df(
             df, case_col, activity_col, ts_col, role_col, resource_col)
 
-    is_zip = (
-        log_kind == "zip"
-        or (len(log_bytes) >= 2 and log_bytes[:2] == b"PK")
-    )
-    if is_zip:
-        xes_bytes = _extract_xes_from_zip(log_bytes)
-    else:
-        xes_bytes = log_bytes
+    xes_bytes = _plain_xes_bytes(log_bytes, log_kind)
     with tempfile.TemporaryDirectory() as td:
         xes_path = Path(td) / "log.xes"
         xes_path.write_bytes(xes_bytes)
@@ -1185,13 +1190,7 @@ def _log_is_interval(log_bytes: bytes, log_kind: str, _file_hash: str) -> bool:
     if log_kind == "csv":
         return False
     try:
-        raw = log_bytes
-        if log_kind == "zip" or (len(raw) >= 2 and raw[:2] == b"PK"):
-            raw = _extract_xes_from_zip(log_bytes)
-        elif len(raw) >= 2 and raw[:2] == b"\x1f\x8b":
-            import gzip
-            raw = gzip.decompress(raw)
-        return b"start_timestamp" in raw
+        return b"start_timestamp" in _plain_xes_bytes(log_bytes, log_kind)
     except Exception:
         return False
 
