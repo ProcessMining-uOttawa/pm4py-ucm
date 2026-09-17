@@ -207,7 +207,13 @@ def _extract_xes_from_zip(zip_bytes: bytes) -> bytes:
             if info.is_dir():
                 continue
             name = info.filename
-            if name.startswith("/") or ".." in Path(name).parts:
+            parts = Path(name).parts
+            if name.startswith("/") or ".." in parts:
+                continue
+            # Finder's zips carry a resource-fork twin of every file under
+            # __MACOSX/._name — listed FIRST, and not XML. Skip them, or a
+            # perfectly good Mac archive fails to parse.
+            if "__MACOSX" in parts or Path(name).name.startswith("._"):
                 continue
             low = name.lower()
             if low.endswith(".xes") or low.endswith(".xes.gz"):
@@ -252,20 +258,98 @@ def _seed_csv_selectors(columns):
         st.session_state[key] = _autopick_column(
             columns, cands, include_none=with_none, fallback_index=i,
         )
+    st.session_state["csv_dayfirst"] = False
+
+
+def _csv_read_options(csv_bytes: bytes) -> Dict[str, str]:
+    """Encoding and delimiter for ``pd.read_csv``, sniffed from the file.
+
+    pandas defaults to UTF-8 and a comma. Real exports are not so tidy: Excel
+    on a French-Canadian locale writes ``;``-separated cp1252, "Unicode text"
+    is UTF-16 with tabs, and a BOM is common. Left to the defaults, the header
+    reader returned one column called ``case;activity;timestamp`` and the
+    full read raised ``UnicodeDecodeError`` from the cost screen. Every CSV
+    read in the app goes through these options, so header, mapping check and
+    mining all see the same table.
+    """
+    import codecs
+    import csv as _csv
+    head = csv_bytes[:65536]
+    if head.startswith(codecs.BOM_UTF8):
+        encoding = "utf-8-sig"
+    elif head.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        encoding = "utf-16"
+    else:
+        try:
+            head.decode("utf-8")
+            encoding = "utf-8"
+        except UnicodeDecodeError:
+            encoding = "cp1252"
+    try:
+        text = head.decode(encoding, errors="replace")
+    except LookupError:
+        text = head.decode("utf-8", errors="replace")
+    first_lines = "\n".join(text.splitlines()[:20])
+    sep = ","
+    if first_lines:
+        try:
+            sep = _csv.Sniffer().sniff(first_lines, delimiters=",;\t|").delimiter
+        except _csv.Error:
+            # Sniffer gives up on a single-column file or a lone header row;
+            # pick the most frequent candidate on the header line instead.
+            header = first_lines.splitlines()[0]
+            counts = {d: header.count(d) for d in ",;\t|"}
+            best = max(counts, key=counts.get)
+            sep = best if counts[best] else ","
+    return {"encoding": encoding, "sep": sep}
+
+
+def _read_csv_bytes(csv_bytes: bytes, **kwargs):
+    """``pd.read_csv`` over the uploaded bytes with the sniffed options."""
+    opts = _csv_read_options(csv_bytes)
+    opts.update(kwargs)
+    return pd.read_csv(io.BytesIO(csv_bytes), low_memory=False, **opts)
 
 
 @st.cache_data(show_spinner="Reading CSV columns...")
 def _csv_columns(csv_bytes: bytes, _file_hash: str) -> List[str]:
     try:
-        df_head = pd.read_csv(io.BytesIO(csv_bytes), nrows=0, low_memory=False)
+        df_head = _read_csv_bytes(csv_bytes, nrows=0)
         return list(df_head.columns)
     except Exception:
         import csv as _csv
-        text = csv_bytes.decode("utf-8", errors="replace").splitlines()
+        opts = _csv_read_options(csv_bytes)
+        text = csv_bytes.decode(opts["encoding"], errors="replace").splitlines()
         if not text:
             return []
-        reader = _csv.reader(text[:1])
+        reader = _csv.reader(text[:1], delimiter=opts["sep"])
         return next(reader, [])
+
+
+@st.cache_data(show_spinner=False)
+def _csv_dayfirst_ambiguous(csv_bytes: bytes, ts_col: str, _file_hash: str) -> bool:
+    """True when the timestamp column reads *differently* day-first.
+
+    ``03/06/2024`` is 6 March or 3 June depending on the locale that wrote
+    it. pandas picks month-first and says nothing, so the order of events
+    inside a case can be silently wrong. Parse a sample both ways: if both
+    succeed and disagree anywhere, the mapping panel says so beside the
+    day-first switch. ISO stamps (``2024-06-03``) parse identically either
+    way and never trigger this.
+    """
+    try:
+        head = _read_csv_bytes(csv_bytes, nrows=2000, usecols=[ts_col])
+        text = head[ts_col].dropna().astype(str).str.strip()
+        if text.empty:
+            return False
+        mf = _parse_stamps(text, dayfirst=False)
+        dfst = _parse_stamps(text, dayfirst=True)
+        ok = mf.notna() & dfst.notna()
+        if ok.sum() < 0.5 * len(text):
+            return False
+        return bool((mf[ok] != dfst[ok]).any())
+    except Exception:
+        return False
 
 
 @st.cache_data(show_spinner="Checking the column mapping...")
@@ -279,7 +363,7 @@ def _csv_mapping_problem(csv_bytes: bytes, csv_columns, _file_hash: str):
     first pm4py call several screens later.
     """
     try:
-        head = pd.read_csv(io.BytesIO(csv_bytes), nrows=5000, low_memory=False)
+        head = _read_csv_bytes(csv_bytes, nrows=5000)
         _format_csv_df(head, *csv_columns)
     except Exception as exc:
         return str(exc)
@@ -339,17 +423,19 @@ def _log_and_tree(
         if log_kind == "csv":
             if not csv_columns:
                 raise ValueError("CSV column mapping is required.")
-            case_col, activity_col, ts_col, role_col, resource_col = csv_columns
+            case_col, activity_col, ts_col, role_col, resource_col = csv_columns[:5]
+            dayfirst = bool(csv_columns[5]) if len(csv_columns) > 5 else False
             if not (case_col and activity_col and ts_col):
                 raise ValueError(
                     "Case, activity, and timestamp columns are required "
                     "for CSV import."
                 )
             _phase("Reading CSV...")
-            df = pd.read_csv(io.BytesIO(log_bytes), low_memory=False)
+            df = _read_csv_bytes(log_bytes)
             _phase(f"Formatting {len(df):,} events...")
             log = _format_csv_df(
-                df, case_col, activity_col, ts_col, role_col, resource_col)
+                df, case_col, activity_col, ts_col, role_col, resource_col,
+                dayfirst)
         else:
             _phase("Unpacking XES...")
             xes_bytes = _plain_xes_bytes(log_bytes, log_kind)
@@ -733,9 +819,45 @@ def _coerce_str_object(df):
     return df
 
 
-def _format_csv_df(df, case_col, activity_col, ts_col, role_col, resource_col):
+def _parse_stamps(raw, dayfirst=False):
+    """Parse a text timestamp column to UTC datetimes; NaT where unreadable.
+
+    ISO-8601 values go through pandas' strict ISO parser first. Only what
+    that leaves unread is handed to the per-element ``mixed`` parser with
+    ``dayfirst``. The split matters: dateutil applies ``dayfirst`` to
+    ``2024-06-03`` too and returns 6 March, so a day-first log with ISO
+    stamps in it would be silently scrambled if everything went the
+    ``mixed`` way.
+    """
+    text = raw.astype(str).str.strip()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            out = pd.to_datetime(text, format="ISO8601", errors="coerce", utc=True)
+        except (TypeError, ValueError):
+            out = pd.Series(pd.NaT, index=text.index, dtype="datetime64[ns, UTC]")
+        rest = out.isna() & raw.notna()
+        if rest.any():
+            try:
+                more = pd.to_datetime(text[rest], format="mixed", errors="coerce",
+                                      utc=True, dayfirst=dayfirst)
+            except (TypeError, ValueError):
+                more = pd.to_datetime(text[rest], errors="coerce", utc=True,
+                                      dayfirst=dayfirst)
+            out = out.astype(more.dtype) if out.dtype != more.dtype else out
+            out[rest] = more
+    return out
+
+
+def _format_csv_df(df, case_col, activity_col, ts_col, role_col, resource_col,
+                   dayfirst=False):
     """Format a raw CSV DataFrame for pm4py, mapping the chosen role / resource
     columns to ``org:role`` / ``org:resource``.
+
+    ``dayfirst`` reads ``03/06/2024`` as 3 June rather than 6 March. It has
+    to be applied *before* ``format_dataframe``, which would otherwise parse
+    the column month-first itself and hand back a datetime we could no
+    longer re-read.
 
     The role/resource rename is applied **before** ``format_dataframe`` — not
     after — because ``format_dataframe`` writes the pm4py-canonical columns
@@ -768,14 +890,18 @@ def _format_csv_df(df, case_col, activity_col, ts_col, role_col, resource_col):
         case_col = renames.get(case_col, case_col)
         activity_col = renames.get(activity_col, activity_col)
         ts_col = renames.get(ts_col, ts_col)
+    if dayfirst and ts_col in df.columns and \
+            not pd.api.types.is_datetime64_any_dtype(df[ts_col]):
+        df = df.copy()
+        df[ts_col] = _parse_stamps(df[ts_col], dayfirst=True)
     df = pm4py.format_dataframe(
         df, case_id=case_col, activity_key=activity_col, timestamp_key=ts_col,
     )
-    df = _ensure_datetime_timestamp(df, ts_col)
+    df = _ensure_datetime_timestamp(df, ts_col, dayfirst)
     return _coerce_str_object(df)
 
 
-def _ensure_datetime_timestamp(df, ts_col):
+def _ensure_datetime_timestamp(df, ts_col, dayfirst=False):
     """Make sure the mapped timestamp column really is a datetime.
 
     ``pm4py.format_dataframe`` converts text columns with a *silent*
@@ -813,20 +939,10 @@ def _ensure_datetime_timestamp(df, ts_col):
             except (TypeError, ValueError, OverflowError):
                 parsed = None
     else:
-        text = raw.astype(str).str.strip()
-        for kwargs in ({"format": "ISO8601"}, {"format": "mixed"}, {}):
-            try:
-                with warnings.catch_warnings():
-                    # The last resort infers per element; its "could not
-                    # infer format" warning is expected here, not news.
-                    warnings.simplefilter("ignore")
-                    parsed = pd.to_datetime(
-                        text, utc=True, errors="coerce", **kwargs)
-            except (TypeError, ValueError):
-                parsed = None
-                continue
-            if parsed.notna().any():
-                break
+        try:
+            parsed = _parse_stamps(raw, dayfirst=dayfirst)
+        except (TypeError, ValueError):
+            parsed = None
     # Accept only when most of the present values read as dates: a free-text
     # column with the odd date in it is a wrong mapping, not a timestamp.
     n_present = int(raw.notna().sum())
@@ -854,10 +970,12 @@ def _read_log_for_scenarios(log_bytes: bytes, log_kind: str, csv_columns):
     (Name kept for history; it is no longer scenarios-specific.)
     """
     if log_kind == "csv":
-        case_col, activity_col, ts_col, role_col, resource_col = csv_columns
-        df = pd.read_csv(io.BytesIO(log_bytes), low_memory=False)
+        case_col, activity_col, ts_col, role_col, resource_col = csv_columns[:5]
+        dayfirst = bool(csv_columns[5]) if len(csv_columns) > 5 else False
+        df = _read_csv_bytes(log_bytes)
         return _format_csv_df(
-            df, case_col, activity_col, ts_col, role_col, resource_col)
+            df, case_col, activity_col, ts_col, role_col, resource_col,
+            dayfirst)
 
     xes_bytes = _plain_xes_bytes(log_bytes, log_kind)
     with tempfile.TemporaryDirectory() as td:
@@ -2860,7 +2978,28 @@ def _accept_log_bytes(name: str, payload: bytes) -> None:
         st.session_state["project_uploader_nonce"] = (
             st.session_state.get("project_uploader_nonce", 0) + 1)
     name_lower = name.lower()
-    if name_lower.endswith(".csv"):
+    kind = None
+    if name_lower.endswith(".gz") and not name_lower.endswith(".xes.gz"):
+        # A ``.csv.gz`` (or a bare ``.gz`` of unknown content) is inflated
+        # here and judged by what is inside: XML goes down the XES path
+        # untouched, anything else is a CSV and is stored inflated so every
+        # CSV reader sees plain text. Naming alone called it an XES.
+        try:
+            import gzip
+            inner = gzip.decompress(payload)
+        except Exception:
+            inner = None
+        if inner is not None and not inner.lstrip(b"\xef\xbb\xbf \r\n\t").startswith(b"<"):
+            payload = inner
+            name = name[:-3]
+            name_lower = name.lower()
+            kind = "csv"
+            new_hash = hashlib.sha256(payload).hexdigest()[:16]
+            if new_hash == st.session_state.get("log_hash"):
+                return
+    if kind is not None:
+        pass
+    elif name_lower.endswith((".csv", ".tsv", ".txt")):
         kind = "csv"
     elif name_lower.endswith(".zip"):
         kind = "zip"
@@ -2888,6 +3027,7 @@ def _accept_log_bytes(name: str, payload: bytes) -> None:
     if kind == "csv":
         for k, _, _ in _CSV_AUTOPICK:
             st.session_state.pop(k, None)
+        st.session_state.pop("csv_dayfirst", None)
 
 
 # ---- Resume a saved project (see docs/sessions.md) -------------------------
@@ -3154,6 +3294,12 @@ def _apply_project_config(cfg, fh, csv_columns=None):
     if _cols:
         ss["applied_csv_columns"] = tuple(_cols)
         ss["csv_seeded_for_hash"] = fh
+        # Seed the mapping widgets to match, so the panel does not open on
+        # "unapplied changes" against the auto-picked defaults. The sixth
+        # element (day-first) is optional: older projects saved five.
+        for (key, _, with_none), val in zip(_CSV_AUTOPICK, list(_cols)[:5]):
+            ss[key] = val if val else (_NONE_OPT if with_none else val)
+        ss["csv_dayfirst"] = bool(_cols[5]) if len(_cols) > 5 else False
     _apply_filter_spec_to_state(cfg.get("filter_spec", []), fh, pr)
     if "scenario_strategy" in cfg:
         ss["cond_strategy"] = cfg["scenario_strategy"]
@@ -3917,11 +4063,27 @@ if log_kind == "csv":
         "Resource column (optional)",
         options=[_NONE_OPT] + columns, key="csv_resource",
     )
+    _dayfirst = _src_exp.checkbox(
+        "Day-first dates (dd/mm/yyyy)", key="csv_dayfirst",
+        help="Read 03/06/2024 as 3 June rather than 6 March. Only matters "
+             "for slash- or dot-separated dates; ISO dates (2024-06-03) "
+             "read the same either way.")
+    if not _dayfirst and ts_col and _csv_dayfirst_ambiguous(
+            log_bytes, ts_col, file_hash):
+        _src_exp.warning(
+            f"Dates in `{ts_col}` are ambiguous (e.g. 03/06/2024) and are "
+            "being read **month-first**. If this log was written day-first, "
+            "tick *Day-first dates* — otherwise the order of events inside "
+            "a case may be wrong.", icon=":material/event:")
     candidate_csv_columns = (
         case_col, activity_col, ts_col,
         "" if role_col == _NONE_OPT else role_col,
         "" if resource_col == _NONE_OPT else resource_col,
     )
+    # A sixth element only when day-first is on, so a 5-tuple saved by an
+    # older project (day-first did not exist) still reads as unchanged.
+    if _dayfirst:
+        candidate_csv_columns += (True,)
     # Auto-detection runs once per file hash, so a hand-picked (or mistaken)
     # choice sticks for that file and re-loading it will not undo it. Offered
     # before the branch below, which stops the script while a mapping is
@@ -4393,8 +4555,34 @@ with _transforms_slot:
 # did not complete in 900s. The screen is a single pass and its verdict is
 # a *reason*, not an ETA — the statistics that rank logs correctly cannot
 # time them (docs/miner_performance.md).
-_profile, _risk = _screen_log(log_bytes, log_kind, csv_columns,
-                              filter_spec, file_hash)
+try:
+    _profile, _risk = _screen_log(log_bytes, log_kind, csv_columns,
+                                  filter_spec, file_hash)
+except Exception as _read_exc:
+    # This is the FIRST full parse of the upload. Anything the readers
+    # cannot digest — an encoding, a delimiter, a mis-mapped column, a
+    # damaged archive, an XES that is not one — surfaced here as a raw
+    # traceback (redacted on Streamlit Cloud). Say what went wrong and
+    # where to look, and stop before the views try the same parse again.
+    _hints = {
+        "csv": "Check the **CSV columns** mapping above (case, activity and "
+               "timestamp), and that the file is a delimited text table. "
+               "Comma, semicolon, tab and pipe delimiters and UTF-8 / "
+               "UTF-16 / Windows-1252 encodings are detected automatically.",
+        "zip": "The zip must hold one `.xes` or `.xes.gz` file (folders and "
+               "Mac `__MACOSX` entries are ignored).",
+        "xes": "The file must be an XES event log — plain `.xes`, `.xes.gz` "
+               "or zipped. A CSV renamed `.xes`, or a truncated download, "
+               "cannot be read.",
+    }
+    st.error(
+        f"**Could not read `{_html_escape_min(log_name)}`.** "
+        f"{type(_read_exc).__name__}: {_read_exc}\n\n"
+        f"{_hints.get(log_kind, '')}",
+        icon=":material/error:")
+    with st.expander("Show technical details"):
+        st.code(traceback.format_exc(), language="text")
+    st.stop()
 # Consent is keyed to the log and the filters — the two things the screen
 # actually measures. The noise threshold is deliberately NOT part of it:
 # it changes the mined tree, not the log's size or alphabet, so re-asking

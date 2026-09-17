@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Five more upload edge cases, found by auditing the loaders after the two
+  crashes below.** A `;`- or tab-delimited CSV (European Excel) read as one
+  column; a cp1252 or UTF-16 CSV raised `UnicodeDecodeError`; a `.csv.gz`
+  was routed to the XES parser by its name; a Finder-made zip's
+  `__MACOSX/._log.xes` twin was picked instead of the log; and `03/06/2024`
+  was read month-first with no warning. Every CSV read now sniffs the
+  encoding (BOM, UTF-8, UTF-16, Windows-1252) and the delimiter; a `.gz` is
+  inflated and judged by its content; Mac resource-fork entries are skipped;
+  and the mapping panel has a **Day-first dates** switch, with a warning when
+  the timestamp column parses both ways (ISO dates never trigger it, and are
+  never re-read day-first). The switch travels as an optional sixth element
+  of the saved column mapping, so older projects load unchanged, and the
+  exported script honours it.
+- **The first parse of an upload is now guarded.** Anything the readers
+  cannot digest used to surface from the cost screen as a raw traceback
+  (redacted on Streamlit Cloud). It is now a *Could not read …* message with
+  the reason and a hint for the file kind, and the run stops there.
 - **Uploading a `.xes.gz` failed with a bare `NoTopLevelLog`.** The app
   writes an upload to a temp file called `log.xes` and pm4py picks its reader
   by that extension, so the gzip bytes went straight to the XML parser. The
