@@ -61,8 +61,42 @@ def read_log(log_path, kind=LOG_KIND, csv_columns=CSV_COLUMNS):
     if kind == "csv":
         if not csv_columns:
             raise ValueError("CSV_COLUMNS mapping is required for a CSV log.")
-        case_col, activity_col, ts_col, role_col, resource_col = csv_columns
-        df = pd.read_csv(log_path, low_memory=False)
+        case_col, activity_col, ts_col, role_col, resource_col = csv_columns[:5]
+        dayfirst = bool(csv_columns[5]) if len(csv_columns) > 5 else False
+        # Sniff encoding and delimiter as the web app does, so a ';'-separated
+        # cp1252 export reads the same here as it did there.
+        import codecs
+        import csv as _csv
+        with open(log_path, "rb") as fh:
+            head = fh.read(65536)
+        if head.startswith(codecs.BOM_UTF8):
+            encoding = "utf-8-sig"
+        elif head.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+            encoding = "utf-16"
+        else:
+            try:
+                head.decode("utf-8")
+                encoding = "utf-8"
+            except UnicodeDecodeError:
+                encoding = "cp1252"
+        try:
+            sep = _csv.Sniffer().sniff(
+                chr(10).join(head.decode(encoding, errors="replace").splitlines()[:20]),
+                delimiters="," + ";" + chr(9) + "|").delimiter
+        except _csv.Error:
+            sep = ","
+        df = pd.read_csv(log_path, low_memory=False, encoding=encoding, sep=sep)
+        if dayfirst and ts_col in df.columns:
+            # ISO stamps first (dateutil would apply day-first to those
+            # too and return 6 March for 2024-06-03), then the rest day-first.
+            text = df[ts_col].astype(str).str.strip()
+            stamps = pd.to_datetime(text, format="ISO8601", errors="coerce", utc=True)
+            rest = stamps.isna() & df[ts_col].notna()
+            if rest.any():
+                stamps[rest] = pd.to_datetime(text[rest], format="mixed",
+                                              errors="coerce", utc=True,
+                                              dayfirst=True)
+            df[ts_col] = stamps
         # Map role/resource to org:role / org:resource BEFORE format_dataframe:
         # format_dataframe writes the canonical concept:name / case:concept:name
         # / time:timestamp by dropping any same-named column, so a source column
