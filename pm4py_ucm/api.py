@@ -23,6 +23,7 @@ from typing import Any, Dict, Optional, Union
 from .objects.ucm.obj import UCM
 from .objects.ucm.validate import check_generated as _check_generated
 from .objects.ucm.exporter.variants import jucm as _jucm_exporter
+from .objects.ucm.exporter.variants import bpmn as _bpmn_exporter
 from .objects.ucm.importer.variants import jucm as _jucm_importer
 from .objects.ucm.conversion import from_process_tree as _tree_converter
 from .objects.ucm.conversion.decomposition import (  # noqa: F401
@@ -59,6 +60,36 @@ def write_ucm(
     """Write a Use Case Map as a jUCMNav-compatible ``.jucm`` (XMI) file."""
     _jucm_exporter.apply(ucm, file_path, parameters=parameters)
     return file_path
+
+
+def write_bpmn(
+    ucm: UCM,
+    file_path: str,
+    **options: Any,
+) -> str:
+    """Write a Use Case Map as a standard **BPMN 2.0** file with diagram
+    interchange, openable in bpmn.io, Camunda Modeler or ``pm4py.read_bpmn``.
+
+    The mapping is documented in ``docs/bpmn_export.md``: one pool whose
+    lanes are the components, responsibilities as tasks, OR/AND forks and
+    joins as exclusive/parallel gateways, static stubs as call activities
+    to the plug-in's process, dynamic stubs as a sub-process choosing
+    inclusively among its plug-ins, node centres carried over 1:1 from the
+    UCM layout, and performance metadata as extension elements.
+
+    ``options`` are the keyword arguments of
+    :func:`pm4py_ucm.objects.ucm.exporter.variants.bpmn.serialize_to_string`
+    (``stubs``, ``lanes``, ``lane_names``, ``sizes``, ``metrics``,
+    ``annotate``, ``heatmap_node``, ``heatmap_edge``, ``heatmap_global``,
+    ``data``, ``routing``, ``layout``, ``validate``, ``encoding``)."""
+    _bpmn_exporter.apply(ucm, file_path, parameters=options)
+    return file_path
+
+
+def convert_to_bpmn_xml(ucm: UCM, **options: Any) -> str:
+    """Return the BPMN 2.0 XML of ``ucm`` as a string (see
+    :func:`write_bpmn`) — what a download button hands out."""
+    return _bpmn_exporter.serialize_to_string(ucm, **options)
 
 
 # ---------------------------------------------------------------------------
@@ -645,6 +676,59 @@ def write_ucm_family(family, path: str) -> str:
     names). ``path`` ending in ``.zip`` produces a single archive;
     otherwise it is treated as a directory."""
     return _families.write_family(family, path)
+
+
+def write_bpmn_family(
+    family,
+    path: str,
+    assembled: Optional[UCM] = None,
+    family_scale: bool = False,
+    **options: Any,
+) -> str:
+    """Write a model family as BPMN 2.0: one ``.bpmn`` per cell (named by
+    :meth:`ModelFamily.file_stem`) plus, when ``assembled`` is given, the
+    assembled family (see :func:`assemble_ucm_family`) as
+    ``family_umbrella.bpmn`` — its dynamic stubs become the inclusive
+    choices of :func:`write_bpmn`. ``path`` ending in ``.zip`` produces
+    one archive; otherwise it is treated as a directory.
+
+    ``options`` are :func:`write_bpmn`'s. With ``family_scale=True`` and a
+    ``heatmap_node`` / ``heatmap_edge`` metric, every file is coloured on
+    one **family-wide** range (the cells' and the assembled model's values
+    together), so a colour means the same thing in every member."""
+    import io as _io
+    import zipfile as _zipfile
+    from .visualization.ucm.variants import classic as _classic
+
+    models = [c.ucm for c in family.cells]
+    if assembled is not None:
+        models.append(assembled)
+    opts = dict(options)
+    if family_scale and (opts.get("heatmap_node") or opts.get("heatmap_edge")):
+        ns, es = _classic.heat_span(
+            models, opts.get("heatmap_node"), opts.get("heatmap_edge"))
+        opts.setdefault("node_span", ns)
+        opts.setdefault("edge_span", es)
+
+    entries = [(family.file_stem(c) + ".bpmn",
+                _bpmn_exporter.serialize_to_string(c.ucm, **opts))
+               for c in family.cells]
+    if assembled is not None:
+        entries.append(("family_umbrella.bpmn",
+                        _bpmn_exporter.serialize_to_string(assembled, **opts)))
+
+    if path.lower().endswith(".zip"):
+        with _zipfile.ZipFile(path, "w", _zipfile.ZIP_DEFLATED) as zf:
+            for name, content in entries:
+                zf.writestr(name, content)
+    else:
+        import os as _os
+        _os.makedirs(path, exist_ok=True)
+        for name, content in entries:
+            with open(_os.path.join(path, name), "w",
+                      encoding="utf-8", newline="") as fh:
+                fh.write(content)
+    return path
 
 
 def assemble_ucm_family(

@@ -30,11 +30,12 @@ log = pm4py.read_xes("running-example.xes")
 ucm = pm4py_ucm.discover_ucm_inductive(log)
 pm4py_ucm.view_ucm(ucm)
 pm4py_ucm.write_ucm(ucm, "running-example.jucm")  # opens in jUCMNav
+pm4py_ucm.write_bpmn(ucm, "running-example.bpmn")  # opens in bpmn.io, Camunda
 ```
 
 **Ways to get started:**
 
-- [`demo/pm4py_ucm_tutorial.ipynb`](demo/pm4py_ucm_tutorial.ipynb) — end-to-end Jupyter walkthrough on a real claims-payment log (discovery, BPMN/UCM rendering, navigable **SVG** + `.jucm`/`.png`/`.svg` export, performer mining, hierarchical decomposition, `.jucm` round-trips).
+- [`demo/pm4py_ucm_tutorial.ipynb`](demo/pm4py_ucm_tutorial.ipynb) — end-to-end Jupyter walkthrough on a real claims-payment log (discovery, BPMN/UCM rendering, navigable **SVG** + `.jucm`/`.png`/`.svg` export, standard **BPMN 2.0** export, performer mining, hierarchical decomposition, `.jucm` round-trips).
 - [`demo/scenario_synthesis_tutorial.ipynb`](demo/scenario_synthesis_tutorial.ipynb) — the **scenario-synthesis** layer: concurrency-aware variants, per-loop counters + `LoopEntryGuard`, both OR-fork condition encodings (variant-driven and **data-driven / decision-mining**, with the per-fork accuracy report), decomposed UCMs, and a capstone running both encodings on the claims log.
 - [`demo/model_families_tutorial.ipynb`](demo/model_families_tutorial.ipynb) — the **model-family** pipeline on the claims log: attribute detection, partition preview, per-cell mining, stack/matrix rendering, combined export, the dynamic-stub **umbrella** (skeleton, resource variation, path scenarios), **performance overlays** on activities and edges (with the value-scaled **heat-map**), pairwise **comparison**, and the **family statistics report** (FamilyStats + the self-contained interactive HTML file).
 - [`demo/dashboards_tutorial.ipynb`](demo/dashboards_tutorial.ipynb) — the **dashboards** layer: the per-case fact table, the metric catalog and computing widgets, filters / targets / scorecard, every **visualisation** (KPI, gauge, histogram, box plot, bar, line, pie/donut, heatmap table), the **ƒ custom-formula language**, and exporting a self-contained interactive HTML dashboard.
@@ -64,8 +65,8 @@ the deprecated V5 and four-tab V3 apps), with a global **log filter** and
   `attr("Channel") == "Web" and duration() > 5`) and **rename or merge
   activities**
   before mining, preview the diagram in UCM or BPMN notation, and download
-  the rendered PNG, the `.jucm` file, or the **filtered log itself** as
-  XES/CSV. The filter and rename are global — every view below (and its
+  the rendered PNG, the `.jucm` file, a standard **BPMN 2.0** file, or the
+  **filtered log itself** as XES/CSV. The filter and rename are global — every view below (and its
   exports) mines the same transformed log.
 
   ![Model view](web/PM4Py-UCM-Model.png)
@@ -405,6 +406,43 @@ graphviz one. Force the built-in layouter explicitly with:
 pm4py_ucm.write_ucm(ucm, "log.jucm",
                     parameters={"layout_engine": "builtin"})
 ```
+
+### Export to standard BPMN 2.0
+
+`write_bpmn` writes the same model as a BPMN 2.0 XML file with diagram
+interchange, so it opens in bpmn.io, Camunda Modeler, Signavio or
+`pm4py.read_bpmn`, laid out like the `style="bpmn"` preview:
+
+```python
+pm4py_ucm.write_bpmn(ucm, "log.bpmn")
+xml = pm4py_ucm.convert_to_bpmn_xml(ucm)      # the same, as a string
+```
+
+The whole UCM is **one pool whose lanes are the components** (nested
+components nest as child lanes); responsibilities become tasks, OR/AND forks
+and joins exclusive/parallel gateways, routing bends waypoints. A **static
+stub is a call activity** to the plug-in's own process (every map is a
+process with its own diagram), and a **dynamic stub a collapsed sub-process**
+that chooses *inclusively* among its plug-ins, guarded by the binding
+preconditions — Z.151 semantics. Node centres transfer 1:1 from the UCM
+coordinates. Performance metadata travels as `<ucm:metric>` extension
+elements on tasks and flows, and the selected edge overlay text becomes the
+flow's label (`annotate="edges"`; `"all"` adds text annotations under tasks;
+`"none"` keeps the file plain). `heatmap_node="frequency"` /
+`heatmap_edge="mean_time"` colour tasks and flows with the PNG heat-map's
+ramps (readable by bpmn.io and Camunda); `sizes="canonical"` draws standard
+BPMN shape sizes and scales the layout to fit them; `stubs="inline"` nests
+plug-ins as collapsed sub-processes instead of call activities (pm4py's
+reader needs this); `routing="orthogonal"` draws elbowed flows;
+`data="objects"` adds the scenario variables as data objects. Other options:
+`lanes="none"`, `lane_names="with_kind"`, `metrics="none"`,
+`validate=False`. `write_bpmn_family(family, "family.zip",
+assembled=umbrella)` writes one `.bpmn` per cell plus the assembled family.
+The web app's downloads use `stubs="inline"`, since bpmn.io drills into a
+collapsed sub-process but cannot follow a call activity.
+The web app offers both from the Model and Family views. The mapping and
+its limits (pm4py's reader cannot read call activities) are in
+[`docs/bpmn_export.md`](docs/bpmn_export.md).
 
 ### Mine performers too — surface them as URN components
 
@@ -1037,6 +1075,7 @@ pm4py_ucm/
 │   ├── conversion/from_process_tree.py    # PM4Py process tree → UCM
 │   ├── conversion/decomposition.py        # hierarchical decomposition rules + presets
 │   ├── exporter/variants/jucm.py          # UCM → jUCMNav .jucm (XMI 2.0)
+│   ├── exporter/variants/bpmn.py          # UCM → BPMN 2.0 XML + BPMNDI
 │   ├── importer/variants/jucm.py          # jUCMNav .jucm → UCM
 │   ├── layout/layouter.py                 # built-in layered auto-layout
 │   ├── layout/graphviz_layouter.py        # graphviz positions, matching the PNG
@@ -1159,6 +1198,7 @@ reach you in the first place:
 | `discover_ucm_family` | each cell as it is mined, naming the cell |
 | `assemble_ucm_family` | the finished container, both modes |
 | `write_ucm` | before writing; nothing is written if it fails |
+| `write_bpmn` | likewise |
 
 Each takes `validate=True` by default and raises `ValueError` otherwise.
 
@@ -1328,7 +1368,7 @@ public helpers. Narrative guides live alongside the code in
 [`docs/`](docs/): [`metrics.md`](docs/metrics.md),
 [`dashboards.md`](docs/dashboards.md),
 [`model_families.md`](docs/model_families.md),
-[`bpmn_export.md`](docs/bpmn_export.md) (design of the planned BPMN 2.0 export),
+[`bpmn_export.md`](docs/bpmn_export.md) (the UCM → BPMN 2.0 mapping and its decisions),
 [`miner_performance.md`](docs/miner_performance.md) (what mining and replay
 actually cost, measured across twelve logs),
 [`scenario_simulation.md`](docs/scenario_simulation.md) (design note for the

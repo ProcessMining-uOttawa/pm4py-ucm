@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **BPMN 2.0 export.** `pm4py_ucm.write_bpmn(ucm, path)` and
+  `convert_to_bpmn_xml(ucm)` write a UCM as standard BPMN 2.0 XML with
+  diagram interchange, openable in bpmn.io, Camunda Modeler and
+  `pm4py.read_bpmn`. The whole model is one pool whose **lanes are the
+  components** (nested through `childLaneSet`, tiling the pool from the
+  swim-lane layout); responsibilities become tasks, OR/AND forks and joins
+  exclusive/parallel gateways, routing points waypoints; a **static stub is
+  a call activity** to its plug-in's process (one process and one diagram
+  per map) and a **dynamic stub a collapsed sub-process** choosing
+  inclusively among its plug-ins, with the binding preconditions as
+  guards. Node centres transfer 1:1 from the UCM coordinates. Performance
+  metadata travels as `<ucm:metric>` extension elements on tasks and
+  flows, and the selected edge overlay text becomes the flow's label
+  (`annotate="edges"`, default; `"all"` adds text annotations under
+  tasks). `heatmap_node=` / `heatmap_edge=` colour tasks and flows by a
+  metric with the PNG heat-map's ramps, written as OMG *BPMN in Color*
+  attributes and their bpmn.io `bioc` twins; `sizes="canonical"` draws
+  standard 100 × 80 / 50 × 50 / 36 × 36 shapes and scales the layout
+  uniformly so nothing overlaps. `write_bpmn_family(family, path,
+  assembled=…)` writes one `.bpmn` per cell plus the assembled family, on
+  one family-wide heat-map scale with `family_scale=True`.
+  `stubs="inline"` nests every plug-in under its stub as a collapsed
+  sub-process with its own diagram (no call activities, so pm4py's reader
+  reads the file); `data="objects"` writes scenario variables as data
+  objects and scenario definitions as documentation; `routing="orthogonal"`
+  draws elbowed flows. The mapping and its decisions are in
+  `docs/bpmn_export.md`.
+- **BPMN downloads in the web app.** The Model view has a *Prepare BPMN…* /
+  *Download BPMN* pair beside the `.jucm` download, carrying the active
+  heat-map as colours; the Family view's Downloads row has *BPMN 2.0
+  (.zip)* with one file per cell plus `family_umbrella.bpmn`. Components
+  become lanes, so these exports are laid out in horizontal swim-lanes and
+  may differ from the on-screen graphviz picture. The app exports with
+  `stubs="inline"`, so composite activities are collapsed sub-processes
+  that bpmn.io drills into (a call activity's process is unreachable
+  there).
+  Tests validate every export against the OMG BPMN 2.0 schema (vendored
+  under `tests/data/bpmn-xsd`; `lxml` is now a dev dependency).
+
 ## [0.8.4] — 2026-09-17
 
 ### Fixed

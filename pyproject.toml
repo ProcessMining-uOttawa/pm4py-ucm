@@ -51,6 +51,7 @@ dev = [
     "pm4py>=2.7",
     "matplotlib>=3.5",
     "bandit>=1.7",          # local SAST: `bandit -r pm4py_ucm web -ll`
+    "lxml>=4.9",            # XSD validation of the BPMN export in tests
 ]
 docs = ["pdoc>=14"]         # API reference: `pdoc pm4py_ucm -o docs/api`
 

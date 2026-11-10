@@ -5,7 +5,7 @@ Upload an event log (XES or CSV) and, from a left-rail workspace, mine and
 render **UCM models** (UCM or BPMN notation, PNG and navigable **SVG**),
 synthesize executable **scenarios**, mine attribute **model families**,
 **compare** family members, and build interactive **dashboards** —
-downloading `.jucm`, CSV, SVG/PNG, and self-contained HTML at every step.
+downloading `.jucm`, standard **BPMN 2.0**, CSV, SVG/PNG, and self-contained HTML at every step.
 A global **pre-mining log filter** (keep activities / trace-variants by
 frequency rank, exclude activities, restrict a date window) and **activity
 renaming** (relabel / merge activities before mining) apply to every view
@@ -59,8 +59,8 @@ loaded log:
 
 - **Model** — mine a UCM, preview it in UCM or BPMN notation as a zoom /
   pan **SVG** (click a stub to jump to its plug-in map), and download the
-  SVG, a raster PNG, or the `.jucm`. Decomposition is honoured across all
-  maps. A global **log filter** (range sliders over the activity- and
+  SVG, a raster PNG, the `.jucm`, or a standard **BPMN 2.0** file.
+  Decomposition is honoured across all maps. A global **log filter** (range sliders over the activity- and
   variant-frequency ranks, an exclude list, and a date-range slider) and
   **activity renaming** (relabel / merge activities before mining) apply to
   every view and its exports; the filtered log is downloadable as XES + CSV.
@@ -366,6 +366,13 @@ Downloads:
   demand.
 - **Download .jucm** — the model in jUCMNav's native XMI format, ready to
   open in [jUCMNav](https://github.com/JUCMNAV/jUCMNavPlus).
+- **Prepare BPMN…** → **Download BPMN** — the model as a standard
+  **BPMN 2.0** file with diagram interchange, for bpmn.io, Camunda Modeler
+  or `pm4py.read_bpmn`. Components become lanes, so the maps are laid out
+  in horizontal swim-lanes (the picture may differ from the on-screen one);
+  each composite activity is a collapsed sub-process you can drill into;
+  the active heat-map rides along as colours. The mapping is in
+  [`docs/bpmn_export.md`](../docs/bpmn_export.md).
 - **Pin to dashboard** — adds the live model as a widget in the Dashboards
   view. The pinned widget is itself a zoom / pan viewer — scroll to zoom,
   drag to pan, click a stub to jump to its sub-map — not a flat image.
@@ -500,9 +507,11 @@ combination, shown as a **2-D SVG grid** (rows × columns). A single
 **⬇ Prepare downloads** button then builds the download-only artifacts —
 the per-cell `.zip`, the combined `.jucm` (shared definitions), the
 dynamic-stub **umbrella** `.jucm` (one plug-in per variation point, with
-executable strategies), the grid **PNG**, and the self-contained
-**interactive HTML statistics report** — plus the umbrella's variation-point
-counts. They are built only when you ask, so mining a family just to browse
+executable strategies), the grid **PNG**, the self-contained
+**interactive HTML statistics report**, and a **BPMN 2.0 `.zip`** (one
+`.bpmn` per cell plus the umbrella as `family_umbrella.bpmn`, on the
+family-wide heat-map scale when that scope is selected) — plus the
+umbrella's variation-point counts. They are built only when you ask, so mining a family just to browse
 the grid stays fast; the grid **SVG** is already on screen.
 
 ### 7 · Compare
