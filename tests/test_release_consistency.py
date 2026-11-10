@@ -167,11 +167,51 @@ def test_local_links_and_images_resolve():
                       flags=re.S)
         for m in re.finditer(r"\]\(([^)#][^)]*)\)", text):
             target = m.group(1).split("#")[0].strip()
-            if not target or target.startswith(("http", "mailto:")):
+            if not target or target.startswith("mailto:"):
                 continue
+            if target.startswith("http"):
+                # A link into this repository on GitHub names a file too; the
+                # root README uses that form so PyPI renders it (see
+                # test_the_root_readme_has_no_relative_links).
+                target = _repo_url_to_path(target)
+                if target is None:
+                    continue
             if not (base / target).exists() and not (_ROOT / target).exists():
                 broken.append(f"{doc.name} -> {target}")
     assert not broken, "broken local links:\n  " + "\n  ".join(broken)
+
+
+_REPO_FILE_URL = re.compile(
+    r"^https://(?:github\.com/ProcessMining-uOttawa/pm4py-ucm/(?:blob|tree)/main/"
+    r"|raw\.githubusercontent\.com/ProcessMining-uOttawa/pm4py-ucm/main/)(.+)$")
+
+
+def _repo_url_to_path(url: str):
+    """The repository-relative path an absolute GitHub URL names, or ``None``
+    for any other URL (the GitHub site itself, the Actions tab, badges)."""
+    m = _REPO_FILE_URL.match(url)
+    return m.group(1) if m else None
+
+
+def test_the_root_readme_has_no_relative_links():
+    """``README.md`` is also the PyPI long description, and PyPI has no
+    repository behind it: a relative image is a broken picture there and a
+    relative link a dead one. Images point at ``raw.githubusercontent.com``
+    and links at ``github.com/.../blob/main`` (``tree/main`` for a folder);
+    the guard above still checks that each names a real file."""
+    text = re.sub(r"<!--.*?-->", "", (_ROOT / "README.md").read_text(encoding="utf-8"),
+                  flags=re.S)
+    relative = []
+    for m in re.finditer(r"\]\(([^)#][^)]*)\)", text):
+        target = m.group(1).strip()
+        if not target.startswith(("http", "mailto:")):
+            relative.append(target)
+    for m in re.finditer(r'<img\b[^>]*\bsrc="([^"]+)"', text):
+        if not m.group(1).startswith("http"):
+            relative.append(m.group(1))
+    assert not relative, (
+        "README.md is rendered on PyPI, where these relative targets break; "
+        "use absolute GitHub URLs:\n  " + "\n  ".join(relative))
 
 
 def test_docs_do_not_name_a_session_parameter_that_no_longer_exists():
