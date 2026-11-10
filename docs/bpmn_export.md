@@ -1,16 +1,15 @@
 # BPMN 2.0 export
 
-> **Status: Stages 1 to 4 implemented** (plus `write_bpmn_family` from
-> Stage 5) in
+> **Status: all five stages implemented** in
 > `pm4py_ucm/objects/ucm/exporter/variants/bpmn.py`, exposed as
 > `pm4py_ucm.write_bpmn` / `convert_to_bpmn_xml`, tested by
 > `tests/test_bpmn_export.py` (XSD conformance against the vendored OMG
 > schema, pm4py round trip, lane tiling, layout transfer, stubs, metrics).
 > Verified by eye in bpmn-js: flat, decomposed and dynamic-stub models import
 > without warnings, and so do heat-mapped and canonical-size exports of the
-> demo claims log; the V6 Model and Family views offer the downloads.
-> **Not yet built:** `stubs="inline"`, `data="objects"` and the other
-> Stage 5 items. The three structural decisions were settled by
+> demo claims log, as do inline-stub, data-object and orthogonally routed
+> exports; the V6 Model and Family views offer the downloads. Nothing of the
+> plan is left; §13 lists what a later iteration could add. The three structural decisions were settled by
 > Daniel Amyot on 2026-11-10; §10 lists them and what implementation decided
 > since.
 
@@ -107,7 +106,7 @@ it is optional.
 | UCM | BPMN | Notes |
 |---|---|---|
 | static `Stub`, one `PluginBinding`, one in / one out | `callActivity` with `calledElement` = the plug-in map's `process` id | **Default** (`stubs="call"`). Mirrors the map structure one to one: the plug-in keeps its own process, lane set and diagram. The `InBinding`'s `StartPoint` and the `OutBinding`'s `EndPoint` are that process's start and end events. |
-| static `Stub` (same shape) | expanded `subProcess` inlined in the parent | Option `stubs="inline"`. A sub-process may own a `laneSet`, but nodes inside it cannot be referenced by the parent's lanes, so lanes inside inlined sub-processes render inconsistently across tools. Offered for analysts who want one flat diagram; documented as weaker. |
+| any `Stub` (`stubs="inline"`) | **collapsed** `subProcess` whose body is the plug-in map, with its own `BPMNDiagram` | Only root maps become processes; a plug-in bound to several stubs is written once per stub (distinct ids). The sub-process owns the plug-in's `laneSet`, and bpmn-js draws those lanes on the sub-process's plane. A dynamic stub's inclusive choice leads to one nested sub-process per plug-in. The point of the mode: no `callActivity`, so pm4py's reader reads the file. |
 | dynamic `Stub`, N `PluginBinding`s | `subProcess` named after the stub containing `gateway → N callActivity → gateway` | Each `PluginBinding.precondition` → the `conditionExpression` on its branch. The sub-process is drawn **collapsed** in the parent (one box at the stub's coordinates, §5) with its own diagram, so the parent keeps the UCM's shape. |
 | gateway kind for dynamic stubs | always `inclusiveGateway`, diverging and converging | This is the Z.151 semantics: a dynamic stub selects **every** plug-in whose precondition holds, possibly several, and the paths rejoin when all selected plug-ins have completed. An inclusive join is exactly that. No syntactic "are the preconditions exclusive" detection: when the family's preconditions happen to be exclusive the inclusive gateway behaves identically, and guessing would mis-state the model whenever the guess is wrong. |
 | stub with several entries or exits | lossy | A call activity has one implicit entry, so several incoming flows merge. Each binding's start/end event in the called process is named after the stub entry/exit, and `ucm:binding` extension elements record the full binding table. No generator produces this shape today. |
@@ -116,11 +115,12 @@ it is optional.
 ### 3.4 Scenario layer
 
 BPMN has no scenarios. By default nothing is emitted. With `data="objects"`,
-each `Variable` becomes a `dataObject` (+ `dataObjectReference` and shape in
-the root diagram), `EnumerationType` values go to its `documentation`, and
-each `ScenarioDef` becomes a `documentation` paragraph on the process listing
-its initialisations and enabled start/end points. Conditions already live on
-the flows (§3.2), so the executable part of a scenario is present either way.
+each `Variable` becomes a `dataObject` (+ `dataObjectReference`, drawn in a
+strip above the pool), `EnumerationType` values and the variable's type go to
+its `documentation`, and each `ScenarioDef` becomes a `documentation`
+paragraph on the root process (`Scenario <group> / <name>: var = value, …;
+starts at …; ends at …`). Conditions already live on the flows (§3.2), so the
+executable part of a scenario is present either way.
 
 ## 4. Components → one pool, nested lanes
 
@@ -194,7 +194,11 @@ absolute coordinates are not.
 Edges: a `BPMNEdge` gets waypoints source-centre → each removed
 `EmptyPoint`/`Connect`/`DirectionArrow` centre in order → target-centre. The
 first and last waypoint are then clipped to the shape border so the arrow
-head touches the box, as the PNG does. Condition labels get a `BPMNLabel`
+head touches the box, as the PNG does. `routing="orthogonal"` turns every
+slanted segment into an elbow first (horizontal-then-vertical on a forward
+segment, vertical-then-horizontal on a backward one), which is what keeps a
+loop back-edge from cutting through the loop body's last task box; the
+default `"straight"` keeps the UCM's own lines. Condition labels get a `BPMNLabel`
 positioned by `Condition.delta_x/delta_y` relative to the first waypoint.
 
 Plug-in diagrams use the plug-in map's own coordinates. The collapsed
@@ -376,11 +380,10 @@ Decided during implementation (Stage 1):
   only reads **stub-free** exports; models with stubs are checked
   structurally and in bpmn-js instead. `stubs="inline"` (Stage 5) would be
   the pm4py-friendly alternative.
-- **Loop back-edges** are drawn with the UCM's straight segments through the
-  bend points, and a BPMN task box is wider than the UCM cross it replaces,
-  so a back-edge leaving a loop body's last task may cross that task's own
-  box. Faithful to the layout, but a candidate for an orthogonal-routing
-  option in Stage 3.
+- **Loop back-edges** drawn with the UCM's straight segments may cross the
+  loop body's last task box, since a BPMN task is wider than a UCM cross.
+  `routing="orthogonal"` avoids that; the default stays faithful to the UCM
+  lines.
 - **Scope creep** into a BPMN importer. Not this feature.
 
 ## 12. Plan
@@ -400,6 +403,15 @@ Decided during implementation (Stage 1):
 4. **Stage 4, app** — **done**: Prepare/Download BPMN in the Model view,
    BPMN 2.0 (.zip) in the Family view, both verified in the running app on
    the demo claims log.
-5. **Stage 5, long tail**: `stubs="inline"`, `data="objects"`, the
-   orthogonal-routing option. Done early: import-only elements (Stage 1),
-   `write_bpmn_family` (with Stage 4), README section and CHANGELOG.
+5. **Stage 5, long tail** — **done**: `stubs="inline"` (nested collapsed
+   sub-processes, pm4py-readable), `data="objects"`, `routing="orthogonal"`.
+   Done earlier: import-only elements (Stage 1), `write_bpmn_family` (with
+   Stage 4), README section and CHANGELOG.
+
+## 13. Possible later work
+
+Not planned, noted so they are not forgotten: a BPMN **importer**
+(`convert_to_ucm(bpmn)`; pm4py already parses BPMN), exposing `stubs`,
+`sizes` and `routing` as choices in the web app's download (today the app
+uses the defaults), tagging `∨` forks in the tree converter (decision 4), and
+a Camunda Modeler / Signavio pass over the goldens beyond bpmn-js.

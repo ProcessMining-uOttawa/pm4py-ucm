@@ -81,12 +81,17 @@ POOL_PADDING = 40
 
 _ROUTING_TYPES = (UCM.EmptyPoint, UCM.Connect, UCM.DirectionArrow)
 
-_STUBS = ("call",)
+_STUBS = ("call", "inline")
 _LANES = ("components", "none")
 _LANE_NAMES = ("plain", "with_kind")
 _SIZES = ("layout", "canonical")
 _METRICS = ("extension", "none")
 _ANNOTATE = ("none", "edges", "all")
+_DATA = ("none", "objects")
+_ROUTING = ("straight", "orthogonal")
+#: Size of a data-object shape and the strip above the pool that holds them.
+DATA_OBJECT_SIZE = (36, 50)
+DATA_STRIP = 90
 
 #: Name of the metadata entry holding the selected node overlay text.
 _PERF_KEY = "_perf"
@@ -130,6 +135,8 @@ def serialize_to_string(
     heatmap_global: bool = False,
     node_span: Optional[Tuple[float, float]] = None,
     edge_span: Optional[Tuple[float, float]] = None,
+    data: str = "none",
+    routing: str = "straight",
     layout: bool = True,
     validate: bool = True,
     encoding: str = "UTF-8",
@@ -139,8 +146,14 @@ def serialize_to_string(
     Parameters
     ----------
     stubs
-        ``"call"``: a static stub is a ``callActivity`` calling the plug-in
-        map's process (the only mode so far).
+        ``"call"`` (default): a static stub is a ``callActivity`` calling
+        the plug-in map's process, which keeps one process and one diagram
+        per map. ``"inline"``: every stub, static or dynamic, is a collapsed
+        ``subProcess`` whose body is the plug-in map itself (a dynamic stub's
+        inclusive choice then leads to one nested sub-process per plug-in);
+        only root maps become processes. Inline files have no call
+        activities, so pm4py's reader (which knows none) reads them; a
+        plug-in bound to several stubs is written once per stub.
     lanes
         ``"components"`` (default) draws every component as a lane;
         ``"none"`` emits a pool without lanes.
@@ -173,6 +186,19 @@ def serialize_to_string(
     heatmap_global
         Normalise the heat-map against the whole model's min/max instead
         of each map's own (same meaning as in the PNG renderer).
+    data
+        ``"objects"`` writes every scenario :class:`UCM.Variable` as a
+        ``dataObject`` (+ reference and shape in a strip above the pool),
+        enumeration values in its documentation, and each
+        :class:`UCM.ScenarioDef` as a documentation paragraph on the root
+        process. ``"none"`` (default) leaves the scenario layer out; the
+        guards are on the flows either way.
+    routing
+        ``"straight"`` (default) draws each flow through its UCM bend points
+        as the UCM does. ``"orthogonal"`` turns every slanted segment into an
+        elbow, horizontal first on a forward segment and vertical first on a
+        backward one, so loop back-edges leave a task's box vertically
+        instead of cutting through it.
     node_span, edge_span
         An explicit ``(lo, hi)`` range to normalise against instead, e.g.
         a family-wide range from
@@ -195,6 +221,8 @@ def serialize_to_string(
     _check_choice("sizes", sizes, _SIZES)
     _check_choice("metrics", metrics, _METRICS)
     _check_choice("annotate", annotate, _ANNOTATE)
+    _check_choice("data", data, _DATA)
+    _check_choice("routing", routing, _ROUTING)
 
     if validate:
         from ...validate import check_ucm
@@ -217,7 +245,8 @@ def serialize_to_string(
                     sizes=sizes, metrics=metrics, annotate=annotate,
                     heatmap_node=heatmap_node, heatmap_edge=heatmap_edge,
                     heatmap_global=heatmap_global,
-                    node_span=node_span, edge_span=edge_span)
+                    node_span=node_span, edge_span=edge_span,
+                    data=data, routing=routing)
     model = _Model(ucm, opts)
     w = _XmlWriter(encoding=encoding)
     _emit_definitions(w, model)
@@ -329,7 +358,8 @@ def _clip_to_box(cx: float, cy: float, w: float, h: float,
 class _Options:
     def __init__(self, stubs, lanes, lane_names, sizes, metrics, annotate,
                  heatmap_node=None, heatmap_edge=None,
-                 heatmap_global=False, node_span=None, edge_span=None) -> None:
+                 heatmap_global=False, node_span=None, edge_span=None,
+                 data="none", routing="straight") -> None:
         self.stubs = stubs
         self.lanes = lanes
         self.lane_names = lane_names
@@ -341,6 +371,8 @@ class _Options:
         self.heatmap_global = heatmap_global
         self.node_span = node_span
         self.edge_span = edge_span
+        self.data = data
+        self.routing = routing
 
 
 class _Flow:
@@ -381,7 +413,7 @@ class _Lane:
 class _ProcessModel:
     """Everything emitted for one UCM map."""
 
-    def __init__(self, ucm: UCM, m: "UCM.UCMmap", index: int,
+    def __init__(self, ucm: UCM, m: "UCM.UCMmap", index,
                  opts: _Options) -> None:
         self.ucm = ucm
         self.map = m
@@ -400,6 +432,9 @@ class _ProcessModel:
         self.sizes: Dict["UCM.PathNode", Tuple[int, int]] = {}
         self.node_heat: Dict["UCM.PathNode", float] = {}
         self.edge_heat: Dict[_Flow, float] = {}
+        #: ``stubs="inline"``: the sub-process models standing in for each
+        #: stub's plug-ins, one per binding, in binding order.
+        self.inline: Dict["UCM.PathNode", List["_ProcessModel"]] = {}
         self._build_nodes()
         self._build_flows()
         self.sizes = {n: _shape_size(n, opts.sizes) for n in self.nodes}
@@ -592,7 +627,7 @@ def _compute_heat(model: _Model) -> None:
     if opts.heatmap_global and node_span is None and edge_span is None:
         node_span, edge_span = _c.heat_span(
             [model.ucm], opts.heatmap_node, opts.heatmap_edge)
-    for p in model.processes:
+    for p in model.all_models():
         if opts.heatmap_node:
             vals = {}
             for n in p.nodes:
@@ -652,16 +687,50 @@ class _Model:
     def __init__(self, ucm: UCM, opts: _Options) -> None:
         self.ucm = ucm
         self.opts = opts
-        self.processes = [_ProcessModel(ucm, m, i, opts)
-                          for i, m in enumerate(ucm.maps)]
+        plugin_maps = {b.plugin for m in ucm.maps for n in m.nodes
+                       if isinstance(n, UCM.Stub) for b in n.bindings}
+        if opts.stubs == "inline":
+            # Only root maps are processes; every plug-in is nested under
+            # the stub that binds it, once per binding.
+            self.processes = [_ProcessModel(ucm, m, i, opts)
+                              for i, m in enumerate(ucm.maps)
+                              if m not in plugin_maps]
+            if not self.processes and ucm.maps:
+                self.processes = [_ProcessModel(ucm, ucm.maps[0], 0, opts)]
+            self.children: List[_ProcessModel] = []
+            for p in list(self.processes):
+                self._nest(p, set())
+        else:
+            self.processes = [_ProcessModel(ucm, m, i, opts)
+                              for i, m in enumerate(ucm.maps)]
+            self.children = []
         if opts.heatmap_node or opts.heatmap_edge:
             _compute_heat(self)
         self.by_map = {p.map: p for p in self.processes}
-        plugin_maps = {b.plugin for m in ucm.maps for n in m.nodes
-                       if isinstance(n, UCM.Stub) for b in n.bindings}
         roots = [p for p in self.processes if p.map not in plugin_maps]
         self.root = roots[0] if roots else (
             self.processes[0] if self.processes else None)
+
+    def _nest(self, p: _ProcessModel, ancestry) -> None:
+        """Build the inline child models of every stub on ``p``'s map."""
+        ancestry = ancestry | {p.map}
+        for n in p.nodes:
+            if not isinstance(n, UCM.Stub):
+                continue
+            kids = []
+            for k, b in enumerate(n.bindings):
+                if b.plugin in ancestry:
+                    continue      # a plug-in that contains its own caller
+                child = _ProcessModel(self.ucm, b.plugin,
+                                      f"{p.index}_{p.node_ids[n].rsplit('_', 1)[-1]}_{k}",
+                                      self.opts)
+                kids.append(child)
+                self.children.append(child)
+                self._nest(child, ancestry)
+            p.inline[n] = kids
+
+    def all_models(self) -> List[_ProcessModel]:
+        return list(self.processes) + list(self.children)
 
 
 # ---------------------------------------------------------------------------
@@ -700,10 +769,37 @@ def _emit_definitions(w: "_XmlWriter", model: _Model) -> None:
         _emit_process(w, model, p)
     for p in model.processes:
         _emit_diagram(w, model, p)
-        for n in p.nodes:
-            if isinstance(n, UCM.Stub) and n.dynamic:
-                _emit_dynamic_stub_diagram(w, model, p, n)
+        _emit_stub_diagrams(w, model, p)
     w.close("bpmn:definitions")
+
+
+def _emit_stub_diagrams(w, model: _Model, p: _ProcessModel) -> None:
+    """The extra diagrams a map's stubs need: a dynamic stub's own plane,
+    and (``stubs="inline"``) one plane per nested plug-in sub-process."""
+    for n in p.nodes:
+        if not isinstance(n, UCM.Stub):
+            continue
+        if n.dynamic:
+            _emit_dynamic_stub_diagram(w, model, p, n)
+        if model.opts.stubs == "inline":
+            body = _StubBody(model, p, n) if n.dynamic else None
+            for k, child in enumerate(p.inline.get(n, [])):
+                plane_el = body.calls[k][0] if body else p.node_ids[n]
+                _emit_child_diagram(w, model, child, plane_el)
+                _emit_stub_diagrams(w, model, child)
+
+
+def _emit_child_diagram(w, model: _Model, child: _ProcessModel,
+                        plane_el: str) -> None:
+    """The plane of a collapsed sub-process standing in for a plug-in:
+    the plug-in map drawn with its own coordinates and lanes."""
+    w.open("bpmndi:BPMNDiagram", [("id", f"Diagram_{child.index}"),
+                                  ("name", child.map.name)])
+    w.open("bpmndi:BPMNPlane", [("id", f"Plane_{child.index}"),
+                                ("bpmnElement", plane_el)])
+    _emit_plane_content(w, model, child, with_pool=False)
+    w.close("bpmndi:BPMNPlane")
+    w.close("bpmndi:BPMNDiagram")
 
 
 def _emit_process(w: "_XmlWriter", model: _Model, p: _ProcessModel) -> None:
@@ -719,11 +815,21 @@ def _emit_process(w: "_XmlWriter", model: _Model, p: _ProcessModel) -> None:
         doc.append(p.map.description)
     for d in doc:
         w.text_element("bpmn:documentation", [], d)
+    if p is model.root and model.opts.data == "objects":
+        for d in _scenario_documentation(ucm):
+            w.text_element("bpmn:documentation", [], d)
     _emit_extensions(w, [("map", p.map.name)], _plain_metadata(p.map))
+    _emit_map_body(w, model, p)
+    if p is model.root and model.opts.data == "objects":
+        _emit_data_objects(w, model)
+    w.close("bpmn:process")
 
+
+def _emit_map_body(w, model: _Model, p: _ProcessModel) -> None:
+    """Lane set, flow nodes, flows and annotations of one map — the content
+    of a ``process`` or, inlined, of a ``subProcess``."""
     if p.lanes:
         _emit_lane_set(w, p, p.lanes, f"LaneSet_{p.index}")
-
     for n in p.nodes:
         _emit_flow_node(w, model, p, n)
     for f in p.flows:
@@ -741,7 +847,54 @@ def _emit_process(w: "_XmlWriter", model: _Model, p: _ProcessModel) -> None:
                     ("sourceRef", nid),
                     ("targetRef", f"Annotation_{nid}"),
                 ])
-    w.close("bpmn:process")
+
+
+# -- scenario layer -------------------------------------------------------------
+
+def _data_object_ids(model: _Model):
+    """``[(variable, dataObject id, reference id)]`` in model order."""
+    return [(v, f"DataObject_{i}", f"DataObjectRef_{i}")
+            for i, v in enumerate(model.ucm.variables)]
+
+
+def _emit_data_objects(w, model: _Model) -> None:
+    for v, oid, rid in _data_object_ids(model):
+        attrs = [("id", oid), ("name", v.name)]
+        doc = [f"type: {v.type}"]
+        if v.enumeration_type is not None:
+            doc.append(f"enumeration {v.enumeration_type.name}: "
+                       + ", ".join(v.enumeration_type.values))
+        if v.description:
+            doc.append(v.description)
+        w.open("bpmn:dataObject", attrs)
+        w.text_element("bpmn:documentation", [], "; ".join(doc))
+        w.close("bpmn:dataObject")
+        w.empty("bpmn:dataObjectReference",
+                [("id", rid), ("name", v.name), ("dataObjectRef", oid)])
+
+
+def _scenario_documentation(ucm: UCM) -> List[str]:
+    out = []
+    for g in ucm.scenario_groups:
+        for sc in g.scenarios:
+            inits = ", ".join(f"{i.variable.name} = {i.value}"
+                              for i in sc.initializations)
+            starts = ", ".join(sp.start_point.name or "start"
+                               for sp in sc.start_points if sp.enabled)
+            ends = ", ".join(
+                (ep.end_point.name or "end") + (" (mandatory)" if ep.mandatory else "")
+                for ep in sc.end_points if ep.enabled)
+            text = f"Scenario {g.name} / {sc.name}"
+            if inits:
+                text += f": {inits}"
+            if starts:
+                text += f"; starts at {starts}"
+            if ends:
+                text += f"; ends at {ends}"
+            if sc.description:
+                text += f". {sc.description}"
+            out.append(text)
+    return out
 
 
 def _emit_lane_set(w, p: _ProcessModel, lanes: List[_Lane], lsid: str,
@@ -783,8 +936,13 @@ def _emit_flow_node(w, model: _Model, p: _ProcessModel, n) -> None:
         w.text_element("bpmn:outgoing", [], f.id)
     for child in children:
         child(w)
-    if isinstance(n, UCM.Stub) and n.dynamic:
-        _emit_dynamic_stub_body(w, model, p, n)
+    if isinstance(n, UCM.Stub):
+        if n.dynamic:
+            _emit_dynamic_stub_body(w, model, p, n)
+        elif model.opts.stubs == "inline":
+            kids = p.inline.get(n, [])
+            if kids:
+                _emit_map_body(w, model, kids[0])
     w.close(tag)
 
 
@@ -821,7 +979,7 @@ def _classify(model: _Model, p: _ProcessModel, n, attrs):
         return "bpmn:parallelGateway", ext, children
     if isinstance(n, UCM.Stub):
         ext.append(("stub", "dynamic" if n.dynamic else "static"))
-        if n.dynamic:
+        if n.dynamic or model.opts.stubs == "inline":
             attrs.append(("triggeredByEvent", "false"))
             return "bpmn:subProcess", ext, children
         if n.bindings:
@@ -977,8 +1135,17 @@ def _emit_dynamic_stub_body(w, model: _Model, p: _ProcessModel, stub) -> None:
                                      ("gatewayDirection", "Diverging")])
     io(body.fork)
     w.close("bpmn:inclusiveGateway")
-    for cid, b, target in body.calls:
+    kids = p.inline.get(stub, []) if model.opts.stubs == "inline" else []
+    for k, (cid, b, target) in enumerate(body.calls):
         attrs = [("id", cid), ("name", b.plugin.name)]
+        if model.opts.stubs == "inline":
+            attrs.append(("triggeredByEvent", "false"))
+            w.open("bpmn:subProcess", attrs)
+            io(cid)
+            if k < len(kids):
+                _emit_map_body(w, model, kids[k])
+            w.close("bpmn:subProcess")
+            continue
         if target is not None:
             attrs.append(("calledElement", target))
         w.open("bpmn:callActivity", attrs)
@@ -1012,8 +1179,12 @@ def _emit_dynamic_stub_diagram(w, model: _Model, p: _ProcessModel, stub) -> None
     w.open("bpmndi:BPMNDiagram", [("id", f"Diagram_{sid}"),
                                   ("name", _node_name(stub) or sid)])
     w.open("bpmndi:BPMNPlane", [("id", f"Plane_{sid}"), ("bpmnElement", sid)])
+    call_ids = {cid for cid, _, _ in body.calls}
     for eid, (x, y, bw, bh) in pos.items():
-        w.open("bpmndi:BPMNShape", [("id", f"{eid}_di"), ("bpmnElement", eid)])
+        attrs = [("id", f"{eid}_di"), ("bpmnElement", eid)]
+        if eid in call_ids and model.opts.stubs == "inline":
+            attrs.append(("isExpanded", "false"))
+        w.open("bpmndi:BPMNShape", attrs)
         w.empty("dc:Bounds", _bounds(x, y, bw, bh))
         w.close("bpmndi:BPMNShape")
     for fid, s, t, _ in body.flows():
@@ -1089,13 +1260,51 @@ def _metadata_value(element, name: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 def _emit_diagram(w, model: _Model, p: _ProcessModel) -> None:
-    x0, y0, pw, ph = p.bounds
     w.open("bpmndi:BPMNDiagram", [("id", f"Diagram_{p.index}"),
                                   ("name", p.map.name)])
     w.open("bpmndi:BPMNPlane", [("id", f"Plane_{p.index}"),
                                 ("bpmnElement", "Collaboration_1"
                                  if model.root is not None else p.id)])
-    if model.root is not None:
+    _emit_plane_content(w, model, p, with_pool=model.root is not None)
+    if p is model.root and model.opts.data == "objects":
+        x0, y0, pw, ph = p.bounds
+        dw, dh = DATA_OBJECT_SIZE
+        for i, (v, oid, rid) in enumerate(_data_object_ids(model)):
+            dx = x0 + POOL_LABEL_STRIP + 20 + i * 130
+            dy = y0 - DATA_STRIP + 10
+            w.open("bpmndi:BPMNShape", [("id", f"{rid}_di"), ("bpmnElement", rid)])
+            w.empty("dc:Bounds", _bounds(dx, dy, dw, dh))
+            w.open("bpmndi:BPMNLabel", [])
+            w.empty("dc:Bounds", _bounds(dx - 30, dy + dh + 2, dw + 60, 14))
+            w.close("bpmndi:BPMNLabel")
+            w.close("bpmndi:BPMNShape")
+    w.close("bpmndi:BPMNPlane")
+    w.close("bpmndi:BPMNDiagram")
+
+
+def _route(pts: List[Tuple[float, float]], routing: str) -> List[Tuple[float, float]]:
+    """Waypoints through the UCM bend points, or with every slanted
+    segment turned into an elbow (``"orthogonal"``): horizontal first on
+    a forward segment, vertical first on a backward one."""
+    if routing != "orthogonal":
+        return pts
+    out = [pts[0]]
+    for (ax, ay), (bx, by) in zip(pts, pts[1:]):
+        if ax != bx and ay != by:
+            out.append((bx, ay) if bx >= ax else (ax, by))
+        out.append((bx, by))
+    # Drop repeated points an elbow may have produced.
+    dedup = [out[0]]
+    for q in out[1:]:
+        if q != dedup[-1]:
+            dedup.append(q)
+    return dedup
+
+
+def _emit_plane_content(w, model: _Model, p: _ProcessModel,
+                        with_pool: bool) -> None:
+    x0, y0, pw, ph = p.bounds
+    if with_pool:
         w.open("bpmndi:BPMNShape", [("id", f"{p.participant_id}_di"),
                                     ("bpmnElement", p.participant_id),
                                     ("isHorizontal", "true")])
@@ -1118,7 +1327,7 @@ def _emit_diagram(w, model: _Model, p: _ProcessModel) -> None:
         sw, sh = sizes[n]
         nx, ny = p.xy(n)
         attrs = [("id", f"{p.node_ids[n]}_di"), ("bpmnElement", p.node_ids[n])]
-        if isinstance(n, UCM.Stub) and n.dynamic:
+        if isinstance(n, UCM.Stub) and (n.dynamic or model.opts.stubs == "inline"):
             attrs.append(("isExpanded", "false"))
         if n in p.node_heat:
             attrs += _heat_attrs(p.node_heat[n], model.opts.heatmap_node, True)
@@ -1137,6 +1346,7 @@ def _emit_diagram(w, model: _Model, p: _ProcessModel) -> None:
         pts = [p.xy(f.source)]
         pts += [p.pt(bx, by) for bx, by in f.bends]
         pts.append(p.xy(f.target))
+        pts = _route(pts, model.opts.routing)
         pts[0] = _clip_to_box(pts[0][0], pts[0][1], sw, sh, *pts[1])
         pts[-1] = _clip_to_box(pts[-1][0], pts[-1][1], tw, th, *pts[-2])
         attrs = [("id", f"{f.id}_di"), ("bpmnElement", f.id)]
@@ -1173,8 +1383,6 @@ def _emit_diagram(w, model: _Model, p: _ProcessModel) -> None:
             w.empty("di:waypoint", _point(nx, ny + sh / 2))
             w.empty("di:waypoint", _point(nx, ay))
             w.close("bpmndi:BPMNEdge")
-    w.close("bpmndi:BPMNPlane")
-    w.close("bpmndi:BPMNDiagram")
 
 
 def _lane_depth(p: _ProcessModel, lane: _Lane) -> int:

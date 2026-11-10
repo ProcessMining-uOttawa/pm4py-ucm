@@ -29,8 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   standard 100 × 80 / 50 × 50 / 36 × 36 shapes and scales the layout
   uniformly so nothing overlaps. `write_bpmn_family(family, path,
   assembled=…)` writes one `.bpmn` per cell plus the assembled family, on
-  one family-wide heat-map scale with `family_scale=True`. The mapping and
-  its decisions are in `docs/bpmn_export.md`.
+  one family-wide heat-map scale with `family_scale=True`.
+  `stubs="inline"` nests every plug-in under its stub as a collapsed
+  sub-process with its own diagram (no call activities, so pm4py's reader
+  reads the file); `data="objects"` writes scenario variables as data
+  objects and scenario definitions as documentation; `routing="orthogonal"`
+  draws elbowed flows. The mapping and its decisions are in
+  `docs/bpmn_export.md`.
 - **BPMN downloads in the web app.** The Model view has a *Prepare BPMN…* /
   *Download BPMN* pair beside the `.jucm` download, carrying the active
   heat-map as colours; the Family view's Downloads row has *BPMN 2.0

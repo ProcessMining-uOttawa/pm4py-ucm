@@ -431,7 +431,10 @@ flow's label (`annotate="edges"`; `"all"` adds text annotations under tasks;
 `"none"` keeps the file plain). `heatmap_node="frequency"` /
 `heatmap_edge="mean_time"` colour tasks and flows with the PNG heat-map's
 ramps (readable by bpmn.io and Camunda); `sizes="canonical"` draws standard
-BPMN shape sizes and scales the layout to fit them. Other options:
+BPMN shape sizes and scales the layout to fit them; `stubs="inline"` nests
+plug-ins as collapsed sub-processes instead of call activities (pm4py's
+reader needs this); `routing="orthogonal"` draws elbowed flows;
+`data="objects"` adds the scenario variables as data objects. Other options:
 `lanes="none"`, `lane_names="with_kind"`, `metrics="none"`,
 `validate=False`. `write_bpmn_family(family, "family.zip",
 assembled=umbrella)` writes one `.bpmn` per cell plus the assembled family.

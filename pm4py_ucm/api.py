@@ -79,9 +79,9 @@ def write_bpmn(
 
     ``options`` are the keyword arguments of
     :func:`pm4py_ucm.objects.ucm.exporter.variants.bpmn.serialize_to_string`
-    (``lanes``, ``lane_names``, ``sizes``, ``metrics``, ``annotate``,
-    ``heatmap_node``, ``heatmap_edge``, ``heatmap_global``, ``layout``,
-    ``validate``, ``encoding``)."""
+    (``stubs``, ``lanes``, ``lane_names``, ``sizes``, ``metrics``,
+    ``annotate``, ``heatmap_node``, ``heatmap_edge``, ``heatmap_global``,
+    ``data``, ``routing``, ``layout``, ``validate``, ``encoding``)."""
     _bpmn_exporter.apply(ucm, file_path, parameters=options)
     return file_path
 

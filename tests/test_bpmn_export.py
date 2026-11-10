@@ -785,6 +785,171 @@ class FamilyExportTests(unittest.TestCase):
                              for lo, hi in zip((150, 195, 250), (20, 55, 140))))
 
 
+def decomposed_ucm():
+    tree = op("->", op("->", leaf("A1"), leaf("A2"), leaf("A3")),
+              op("X", op("->", leaf("B1"), leaf("B2"), leaf("B3")),
+                 op("->", leaf("C1"), leaf("C2"), leaf("C3"))),
+              op("->", leaf("D1"), leaf("D2"), leaf("D3")))
+    ucm = decomposition.apply(tree, {"decomposition": "aggressive"})
+    ucm.bind_performers({"A1": "Intake", "A2": "Intake", "A3": "Intake",
+                         "B1": "Desk", "B2": "Desk", "B3": "Desk",
+                         "C1": "Field", "C2": "Field", "C3": "Field",
+                         "D1": "Intake", "D2": "Intake", "D3": "Intake"})
+    return ucm
+
+
+class InlineStubTests(unittest.TestCase):
+    """``stubs="inline"``: plug-ins nest under their stub as collapsed
+    sub-processes, each with its own plane; no call activities remain."""
+
+    def test_static_stubs_become_nested_sub_processes(self):
+        ucm = decomposed_ucm()
+        root = parse(serialize_to_string(ucm, stubs="inline"))
+        processes = root.findall(f"{NS_B}process")
+        self.assertEqual(len(processes), 1)          # only the root map
+        self.assertEqual(list(root.iter(f"{NS_B}callActivity")), [])
+        subs = list(root.iter(f"{NS_B}subProcess"))
+        n_stubs = sum(isinstance(n, UCM.Stub) for m in ucm.maps for n in m.nodes)
+        self.assertEqual(len(subs), n_stubs)
+        for sub in subs:
+            # The plug-in's body is inside: tasks, events, and its lanes.
+            self.assertTrue(sub.findall(f"{NS_B}task"))
+            self.assertEqual(len(sub.findall(f"{NS_B}startEvent")), 1)
+            self.assertTrue(sub.find(f"{NS_B}laneSet") is not None)
+        # One plane per nested sub-process, each with the sub-process as
+        # its element, and collapsed in the parent.
+        planes = {pl.get("bpmnElement") for pl in root.iter(f"{NS_DI}BPMNPlane")}
+        shapes_by_el = {sh.get("bpmnElement"): sh
+                        for sh in root.iter(f"{NS_DI}BPMNShape")}
+        for sub in subs:
+            self.assertIn(sub.get("id"), planes)
+            self.assertEqual(shapes_by_el[sub.get("id")].get("isExpanded"), "false")
+        # Every task is in exactly one lane somewhere.
+        tasks = {t.get("id") for t in root.iter(f"{NS_B}task")}
+        refs = [r.text for r in root.iter(f"{NS_B}flowNodeRef")]
+        self.assertTrue(tasks <= set(refs))
+
+    def test_dynamic_stub_nests_one_sub_process_per_plugin(self):
+        root = parse(serialize_to_string(dynamic_stub_ucm(), stubs="inline"))
+        self.assertEqual(len(root.findall(f"{NS_B}process")), 1)
+        outer = next(iter(root.iter(f"{NS_B}subProcess")))
+        inner = outer.findall(f"{NS_B}subProcess")
+        self.assertEqual(sorted(i.get("name") for i in inner), ["Plug0", "Plug1"])
+        for i in inner:
+            self.assertEqual([t.get("name") for t in i.findall(f"{NS_B}task")],
+                             [f"Work{i.get('name')[-1]}"])
+        self.assertEqual(list(root.iter(f"{NS_B}callActivity")), [])
+        planes = {pl.get("bpmnElement") for pl in root.iter(f"{NS_DI}BPMNPlane")}
+        for i in inner:
+            self.assertIn(i.get("id"), planes)
+
+    def test_pm4py_reads_an_inline_decomposed_model(self):
+        if _pm4py is None:
+            self.skipTest("pm4py not installed")
+        ucm = decomposed_ucm()
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "inline.bpmn")
+            pm4py_ucm.write_bpmn(ucm, path, stubs="inline")
+            graph = _pm4py.read_bpmn(path)
+        names = sorted(n.get_name() for n in graph.get_nodes()
+                       if type(n).__name__ == "Task")
+        self.assertEqual(names, [f"{a}{i}" for a in "ABCD" for i in (1, 2, 3)])
+        self.assertTrue(any(type(n).__name__ == "SubProcess"
+                            for n in graph.get_nodes()))
+
+    @unittest.skipIf(_lxml is None, "lxml not installed")
+    def test_inline_files_validate(self):
+        schema = _lxml.XMLSchema(_lxml.parse(XSD))
+        for ucm in (decomposed_ucm(), dynamic_stub_ucm()):
+            xml = serialize_to_string(ucm, stubs="inline")
+            self.assertTrue(schema.validate(_lxml.fromstring(xml.encode("utf-8"))),
+                            "; ".join(str(e) for e in schema.error_log))
+
+
+class DataObjectTests(unittest.TestCase):
+
+    def _ucm(self):
+        ucm = claims_ucm()
+        enum = ucm.get_or_add_enumeration_type("Region", ["EU", "US"])
+        ucm.get_or_add_variable("region", "enumeration", enum)
+        ucm.get_or_add_variable("retries", "integer")
+        group = ucm.add_scenario_group("Mined")
+        sc = UCM.ScenarioDef(name="EU fast")
+        group.scenarios.append(sc)
+        m = ucm.maps[0]
+        sc.initializations.append(UCM.Initialization(ucm.variables[0], "EU"))
+        sc.start_points.append(UCM.ScenarioStartPoint(m.start_points[0], True))
+        sc.end_points.append(UCM.ScenarioEndPoint(m.end_points[0], True, True))
+        return ucm
+
+    def test_none_by_default(self):
+        xml = serialize_to_string(self._ucm())
+        self.assertNotIn("dataObject", xml)
+        self.assertNotIn("Scenario Mined", xml)
+
+    def test_variables_become_data_objects_with_shapes(self):
+        root = parse(serialize_to_string(self._ucm(), data="objects"))
+        objs = {o.get("name"): o for o in root.iter(f"{NS_B}dataObject")}
+        self.assertEqual(sorted(objs), ["region", "retries"])
+        self.assertIn("EU, US", objs["region"].find(f"{NS_B}documentation").text)
+        refs = list(root.iter(f"{NS_B}dataObjectReference"))
+        self.assertEqual(len(refs), 2)
+        sh = shapes(root)
+        pool = sh[root.find(f"{NS_B}collaboration/{NS_B}participant").get("id")]
+        for r in refs:
+            self.assertEqual(r.get("dataObjectRef"), objs[r.get("name")].get("id"))
+            x, y, w, h = sh[r.get("id")]
+            self.assertLess(y + h, pool[1])          # in the strip above the pool
+        docs = [d.text for d in root.find(f"{NS_B}process").findall(f"{NS_B}documentation")]
+        self.assertTrue(any(d.startswith("Scenario Mined / EU fast: region = EU")
+                            for d in docs))
+
+    @unittest.skipIf(_lxml is None, "lxml not installed")
+    def test_data_file_validates(self):
+        schema = _lxml.XMLSchema(_lxml.parse(XSD))
+        xml = serialize_to_string(self._ucm(), data="objects")
+        self.assertTrue(schema.validate(_lxml.fromstring(xml.encode("utf-8"))),
+                        "; ".join(str(e) for e in schema.error_log))
+
+
+class RoutingTests(unittest.TestCase):
+
+    def _segments(self, root):
+        for e in root.iter(f"{NS_DI}BPMNEdge"):
+            pts = [(float(w.get("x")), float(w.get("y")))
+                   for w in e.findall(f"{NS_DD}waypoint")]
+            for a, b in zip(pts, pts[1:]):
+                yield e.get("bpmnElement"), a, b
+
+    def test_straight_keeps_slanted_segments(self):
+        root = parse(serialize_to_string(claims_ucm()))
+        self.assertTrue(any(a[0] != b[0] and a[1] != b[1]
+                            for _, a, b in self._segments(root)))
+
+    def test_orthogonal_segments_are_axis_aligned(self):
+        root = parse(serialize_to_string(claims_ucm(), routing="orthogonal"))
+        for fid, a, b in self._segments(root):
+            self.assertTrue(abs(a[0] - b[0]) < 1e-6 or abs(a[1] - b[1]) < 1e-6,
+                            (fid, a, b))
+
+    def test_orthogonal_back_edge_leaves_vertically(self):
+        from pm4py_ucm.objects.ucm.exporter.variants.bpmn import _route
+        # forward slant: horizontal first; backward slant: vertical first
+        self.assertEqual(_route([(0, 0), (10, 5)], "orthogonal"),
+                         [(0, 0), (10, 0), (10, 5)])
+        self.assertEqual(_route([(10, 0), (0, 5)], "orthogonal"),
+                         [(10, 0), (10, 5), (0, 5)])
+        self.assertEqual(_route([(0, 0), (10, 0)], "orthogonal"),
+                         [(0, 0), (10, 0)])
+
+    @unittest.skipIf(_lxml is None, "lxml not installed")
+    def test_orthogonal_file_validates(self):
+        schema = _lxml.XMLSchema(_lxml.parse(XSD))
+        xml = serialize_to_string(claims_ucm(), routing="orthogonal")
+        self.assertTrue(schema.validate(_lxml.fromstring(xml.encode("utf-8"))),
+                        "; ".join(str(e) for e in schema.error_log))
+
+
 class ApiTests(unittest.TestCase):
 
     def test_convert_to_bpmn_xml_matches_write(self):
