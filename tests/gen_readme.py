@@ -76,6 +76,9 @@ AREAS: dict[str, list[str]] = {
         "test_replay_budget.py",
         "test_quick_reductions.py",
     ],
+    "BPMN 2.0 export": [
+        "test_bpmn_export.py",
+    ],
     "Layout": [
         "test_layout.py",
         "test_graphviz_layout.py",

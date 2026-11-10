@@ -4,7 +4,7 @@ Contents:
 
 | File                                    | What it is                                                       |
 |-----------------------------------------|------------------------------------------------------------------|
-| `pm4py_ucm_tutorial.ipynb`              | **Main tutorial notebook** — guided tour of the full model-discovery feature surface against a realistic claims-payment log. Recommended starting point for the discovery / rendering / decomposition side of the package. |
+| `pm4py_ucm_tutorial.ipynb`              | **Main tutorial notebook** — guided tour of the full model-discovery feature surface against a realistic claims-payment log, including the standard BPMN 2.0 export. Recommended starting point for the discovery / rendering / decomposition side of the package. |
 | `scenario_synthesis_tutorial.ipynb`     | **Scenario-synthesis tutorial** — the scenario layer end to end: concurrency-aware variants, the `LoopEntryGuard`, both OR-fork condition encodings (variant-driven and **data-driven / decision-mining**, with the per-fork accuracy report), decomposed UCMs, and a capstone running both encodings on `ClaimsPaymentLog`. |
 | `model_families_tutorial.ipynb`         | **Model-families + performance-overlays tutorial** — partitions `ClaimsPaymentLog` by case attributes, mines one model per combination, renders the stack/matrix grid, exports per-cell / combined / dynamic-stub-umbrella `.jucm` files, overlays frequencies and times on activities and edges, and compares members via the family statistics + interactive HTML report. |
 | `dashboards_tutorial.ipynb`             | **Dashboards tutorial** — builds the per-case fact table, computes widgets (KPIs, segmented breakdowns, tables) from the metric catalog, adds filters / targets / a scorecard, writes custom metrics in the **ƒ formula language**, and exports a self-contained interactive HTML dashboard (plus an embedded mined model). |
@@ -144,6 +144,8 @@ python demo/mine_and_export.py path/to/log.xes --decompose
 ```
 
 Outputs `out.jucm` and `out.png` by default; override with `--out base`.
+Add `--bpmn` to also write `out.bpmn`, a standard BPMN 2.0 file (opens in
+bpmn.io or Camunda Modeler; plug-in maps nest as collapsed sub-processes).
 
 ## What `--decompose` does
 

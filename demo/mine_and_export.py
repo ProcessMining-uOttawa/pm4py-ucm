@@ -75,6 +75,11 @@ def main(argv=None):
              "rendered as a vertically stacked PNG.",
     )
     parser.add_argument(
+        "--bpmn", action="store_true",
+        help="Also write <out>.bpmn, a standard BPMN 2.0 file (plug-in "
+             "maps as collapsed sub-processes).",
+    )
+    parser.add_argument(
         "--out", default="out",
         help="Output base name; .jucm and .png are appended (default: out).",
     )
@@ -112,13 +117,18 @@ def main(argv=None):
     png_path = args.out + ".png"
     pm4py_ucm.write_ucm(ucm, jucm_path)
     pm4py_ucm.save_vis_ucm(ucm, png_path)
+    bpmn_path = None
+    if args.bpmn:
+        bpmn_path = args.out + ".bpmn"
+        pm4py_ucm.write_bpmn(ucm, bpmn_path, stubs="inline")
 
     print(f"mined UCM from {what}: {len(ucm.maps)} map(s)")
     for m in ucm.maps:
         n_nodes = len(m.nodes)
         n_stubs = sum(1 for n in m.nodes if getattr(n, "bindings", None))
         print(f"  - {m.name!r}: {n_nodes} nodes, {n_stubs} stub(s)")
-    print(f"wrote {jucm_path} and {png_path}")
+    print(f"wrote {jucm_path} and {png_path}"
+          + (f" and {bpmn_path}" if bpmn_path else ""))
     return 0
 
 

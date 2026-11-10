@@ -35,7 +35,7 @@ pm4py_ucm.write_bpmn(ucm, "running-example.bpmn")  # opens in bpmn.io, Camunda
 
 **Ways to get started:**
 
-- [`demo/pm4py_ucm_tutorial.ipynb`](demo/pm4py_ucm_tutorial.ipynb) — end-to-end Jupyter walkthrough on a real claims-payment log (discovery, BPMN/UCM rendering, navigable **SVG** + `.jucm`/`.png`/`.svg` export, performer mining, hierarchical decomposition, `.jucm` round-trips).
+- [`demo/pm4py_ucm_tutorial.ipynb`](demo/pm4py_ucm_tutorial.ipynb) — end-to-end Jupyter walkthrough on a real claims-payment log (discovery, BPMN/UCM rendering, navigable **SVG** + `.jucm`/`.png`/`.svg` export, standard **BPMN 2.0** export, performer mining, hierarchical decomposition, `.jucm` round-trips).
 - [`demo/scenario_synthesis_tutorial.ipynb`](demo/scenario_synthesis_tutorial.ipynb) — the **scenario-synthesis** layer: concurrency-aware variants, per-loop counters + `LoopEntryGuard`, both OR-fork condition encodings (variant-driven and **data-driven / decision-mining**, with the per-fork accuracy report), decomposed UCMs, and a capstone running both encodings on the claims log.
 - [`demo/model_families_tutorial.ipynb`](demo/model_families_tutorial.ipynb) — the **model-family** pipeline on the claims log: attribute detection, partition preview, per-cell mining, stack/matrix rendering, combined export, the dynamic-stub **umbrella** (skeleton, resource variation, path scenarios), **performance overlays** on activities and edges (with the value-scaled **heat-map**), pairwise **comparison**, and the **family statistics report** (FamilyStats + the self-contained interactive HTML file).
 - [`demo/dashboards_tutorial.ipynb`](demo/dashboards_tutorial.ipynb) — the **dashboards** layer: the per-case fact table, the metric catalog and computing widgets, filters / targets / scorecard, every **visualisation** (KPI, gauge, histogram, box plot, bar, line, pie/donut, heatmap table), the **ƒ custom-formula language**, and exporting a self-contained interactive HTML dashboard.
@@ -65,8 +65,8 @@ the deprecated V5 and four-tab V3 apps), with a global **log filter** and
   `attr("Channel") == "Web" and duration() > 5`) and **rename or merge
   activities**
   before mining, preview the diagram in UCM or BPMN notation, and download
-  the rendered PNG, the `.jucm` file, or the **filtered log itself** as
-  XES/CSV. The filter and rename are global — every view below (and its
+  the rendered PNG, the `.jucm` file, a standard **BPMN 2.0** file, or the
+  **filtered log itself** as XES/CSV. The filter and rename are global — every view below (and its
   exports) mines the same transformed log.
 
   ![Model view](web/PM4Py-UCM-Model.png)
@@ -438,6 +438,8 @@ reader needs this); `routing="orthogonal"` draws elbowed flows;
 `lanes="none"`, `lane_names="with_kind"`, `metrics="none"`,
 `validate=False`. `write_bpmn_family(family, "family.zip",
 assembled=umbrella)` writes one `.bpmn` per cell plus the assembled family.
+The web app's downloads use `stubs="inline"`, since bpmn.io drills into a
+collapsed sub-process but cannot follow a call activity.
 The web app offers both from the Model and Family views. The mapping and
 its limits (pm4py's reader cannot read call activities) are in
 [`docs/bpmn_export.md`](docs/bpmn_export.md).
@@ -1366,7 +1368,7 @@ public helpers. Narrative guides live alongside the code in
 [`docs/`](docs/): [`metrics.md`](docs/metrics.md),
 [`dashboards.md`](docs/dashboards.md),
 [`model_families.md`](docs/model_families.md),
-[`bpmn_export.md`](docs/bpmn_export.md) (design of the planned BPMN 2.0 export),
+[`bpmn_export.md`](docs/bpmn_export.md) (the UCM → BPMN 2.0 mapping and its decisions),
 [`miner_performance.md`](docs/miner_performance.md) (what mining and replay
 actually cost, measured across twelve logs),
 [`scenario_simulation.md`](docs/scenario_simulation.md) (design note for the
