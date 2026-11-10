@@ -1328,6 +1328,7 @@ public helpers. Narrative guides live alongside the code in
 [`docs/`](docs/): [`metrics.md`](docs/metrics.md),
 [`dashboards.md`](docs/dashboards.md),
 [`model_families.md`](docs/model_families.md),
+[`bpmn_export.md`](docs/bpmn_export.md) (design of the planned BPMN 2.0 export),
 [`miner_performance.md`](docs/miner_performance.md) (what mining and replay
 actually cost, measured across twelve logs),
 [`scenario_simulation.md`](docs/scenario_simulation.md) (design note for the
