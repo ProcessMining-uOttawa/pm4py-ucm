@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="web/assets/logo.png" alt="PM4Py-UCM — Process Mining with Use Case Maps" width="380">
+  <img src="https://raw.githubusercontent.com/ProcessMining-uOttawa/pm4py-ucm/main/web/assets/logo.png" alt="PM4Py-UCM — Process Mining with Use Case Maps" width="380">
 </p>
 
 <h1 align="center">pm4py-ucm</h1>
@@ -7,7 +7,7 @@
 [![tests](https://github.com/ProcessMining-uOttawa/pm4py-ucm/actions/workflows/tests.yml/badge.svg)](https://github.com/ProcessMining-uOttawa/pm4py-ucm/actions/workflows/tests.yml)
 [![docs](https://github.com/ProcessMining-uOttawa/pm4py-ucm/actions/workflows/docs.yml/badge.svg)](https://processmining-uottawa.github.io/pm4py-ucm/)
 [![Python](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-blue)](https://www.python.org/)
-[![License: GPL v3+](https://img.shields.io/badge/license-GPLv3%2B-blue.svg)](LICENSE)
+[![License: GPL v3+](https://img.shields.io/badge/license-GPLv3%2B-blue.svg)](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/LICENSE)
 [![Streamlit V6](https://img.shields.io/badge/Streamlit-V6%20workspace-FF4B4B?logo=streamlit&logoColor=white)](https://pm4py-ucm.streamlit.app/)
 
 **Use Case Map (UCM) extension for [PM4Py](https://github.com/process-intelligence-solutions/pm4py).**
@@ -35,12 +35,12 @@ pm4py_ucm.write_bpmn(ucm, "running-example.bpmn")  # opens in bpmn.io, Camunda
 
 **Ways to get started:**
 
-- [`demo/pm4py_ucm_tutorial.ipynb`](demo/pm4py_ucm_tutorial.ipynb) — end-to-end Jupyter walkthrough on a real claims-payment log (discovery, BPMN/UCM rendering, navigable **SVG** + `.jucm`/`.png`/`.svg` export, standard **BPMN 2.0** export, performer mining, hierarchical decomposition, `.jucm` round-trips).
-- [`demo/scenario_synthesis_tutorial.ipynb`](demo/scenario_synthesis_tutorial.ipynb) — the **scenario-synthesis** layer: concurrency-aware variants, per-loop counters + `LoopEntryGuard`, both OR-fork condition encodings (variant-driven and **data-driven / decision-mining**, with the per-fork accuracy report), decomposed UCMs, and a capstone running both encodings on the claims log.
-- [`demo/model_families_tutorial.ipynb`](demo/model_families_tutorial.ipynb) — the **model-family** pipeline on the claims log: attribute detection, partition preview, per-cell mining, stack/matrix rendering, combined export, the dynamic-stub **umbrella** (skeleton, resource variation, path scenarios), **performance overlays** on activities and edges (with the value-scaled **heat-map**), pairwise **comparison**, and the **family statistics report** (FamilyStats + the self-contained interactive HTML file).
-- [`demo/dashboards_tutorial.ipynb`](demo/dashboards_tutorial.ipynb) — the **dashboards** layer: the per-case fact table, the metric catalog and computing widgets, filters / targets / scorecard, every **visualisation** (KPI, gauge, histogram, box plot, bar, line, pie/donut, heatmap table), the **ƒ custom-formula language**, and exporting a self-contained interactive HTML dashboard.
-- [`demo/sessions_tutorial.ipynb`](demo/sessions_tutorial.ipynb) — **save, share & resume** a project: the config-vs-data-vs-derived principle, the parameter registry and `collect`, a **settings file** vs a self-contained **project bundle**, the versioned **dashboards** envelope, `load` round-trips, and forward-compatibility (unknown keys preserved).
-- [`web/streamlit_app_v6.py`](web/streamlit_app_v6.py) — the **V6 web app** (model, scenarios, model families, statistics reports, Dashboards, a global log filter and activity renaming, **plus a pre-mining cost screen**), hosted at https://pm4py-ucm.streamlit.app/ — click, don't code: upload an XES/CSV, tune the miner, download the result. Every earlier app (V5, V3, V2) is **deprecated** — see [Web front-end](#web-front-end).
+- [`demo/pm4py_ucm_tutorial.ipynb`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/demo/pm4py_ucm_tutorial.ipynb) — end-to-end Jupyter walkthrough on a real claims-payment log (discovery, BPMN/UCM rendering, navigable **SVG** + `.jucm`/`.png`/`.svg` export, standard **BPMN 2.0** export, performer mining, hierarchical decomposition, `.jucm` round-trips).
+- [`demo/scenario_synthesis_tutorial.ipynb`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/demo/scenario_synthesis_tutorial.ipynb) — the **scenario-synthesis** layer: concurrency-aware variants, per-loop counters + `LoopEntryGuard`, both OR-fork condition encodings (variant-driven and **data-driven / decision-mining**, with the per-fork accuracy report), decomposed UCMs, and a capstone running both encodings on the claims log.
+- [`demo/model_families_tutorial.ipynb`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/demo/model_families_tutorial.ipynb) — the **model-family** pipeline on the claims log: attribute detection, partition preview, per-cell mining, stack/matrix rendering, combined export, the dynamic-stub **umbrella** (skeleton, resource variation, path scenarios), **performance overlays** on activities and edges (with the value-scaled **heat-map**), pairwise **comparison**, and the **family statistics report** (FamilyStats + the self-contained interactive HTML file).
+- [`demo/dashboards_tutorial.ipynb`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/demo/dashboards_tutorial.ipynb) — the **dashboards** layer: the per-case fact table, the metric catalog and computing widgets, filters / targets / scorecard, every **visualisation** (KPI, gauge, histogram, box plot, bar, line, pie/donut, heatmap table), the **ƒ custom-formula language**, and exporting a self-contained interactive HTML dashboard.
+- [`demo/sessions_tutorial.ipynb`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/demo/sessions_tutorial.ipynb) — **save, share & resume** a project: the config-vs-data-vs-derived principle, the parameter registry and `collect`, a **settings file** vs a self-contained **project bundle**, the versioned **dashboards** envelope, `load` round-trips, and forward-compatibility (unknown keys preserved).
+- [`web/streamlit_app_v6.py`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/web/streamlit_app_v6.py) — the **V6 web app** (model, scenarios, model families, statistics reports, Dashboards, a global log filter and activity renaming, **plus a pre-mining cost screen**), hosted at https://pm4py-ucm.streamlit.app/ — click, don't code: upload an XES/CSV, tune the miner, download the result. Every earlier app (V5, V3, V2) is **deprecated** — see [Web front-end](#web-front-end).
 - **[API reference](https://processmining-uottawa.github.io/pm4py-ucm/)** — the full browsable docstring documentation (public API + every module), generated by [pdoc](https://pdoc.dev) and published to GitHub Pages on each push to `main`.
 - The rest of this README — reference docs for the public API.
 
@@ -50,7 +50,7 @@ pm4py_ucm.write_bpmn(ucm, "running-example.bpmn")  # opens in bpmn.io, Camunda
 ## Web front-end
 
 The [Streamlit](https://streamlit.io) front-end — now the **V6** app
-([`web/streamlit_app_v6.py`](web/streamlit_app_v6.py)) — serves the
+([`web/streamlit_app_v6.py`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/web/streamlit_app_v6.py)) — serves the
 deployment: a left-rail workspace over these views (a strict superset of
 the deprecated V5 and four-tab V3 apps), with a global **log filter** and
 **activity renaming** applied before mining across every view, and a
@@ -69,7 +69,7 @@ the deprecated V5 and four-tab V3 apps), with a global **log filter** and
   **filtered log itself** as XES/CSV. The filter and rename are global — every view below (and its
   exports) mines the same transformed log.
 
-  ![Model view](web/PM4Py-UCM-Model.png)
+  ![Model view](https://raw.githubusercontent.com/ProcessMining-uOttawa/pm4py-ucm/main/web/PM4Py-UCM-Model.png)
 
 - **Scenarios** — concurrency-aware variant clustering + one
   executable jUCMNav `ScenarioDef` per variant. Both variant-driven
@@ -81,7 +81,7 @@ the deprecated V5 and four-tab V3 apps), with a global **log filter** and
   `case_variant_map.csv`, and (data-driven mode) `condition_mining.csv`.
   Runs on flat and decomposed UCMs alike.
 
-  ![Scenarios view](web/PM4Py-UCM-Scenarios.png)
+  ![Scenarios view](https://raw.githubusercontent.com/ProcessMining-uOttawa/pm4py-ucm/main/web/PM4Py-UCM-Scenarios.png)
 
   A **Simulation** section at the bottom then *runs* those scenarios the way
   jUCMNav does and colours the model with what they walked — either the
@@ -89,7 +89,7 @@ the deprecated V5 and four-tab V3 apps), with a global **log filter** and
   element hoverable. The choice is saved with the project and reproduced by an
   exported script.
 
-  ![Scenario execution](web/PM4Py-UCM-Simulation.png)
+  ![Scenario execution](https://raw.githubusercontent.com/ProcessMining-uOttawa/pm4py-ucm/main/web/PM4Py-UCM-Simulation.png)
 
 - **Family** — a **deterministic advisor** ranks the case attributes by
   discriminative power (which one yields genuinely different processes), then
@@ -100,18 +100,18 @@ the deprecated V5 and four-tab V3 apps), with a global **log filter** and
   the interactive HTML statistics report — download-only artifacts built
   on request, so browsing the grid stays fast.
 
-  ![Family view](web/PM4Py-UCM-Family.png)
+  ![Family view](https://raw.githubusercontent.com/ProcessMining-uOttawa/pm4py-ucm/main/web/PM4Py-UCM-Family.png)
 
 - **Compare** — rank the family members on a heat-mapped statistics
   table and compare any two side by side (models, activity/edge
   deltas, aligned choice shares).
 
-  ![Compare view](web/PM4Py-UCM-Compare.png)
+  ![Compare view](https://raw.githubusercontent.com/ProcessMining-uOttawa/pm4py-ucm/main/web/PM4Py-UCM-Compare.png)
 
 Plus a **Performance overlay** sidebar section (frequencies/times on
 activities and edges, applied to every tab's outputs) with an optional
 **heat-map** that colours and thickens activities and edges by value. See
-[`docs/model_families.md`](docs/model_families.md).
+[`docs/model_families.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/model_families.md).
 
 The overlay's default counts are **replay-based**: they measure how often
 the log walks each part of the model, so the numbers **conserve** —
@@ -121,7 +121,7 @@ counts and directly-follows counts, still available, measure different
 things and disagree with each other wherever the model has concurrency or
 a silently skipped branch.) The view reports how much of the log the
 model explains alongside them. See
-[`docs/metrics.md` §9](docs/metrics.md).
+[`docs/metrics.md` §9](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/metrics.md).
 
 Deployed on Streamlit Community Cloud at
 **https://pm4py-ucm.streamlit.app/** (`streamlit_app.py`, the
@@ -135,14 +135,14 @@ session registry, which they save but do not restore. Point new work at V6.
 
 | App | File | Status |
 |---|---|---|
-| **V6** | [`streamlit_app_v6.py`](web/streamlit_app_v6.py) | **Current.** Deployed at https://pm4py-ucm.streamlit.app/ |
-| V5 | [`streamlit_app_v5.py`](web/streamlit_app_v5.py) | Deprecated — workspace shell + Dashboards, no cost screen, no Simulation |
-| V3 | [`streamlit_app_v3.py`](web/streamlit_app_v3.py) | Deprecated — the earlier four-tab app |
-| V2 | [`streamlit_app_v2.py`](web/streamlit_app_v2.py) | Deprecated. Model + scenarios; was frozen for a paper, no longer |
+| **V6** | [`streamlit_app_v6.py`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/web/streamlit_app_v6.py) | **Current.** Deployed at https://pm4py-ucm.streamlit.app/ |
+| V5 | [`streamlit_app_v5.py`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/web/streamlit_app_v5.py) | Deprecated — workspace shell + Dashboards, no cost screen, no Simulation |
+| V3 | [`streamlit_app_v3.py`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/web/streamlit_app_v3.py) | Deprecated — the earlier four-tab app |
+| V2 | [`streamlit_app_v2.py`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/web/streamlit_app_v2.py) | Deprecated. Model + scenarios; was frozen for a paper, no longer |
 | V4, V1 | — | Removed; they live in git history |
 
 A second deployment, `pm4py-ucm-scenarios.streamlit.app` (now gone), used
-to serve the V2 app ([`web/streamlit_app_v2.py`](web/streamlit_app_v2.py),
+to serve the V2 app ([`web/streamlit_app_v2.py`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/web/streamlit_app_v2.py),
 model + scenarios). V2 was **frozen** — stricter than deprecated,
 byte-for-byte unchangeable — for as long as a paper under review pointed at
 that URL. The paper was accepted and its final version points at the main app
@@ -160,10 +160,10 @@ table — whichever the metric and segmentation actually support — and the
 grid is drag-reordered and drag-resized. A log can hold several **named
 dashboards**, exported one at a time or **all in one** self-contained
 interactive HTML file (or as a multi-section session report). See
-[`docs/dashboards.md`](docs/dashboards.md) and
-[`demo/dashboards_tutorial.ipynb`](demo/dashboards_tutorial.ipynb).
+[`docs/dashboards.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/dashboards.md) and
+[`demo/dashboards_tutorial.ipynb`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/demo/dashboards_tutorial.ipynb).
 
-![Dashboards view](web/PM4Py-UCM-Dashboard.png)
+![Dashboards view](https://raw.githubusercontent.com/ProcessMining-uOttawa/pm4py-ucm/main/web/PM4Py-UCM-Dashboard.png)
 
 **Save, share & resume.** A configured session — the log reference, CSV
 mapping, renaming, filters, performers, overlays, decomposition, family and
@@ -174,7 +174,7 @@ to a colleague. Save from the sidebar's **Project** group as a small
 self-contained **project bundle** (`.ucmproj.zip`, configuration + the log);
 resume either from the **log-source** area. Only *inputs* are stored — the
 model, scenarios, family and reports recompute on load. See
-[`docs/sessions.md`](docs/sessions.md).
+[`docs/sessions.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/sessions.md).
 
 **Export the analysis as runnable Python.** The same **Project** group emits the
 current session — in one download — as both a plain-Python **script** (`.py`, with
@@ -188,7 +188,7 @@ result inline (the mined model and family grid as **SVG**, the variants, the liv
 dashboards). Because a project stores only *inputs*, the output is a faithful,
 deterministic replay — a way to graduate a GUI exploration into an automatable,
 version-controllable pipeline. It is a template emitter, no LLM involved. See
-[`docs/code_export.md`](docs/code_export.md).
+[`docs/code_export.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/code_export.md).
 
 Run locally with:
 
@@ -201,7 +201,7 @@ streamlit run web/streamlit_app_v6.py    # V6 — the current app
 # streamlit run web/streamlit_app_v2.py  # V2 — deprecated
 ```
 
-See [`web/README.md`](web/README.md) for the full feature walkthrough and
+See [`web/README.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/web/README.md) for the full feature walkthrough and
 Streamlit Community Cloud deployment instructions.
 
 ## Why UCM alongside BPMN?
@@ -329,7 +329,7 @@ else:
 
 Across twelve logs the extrapolation landed within 0.79×–1.39× of the real
 time. The measurements behind all of this — including why no miner setting
-is a fast path — are in [`docs/miner_performance.md`](docs/miner_performance.md).
+is a fast path — are in [`docs/miner_performance.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/miner_performance.md).
 
 **The remedy is reducing the log, not a faster miner.** On logs like these,
 `disable_fallthroughs=True` and PM4Py's DFG-based IMd return structurally
@@ -442,7 +442,7 @@ The web app's downloads use `stubs="inline"`, since bpmn.io drills into a
 collapsed sub-process but cannot follow a call activity.
 The web app offers both from the Model and Family views. The mapping and
 its limits (pm4py's reader cannot read call activities) are in
-[`docs/bpmn_export.md`](docs/bpmn_export.md).
+[`docs/bpmn_export.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/bpmn_export.md).
 
 ### Mine performers too — surface them as URN components
 
@@ -819,12 +819,12 @@ correlation survives arbitrary decomposition boundaries.
 
 ### Learning path
 
-- [`demo/scenario_synthesis_tutorial.ipynb`](demo/scenario_synthesis_tutorial.ipynb)
+- [`demo/scenario_synthesis_tutorial.ipynb`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/demo/scenario_synthesis_tutorial.ipynb)
   — a small synthetic example per section, then a capstone on
   `ClaimsPaymentLog` (24 variants, compression 0.146) in both the
   variant-driven and data-driven / decision-mining encodings.
 - The Scenarios view in
-  [`web/streamlit_app_v6.py`](web/streamlit_app_v6.py) — no code needed.
+  [`web/streamlit_app_v6.py`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/web/streamlit_app_v6.py) — no code needed.
   Its **Simulation** section runs and highlights the scenarios you just
   synthesized.
 
@@ -929,7 +929,7 @@ compete for the same colour channel.
 
 The web app's Scenarios view exposes all of this without code, and both the
 saved project and the exported Python script carry the selection — see
-[`docs/scenario_simulation.md`](docs/scenario_simulation.md) for the design
+[`docs/scenario_simulation.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/scenario_simulation.md) for the design
 note behind it.
 
 ## Model families (attribute-partitioned discovery)
@@ -972,7 +972,7 @@ traversal walks genuinely different paths per strategy.
 
 Full documentation — partitioning policy, skeleton merge rules,
 dedup/conditions, path scenarios, grid resolution, value filtering —
-in [`docs/model_families.md`](docs/model_families.md). The web app's
+in [`docs/model_families.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/model_families.md). The web app's
 **Family** view exposes all of it interactively, including a
 pre-mining coverage heatmap and per-attribute value filters.
 
@@ -999,7 +999,7 @@ traversal frequency, **case frequency**, relative frequency, and
 waiting-time aggregates), and **choice** — OR-fork branch counts
 *aligned across the family* through the shared skeleton, so the same
 decision point is one comparable row for every combination. Every
-metric is defined in [`docs/metrics.md`](docs/metrics.md).
+metric is defined in [`docs/metrics.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/metrics.md).
 
 `write_family_report` renders it all into a zero-dependency HTML
 report that opens offline in any browser: sortable heat-mapped
@@ -1040,7 +1040,7 @@ sidebar's ≤2 selections control what is drawn on the diagram, but
 metadata line for jUCMNav's properties view; the family assemblies
 annotate the shared skeleton from the whole log and each variant
 plug-in from its own sub-log. Overlay walkthrough in
-[`docs/model_families.md`](docs/model_families.md#2-performance-overlays).
+[`docs/model_families.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/model_families.md#2-performance-overlays).
 
 Beyond the text sub-line, an optional **heat-map** colours and thickens
 activities and edges by the *first* chosen metric of each layer — across the
@@ -1056,7 +1056,7 @@ colour is comparable across members). It is a render-time overlay of the same
 heatmap_global=…, node_span=…, edge_span=…)`; `classic.heat_span(models, …)`
 computes the shared cross-member span.
 
-**📏 [`docs/metrics.md`](docs/metrics.md) is the readable, complete list
+**📏 [`docs/metrics.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/metrics.md) is the readable, complete list
 of every metric definition** — activity, edge, process and choice —
 with units, timestamp semantics, aggregation rules, and the deliberate
 edge-case decisions (negative waiting on overlapping intervals, tie
@@ -1239,9 +1239,9 @@ begin with.
 ## Definitions vs references
 
 For the full Python object model in one picture, see
-[`docs/ucm_class_diagram.svg`](docs/ucm_class_diagram.svg) (vector,
-paper-ready) or the [PNG preview](docs/ucm_class_diagram.png). The
-[PlantUML source](docs/ucm_class_diagram.puml) can be re-rendered or
+[`docs/ucm_class_diagram.svg`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/ucm_class_diagram.svg) (vector,
+paper-ready) or the [PNG preview](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/ucm_class_diagram.png). The
+[PlantUML source](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/ucm_class_diagram.puml) can be re-rendered or
 extended for figures in academic papers.
 
 UCM keeps a sharp distinction between a *definition* (a reusable named
@@ -1350,7 +1350,7 @@ from the in-source docstrings — is published to **GitHub Pages**:
 > **<https://processmining-uottawa.github.io/pm4py-ucm/>**
 
 It is built with [pdoc](https://pdoc.dev) and redeployed automatically on
-every push to `main` ([`.github/workflows/docs.yml`](.github/workflows/docs.yml));
+every push to `main` ([`.github/workflows/docs.yml`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/.github/workflows/docs.yml));
 nothing generated is committed. To reproduce the deployed site locally:
 
 ```bash
@@ -1365,16 +1365,16 @@ The landing page is the curated public API (the names in
 its full module tree, which the sidebar links. `pdoc pm4py_ucm` on its own
 documents only the public-API page, because `__all__` lists just the
 public helpers. Narrative guides live alongside the code in
-[`docs/`](docs/): [`metrics.md`](docs/metrics.md),
-[`dashboards.md`](docs/dashboards.md),
-[`model_families.md`](docs/model_families.md),
-[`bpmn_export.md`](docs/bpmn_export.md) (the UCM → BPMN 2.0 mapping and its decisions),
-[`miner_performance.md`](docs/miner_performance.md) (what mining and replay
+[`docs/`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/tree/main/docs): [`metrics.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/metrics.md),
+[`dashboards.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/dashboards.md),
+[`model_families.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/model_families.md),
+[`bpmn_export.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/bpmn_export.md) (the UCM → BPMN 2.0 mapping and its decisions),
+[`miner_performance.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/miner_performance.md) (what mining and replay
 actually cost, measured across twelve logs),
-[`scenario_simulation.md`](docs/scenario_simulation.md) (design note for the
+[`scenario_simulation.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/scenario_simulation.md) (design note for the
 0.8.0 scenario simulator, coverage highlighting and A/B comparison),
-[`sessions.md`](docs/sessions.md) (what a saved project stores and how it is
-kept from rotting) and [`code_export.md`](docs/code_export.md) (the registry →
+[`sessions.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/sessions.md) (what a saved project stores and how it is
+kept from rotting) and [`code_export.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/code_export.md) (the registry →
 runnable-script mapping).
 
 ## Testing
@@ -1384,7 +1384,7 @@ pip install -e .[dev]
 python -m unittest discover -s tests -v
 ```
 
-See [`tests/README.md`](tests/README.md) for a per-file map of the suite
+See [`tests/README.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/tests/README.md) for a per-file map of the suite
 (purpose and test count for each of the 22 test modules).
 
 The default test suite does **not** require PM4Py to be installed: the
@@ -1398,7 +1398,7 @@ The performance and family-statistics metrics are validated in
 a hand-computed distinct-value fixture, algebraic invariants,
 metamorphic transforms, and simulation ground truth — with an optional
 differential check against pm4py's own DFG/duration functions. The
-metrics they enforce are specified in [`docs/metrics.md`](docs/metrics.md).
+metrics they enforce are specified in [`docs/metrics.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/metrics.md).
 
 ### Security scan
 

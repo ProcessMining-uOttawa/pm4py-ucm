@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The PyPI project page showed no screenshots.** `README.md` doubles as the
+  long description, and PyPI has no repository behind it, so its relative
+  image paths and links were broken there. Images now point at
+  `raw.githubusercontent.com` and links at `github.com/.../blob/main`; a
+  release guard refuses a relative target in the root README and still
+  checks that every absolute repository URL names a real file.
+
 ## [0.8.5] — 2026-11-10
 
 ### Added
