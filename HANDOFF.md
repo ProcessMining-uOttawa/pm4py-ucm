@@ -1,43 +1,83 @@
-# Handoff — after 0.8.4
+# Handoff — after 0.8.5
 
-**0.8.4 is released.** It is a file-loading hardening patch: three PRs
-(#127, #130, #131) fixed two upload crashes reported from the deployed app
-and five more found by auditing the loaders, and guarded the first parse of
-any upload so what is left becomes a message rather than a crash. Before it,
-0.8.0–0.8.3 delivered scenario simulation, coverage and A/B comparison
+**0.8.5 is released.** It adds the standard **BPMN 2.0 export**: design in
+[`docs/bpmn_export.md`](docs/bpmn_export.md) (PR #133), all five stages of
+its plan in one PR (#134), shipped at patch level at the maintainer's
+request because nothing that existed changes behaviour. Before it, 0.8.4 was
+a file-loading hardening patch (PRs #127, #130, #131: two upload crashes from
+the deployed app, five more from auditing the loaders, and a guarded first
+parse), and 0.8.0–0.8.3 delivered scenario simulation, coverage and A/B comparison
 (stages 1–5 of [`docs/scenario_simulation.md`](docs/scenario_simulation.md)),
 the validation gates, the variant-filtered log export, and the release
 tooling described below.
 
 ## State on arrival
 
-**In flight (2026-11-10): the BPMN 2.0 export.** Design in
-[`docs/bpmn_export.md`](docs/bpmn_export.md) (PR #133, branch
-`docs/bpmn-export-design`); all five stages implemented on
-`feat/bpmn-export-stage1` (PR #134), stacked on that branch:
-`pm4py_ucm/objects/ucm/exporter/variants/bpmn.py`, `write_bpmn` /
-`convert_to_bpmn_xml` in the API, `tests/test_bpmn_export.py` (59 tests,
-XSD under `tests/data/bpmn-xsd`, `lxml` dev dependency), README section and
-changelog entry, heat-map colours and `sizes="canonical"`, the V6 downloads
-(Model: Prepare/Download BPMN; Family: BPMN 2.0 .zip) and
-`write_bpmn_family`, and the `stubs="inline"` / `data="objects"` /
-`routing="orthogonal"` options. Nothing of the plan is left; the doc's §13
-notes possible later work. Note the app's exports are swim-lane laid out, not graphviz, and use
-`stubs="inline"` (bpmn.io cannot drill into call activities; see the doc's §9). Settled
-decisions and the ones made during implementation are in the doc's §10.
-
-- `main` carries 0.8.4, tagged `v0.8.4`, published to PyPI.
-- All three version sites read **0.8.4** and are kept in lock-step by a test:
+- `main` carries 0.8.5, tagged `v0.8.5`, published to PyPI.
+- All three version sites read **0.8.5** and are kept in lock-step by a test:
   `pyproject.toml`, `pm4py_ucm/__init__.py`, `web/sessions/codegen.py`
   (`GENERATOR_VERSION`).
 - `CHANGELOG.md` has a fresh empty `[Unreleased]`.
-- Suite: **1217 passed, 0 failed, 0 skipped** (~6 min locally); CI green on
+- Suite: **1277 passed, 0 failed, 0 skipped** (~6 min locally); CI green on
   Python 3.9–3.12.
 - **One deployment.** https://pm4py-ucm.streamlit.app/ serves V6 through the
   `streamlit_app.py` shim. The second deployment
   (`pm4py-ucm-scenarios`, which served the frozen V2) has been **deleted** —
   the SAM 2026 paper that required it was accepted and its final version
   points at the main app. That URL now 404s; do not link it.
+
+## What 0.8.5 added
+
+The BPMN 2.0 export, library and app. The library API gained `write_bpmn`,
+`convert_to_bpmn_xml` and `write_bpmn_family`; nothing else changed.
+
+- **`pm4py_ucm/objects/ucm/exporter/variants/bpmn.py`** is its own XML
+  writer (pm4py's BPMN object has no lanes, call activities or extension
+  elements). One pool; **components are lanes**, nested through
+  `childLaneSet`, tiling the pool from the swim-lane layout; unbound nodes
+  join the nearest lane. Node centres transfer 1:1; routing points become
+  waypoints; `routing="orthogonal"` elbows them.
+- **Stubs**: default `stubs="call"` (static stub → `callActivity` to the
+  plug-in's own process, one process and diagram per map; dynamic stub →
+  collapsed sub-process with **inclusive** gateways over the plug-ins,
+  binding preconditions as guards). `stubs="inline"` nests each plug-in as
+  a collapsed sub-process with its own plane; only root maps become
+  processes; a plug-in bound twice is written twice with distinct ids.
+- **Metrics** as `<ucm:metric>` extension elements (`urn:pm4py-ucm:bpmn:1.0`),
+  overlay text as flow labels, heat-map as BPMN-in-Color + `bioc`
+  attributes reusing the classic renderer's ramps; `sizes="canonical"`
+  scales the layout uniformly to standard shape sizes; `data="objects"`
+  for scenario variables and definitions.
+- **App**: Model view *Prepare BPMN… / Download BPMN*, Family view *BPMN 2.0
+  (.zip)*, both through `st.cache_data` wrappers that re-read the cached
+  `.jucm`, silence the re-layout warning, and pass `_APP_BPMN_OPTIONS =
+  {"stubs": "inline"}` (pinned by `AppDownloadTests`).
+- **Tests**: `tests/test_bpmn_export.py` (60), every export validated
+  against the OMG XSD vendored under `tests/data/bpmn-xsd` (`lxml` dev
+  dependency; skipped without it); `tests/README.md` has a "BPMN 2.0 export"
+  area. Docs: README section, web/demo READMEs, tutorial §7.1,
+  `demo/mine_and_export.py --bpmn`.
+
+Traps this release taught:
+
+- **bpmn.io cannot follow a call activity**, and its demo modeler has no
+  diagram switcher: with the library default every composite activity was a
+  dead end there. Verifying "in bpmn-js" through the API (`viewer.open(id)`)
+  hid that; check what a user can click. Hence the app's inline mode.
+- **pm4py's `read_bpmn` crashes on `callActivity`** (`'str' object has no
+  attribute 'add_in_arc'`). Round-trip tests use stub-free or inline models.
+- **Graphviz clusters are not lane-compatible.** The graphviz layouter puts
+  sibling components side by side; lanes must stack. The exporter detects
+  that and re-lays out with the swim-lane layouter (`UserWarning`), which
+  every app export triggers, so the app silences it and its help text says
+  the picture may differ.
+- **Graphviz 15.1 on Windows spends ~0.85 s per `dot` call enumerating fonts
+  through Pango** before the first lookup; 8.0.3 takes 0.06 s. With one call
+  per map for layout and one for the picture, the local app felt many times
+  slower than Streamlit Cloud (Debian Graphviz 2.42). The maintainer's
+  machine now lists `Graphviz8\bin` before `Graphviz\bin` in the machine
+  PATH. If a local run is mysteriously slow, time `dot -Tdot` on a two-node
+  graph first.
 
 ## What 0.8.4 added
 
