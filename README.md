@@ -433,7 +433,9 @@ flow's label (`annotate="edges"`; `"all"` adds text annotations under tasks;
 ramps (readable by bpmn.io and Camunda); `sizes="canonical"` draws standard
 BPMN shape sizes and scales the layout to fit them. Other options:
 `lanes="none"`, `lane_names="with_kind"`, `metrics="none"`,
-`validate=False`. The mapping and
+`validate=False`. `write_bpmn_family(family, "family.zip",
+assembled=umbrella)` writes one `.bpmn` per cell plus the assembled family.
+The web app offers both from the Model and Family views. The mapping and
 its limits (pm4py's reader cannot read call activities) are in
 [`docs/bpmn_export.md`](docs/bpmn_export.md).
 

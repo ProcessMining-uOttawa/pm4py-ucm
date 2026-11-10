@@ -128,6 +128,8 @@ def serialize_to_string(
     heatmap_node: Optional[str] = None,
     heatmap_edge: Optional[str] = None,
     heatmap_global: bool = False,
+    node_span: Optional[Tuple[float, float]] = None,
+    edge_span: Optional[Tuple[float, float]] = None,
     layout: bool = True,
     validate: bool = True,
     encoding: str = "UTF-8",
@@ -171,6 +173,12 @@ def serialize_to_string(
     heatmap_global
         Normalise the heat-map against the whole model's min/max instead
         of each map's own (same meaning as in the PNG renderer).
+    node_span, edge_span
+        An explicit ``(lo, hi)`` range to normalise against instead, e.g.
+        a family-wide range from
+        :func:`pm4py_ucm.visualization.ucm.variants.classic.heat_span`, so
+        every cell of a family reads on one scale. Overrides
+        ``heatmap_global``.
     layout
         Run the bundled swim-lane layouter when no node is positioned yet.
         Positioned models keep their coordinates, unless two sibling
@@ -208,7 +216,8 @@ def serialize_to_string(
     opts = _Options(stubs=stubs, lanes=lanes, lane_names=lane_names,
                     sizes=sizes, metrics=metrics, annotate=annotate,
                     heatmap_node=heatmap_node, heatmap_edge=heatmap_edge,
-                    heatmap_global=heatmap_global)
+                    heatmap_global=heatmap_global,
+                    node_span=node_span, edge_span=edge_span)
     model = _Model(ucm, opts)
     w = _XmlWriter(encoding=encoding)
     _emit_definitions(w, model)
@@ -320,7 +329,7 @@ def _clip_to_box(cx: float, cy: float, w: float, h: float,
 class _Options:
     def __init__(self, stubs, lanes, lane_names, sizes, metrics, annotate,
                  heatmap_node=None, heatmap_edge=None,
-                 heatmap_global=False) -> None:
+                 heatmap_global=False, node_span=None, edge_span=None) -> None:
         self.stubs = stubs
         self.lanes = lanes
         self.lane_names = lane_names
@@ -330,6 +339,8 @@ class _Options:
         self.heatmap_node = heatmap_node
         self.heatmap_edge = heatmap_edge
         self.heatmap_global = heatmap_global
+        self.node_span = node_span
+        self.edge_span = edge_span
 
 
 class _Flow:
@@ -577,8 +588,8 @@ def _compute_heat(model: _Model) -> None:
     the PNG renderer uses, so the colours agree."""
     from pm4py_ucm.visualization.ucm.variants import classic as _c
     opts = model.opts
-    node_span = edge_span = None
-    if opts.heatmap_global:
+    node_span, edge_span = opts.node_span, opts.edge_span
+    if opts.heatmap_global and node_span is None and edge_span is None:
         node_span, edge_span = _c.heat_span(
             [model.ucm], opts.heatmap_node, opts.heatmap_edge)
     for p in model.processes:

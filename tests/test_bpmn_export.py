@@ -709,6 +709,82 @@ class CanonicalSizeTests(unittest.TestCase):
                                 bpmn_exporter.CANONICAL_TASK)
 
 
+class FamilyExportTests(unittest.TestCase):
+    """``write_bpmn_family``: one .bpmn per cell, the assembled model as
+    ``family_umbrella.bpmn``, and an optional family-wide heat-map scale."""
+
+    def _family(self):
+        """A stand-in family: two cells with one task each, carrying
+        frequencies 10 and 90 so the scale is observable."""
+        cells = []
+        for i, freq in enumerate(("10", "90")):
+            u = convert(op("->", leaf(f"Work{i}")))
+            u.maps[0].resp_refs[0].add_metadata("perf_frequency", freq)
+            cells.append(NS(ucm=u, labels=(f"c{i}",)))
+        fam = NS(cells=cells, file_stem=lambda c: "cell_" + "_".join(c.labels))
+        return fam
+
+    def _colour(self, xml, name):
+        root = parse(xml)
+        tid = next(t.get("id") for t in root.iter(f"{NS_B}task")
+                   if t.get("name") == name)
+        sh = next(s for s in root.iter(f"{NS_DI}BPMNShape")
+                  if s.get("bpmnElement") == tid)
+        return sh.get(f"{NS_COLOR}border-color")
+
+    def test_zip_holds_one_file_per_cell_and_the_umbrella(self):
+        import zipfile
+        fam = self._family()
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "fam.zip")
+            pm4py_ucm.write_bpmn_family(fam, path, assembled=dynamic_stub_ucm())
+            with zipfile.ZipFile(path) as zf:
+                names = sorted(zf.namelist())
+                umbrella = zf.read("family_umbrella.bpmn").decode("utf-8")
+        self.assertEqual(names, ["cell_c0.bpmn", "cell_c1.bpmn",
+                                 "family_umbrella.bpmn"])
+        self.assertIn("inclusiveGateway", umbrella)
+
+    def test_directory_output_and_no_umbrella(self):
+        fam = self._family()
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "fam")
+            pm4py_ucm.write_bpmn_family(fam, out)
+            self.assertEqual(sorted(os.listdir(out)),
+                             ["cell_c0.bpmn", "cell_c1.bpmn"])
+
+    def test_family_scale_shares_one_range(self):
+        import zipfile
+        fam = self._family()
+        with tempfile.TemporaryDirectory() as d:
+            local = os.path.join(d, "local.zip")
+            shared = os.path.join(d, "shared.zip")
+            pm4py_ucm.write_bpmn_family(fam, local, heatmap_node="frequency")
+            pm4py_ucm.write_bpmn_family(fam, shared, heatmap_node="frequency",
+                                        family_scale=True)
+            with zipfile.ZipFile(local) as zf:
+                l0 = zf.read("cell_c0.bpmn").decode("utf-8")
+            with zipfile.ZipFile(shared) as zf:
+                s0 = zf.read("cell_c0.bpmn").decode("utf-8")
+                s1 = zf.read("cell_c1.bpmn").decode("utf-8")
+        # Alone on its own scale a single task is the maximum.
+        self.assertEqual(self._colour(l0, "Work0"), "#14378c")
+        # On the family scale cell 0 (10) is the minimum, cell 1 (90) the max.
+        self.assertEqual(self._colour(s0, "Work0"), "#96c3fa")
+        self.assertEqual(self._colour(s1, "Work1"), "#14378c")
+
+    def test_explicit_span_overrides_global(self):
+        ucm = claims_ucm()
+        for n in ucm.maps[0].resp_refs:
+            n.add_metadata("perf_frequency", "50")
+        xml = serialize_to_string(ucm, heatmap_node="frequency",
+                                  heatmap_global=True, node_span=(0.0, 100.0))
+        self.assertEqual(self._colour(xml, "Pay"),
+                         "#%02x%02x%02x" % tuple(
+                             round(lo + (hi - lo) * 0.5)
+                             for lo, hi in zip((150, 195, 250), (20, 55, 140))))
+
+
 class ApiTests(unittest.TestCase):
 
     def test_convert_to_bpmn_xml_matches_write(self):

@@ -1,14 +1,16 @@
 # BPMN 2.0 export
 
-> **Status: Stages 1 to 3 implemented** in
+> **Status: Stages 1 to 4 implemented** (plus `write_bpmn_family` from
+> Stage 5) in
 > `pm4py_ucm/objects/ucm/exporter/variants/bpmn.py`, exposed as
 > `pm4py_ucm.write_bpmn` / `convert_to_bpmn_xml`, tested by
 > `tests/test_bpmn_export.py` (XSD conformance against the vendored OMG
 > schema, pm4py round trip, lane tiling, layout transfer, stubs, metrics).
 > Verified by eye in bpmn-js: flat, decomposed and dynamic-stub models import
 > without warnings, and so do heat-mapped and canonical-size exports of the
-> demo claims log. **Not yet built:** the web-app download buttons (Stage 4)
-> and the long tail of §12 step 5. The three structural decisions were settled by
+> demo claims log; the V6 Model and Family views offer the downloads.
+> **Not yet built:** `stubs="inline"`, `data="objects"` and the other
+> Stage 5 items. The three structural decisions were settled by
 > Daniel Amyot on 2026-11-10; §10 lists them and what implementation decided
 > since.
 
@@ -291,13 +293,27 @@ pm4py_ucm.write_bpmn(
     validate=True,           # validate_ucm() first, as every other exporter does
 ) -> str
 
-pm4py_ucm.write_bpmn_family(family, path, **same) -> str
+pm4py_ucm.write_bpmn_family(family, path, assembled=None,
+                            family_scale=False, **same) -> str
 pm4py_ucm.convert_to_bpmn_xml(ucm, **same) -> str   # the XML as a string, for the app's download button
 ```
 
-Web app (V6 only, per `HANDOFF.md`): a **BPMN 2.0 (.bpmn)** download next to
-the `.jucm` download in the Model view, honouring the view's current overlay
-and heat-map selection, and the same in the Family view. The session registry
+Web app (V6 only, per `HANDOFF.md`): a **Prepare BPMN… / Download BPMN**
+pair next to the `.jucm` download in the Model view, honouring the view's
+current overlay and heat-map selection (built on request and cached per
+model + heat-map, like the PNG), and a **BPMN 2.0 (.zip)** in the Family
+view's Downloads row: one `.bpmn` per cell plus `family_umbrella.bpmn`, on
+the family-wide heat-map scale when that scope is selected. Both read the
+model back from the cached `.jucm` bytes, whose graphviz layout places
+component clusters side by side, so the exporter re-lays the maps out in
+swim-lanes (the warning is silenced there and the help text says the
+picture may differ from the on-screen one).
+
+**Known layout consequence.** The app's on-screen render and `.jucm` use
+graphviz, and graphviz clusters are not lane-compatible (§4), so an app
+export never carries the on-screen coordinates; it carries the swim-lane
+layouter's. A library user who lays out with the bundled layouter (the
+default when no coordinates are set) gets the 1:1 transfer of §5. The session registry
 does not change: the export is derived, not a stored parameter. The exported
 Python script (`web/sessions/codegen.py`) gains one `write_bpmn(...)` line
 when the user downloaded a BPMN during the session is **not** proposed; keep
@@ -381,7 +397,9 @@ Decided during implementation (Stage 1):
    colours (`heatmap_node` / `heatmap_edge` / `heatmap_global`),
    `sizes="canonical"`. The orthogonal-routing option for loop back-edges
    was not built; it stays a candidate.
-4. **Stage 4, app**: download buttons in Model and Family views, browser-pane
-   verification against bpmn.io.
-5. **Stage 5, long tail**: import-only elements, `stubs="inline"`, `data`,
-   `write_bpmn_family` zip flavour, README section and CHANGELOG.
+4. **Stage 4, app** — **done**: Prepare/Download BPMN in the Model view,
+   BPMN 2.0 (.zip) in the Family view, both verified in the running app on
+   the demo claims log.
+5. **Stage 5, long tail**: `stubs="inline"`, `data="objects"`, the
+   orthogonal-routing option. Done early: import-only elements (Stage 1),
+   `write_bpmn_family` (with Stage 4), README section and CHANGELOG.

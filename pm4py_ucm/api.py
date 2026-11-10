@@ -678,6 +678,59 @@ def write_ucm_family(family, path: str) -> str:
     return _families.write_family(family, path)
 
 
+def write_bpmn_family(
+    family,
+    path: str,
+    assembled: Optional[UCM] = None,
+    family_scale: bool = False,
+    **options: Any,
+) -> str:
+    """Write a model family as BPMN 2.0: one ``.bpmn`` per cell (named by
+    :meth:`ModelFamily.file_stem`) plus, when ``assembled`` is given, the
+    assembled family (see :func:`assemble_ucm_family`) as
+    ``family_umbrella.bpmn`` — its dynamic stubs become the inclusive
+    choices of :func:`write_bpmn`. ``path`` ending in ``.zip`` produces
+    one archive; otherwise it is treated as a directory.
+
+    ``options`` are :func:`write_bpmn`'s. With ``family_scale=True`` and a
+    ``heatmap_node`` / ``heatmap_edge`` metric, every file is coloured on
+    one **family-wide** range (the cells' and the assembled model's values
+    together), so a colour means the same thing in every member."""
+    import io as _io
+    import zipfile as _zipfile
+    from .visualization.ucm.variants import classic as _classic
+
+    models = [c.ucm for c in family.cells]
+    if assembled is not None:
+        models.append(assembled)
+    opts = dict(options)
+    if family_scale and (opts.get("heatmap_node") or opts.get("heatmap_edge")):
+        ns, es = _classic.heat_span(
+            models, opts.get("heatmap_node"), opts.get("heatmap_edge"))
+        opts.setdefault("node_span", ns)
+        opts.setdefault("edge_span", es)
+
+    entries = [(family.file_stem(c) + ".bpmn",
+                _bpmn_exporter.serialize_to_string(c.ucm, **opts))
+               for c in family.cells]
+    if assembled is not None:
+        entries.append(("family_umbrella.bpmn",
+                        _bpmn_exporter.serialize_to_string(assembled, **opts)))
+
+    if path.lower().endswith(".zip"):
+        with _zipfile.ZipFile(path, "w", _zipfile.ZIP_DEFLATED) as zf:
+            for name, content in entries:
+                zf.writestr(name, content)
+    else:
+        import os as _os
+        _os.makedirs(path, exist_ok=True)
+        for name, content in entries:
+            with open(_os.path.join(path, name), "w",
+                      encoding="utf-8", newline="") as fh:
+                fh.write(content)
+    return path
+
+
 def assemble_ucm_family(
     family,
     mode: str = "umbrella",

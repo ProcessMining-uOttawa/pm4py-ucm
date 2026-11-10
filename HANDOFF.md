@@ -13,14 +13,16 @@ tooling described below.
 
 **In flight (2026-11-10): the BPMN 2.0 export.** Design in
 [`docs/bpmn_export.md`](docs/bpmn_export.md) (PR #133, branch
-`docs/bpmn-export-design`); Stages 1–3 implemented on
+`docs/bpmn-export-design`); Stages 1–4 implemented on
 `feat/bpmn-export-stage1` (PR #134), stacked on that branch:
 `pm4py_ucm/objects/ucm/exporter/variants/bpmn.py`, `write_bpmn` /
-`convert_to_bpmn_xml` in the API, `tests/test_bpmn_export.py` (44 tests,
+`convert_to_bpmn_xml` in the API, `tests/test_bpmn_export.py` (48 tests,
 XSD under `tests/data/bpmn-xsd`, `lxml` dev dependency), README section and
-changelog entry, heat-map colours and `sizes="canonical"`. Left for later
-stages: the V6 download buttons (Stage 4), the
-`stubs="inline"` / `data` options and `write_bpmn_family` (Stage 5). Settled
+changelog entry, heat-map colours and `sizes="canonical"`, the V6 downloads
+(Model: Prepare/Download BPMN; Family: BPMN 2.0 .zip) and
+`write_bpmn_family`. Left: the `stubs="inline"` / `data` options (Stage 5).
+Note the app's exports are swim-lane laid out, not graphviz (see the doc's
+§9). Settled
 decisions and the ones made during implementation are in the doc's §10.
 
 - `main` carries 0.8.4, tagged `v0.8.4`, published to PyPI.

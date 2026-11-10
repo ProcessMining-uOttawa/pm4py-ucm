@@ -746,6 +746,63 @@ def _render_cached(jucm_bytes: bytes, style: str,
 
 
 @st.cache_data(show_spinner=False)
+def _bpmn_cached(jucm_bytes: bytes,
+                 heatmap: bool = False,
+                 node_metric: Optional[str] = None,
+                 edge_metric: Optional[str] = None,
+                 heatmap_global: bool = False) -> bytes:
+    """The model as a BPMN 2.0 file (cached per ``jucm`` + heat-map
+    settings), carrying the active heat-map as BPMN-in-Color attributes.
+
+    The ``.jucm`` holds the graphviz layout, whose component clusters may sit
+    side by side; BPMN lanes must stack, so the exporter lays the maps out
+    again with the swim-lane layouter (its warning is expected here and is
+    silenced). Node metrics ride in the ``.jucm`` metadata already."""
+    with tempfile.TemporaryDirectory() as td:
+        jucm_path = Path(td) / "model.jucm"
+        jucm_path.write_bytes(jucm_bytes)
+        ucm = pm4py_ucm.read_ucm(str(jucm_path))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        xml = pm4py_ucm.convert_to_bpmn_xml(
+            ucm,
+            heatmap_node=node_metric if heatmap else None,
+            heatmap_edge=edge_metric if heatmap else None,
+            heatmap_global=bool(heatmap and heatmap_global),
+            validate=False,
+        )
+    return xml.encode("utf-8")
+
+
+@st.cache_data(show_spinner=False)
+def _family_bpmn_zip(mine_fingerprint: str, _family, umbrella_jucm: bytes,
+                     heatmap: bool = False,
+                     node_metric: Optional[str] = None,
+                     edge_metric: Optional[str] = None,
+                     heat_scope: str = "local") -> bytes:
+    """Per-cell ``.bpmn`` files plus the umbrella as ``family_umbrella.bpmn``
+    in one ``.zip`` — download-only, built on request. The umbrella is read
+    back from its cached ``.jucm`` so the assembly is not repeated; the
+    heat-map follows the view's scope (``"family"`` = one shared range)."""
+    with tempfile.TemporaryDirectory() as td:
+        umb_path = Path(td) / "umbrella.jucm"
+        umb_path.write_bytes(umbrella_jucm)
+        umbrella = pm4py_ucm.read_ucm(str(umb_path))
+        zip_path = Path(td) / "family_bpmn.zip"
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            pm4py_ucm.write_bpmn_family(
+                _family, str(zip_path), assembled=umbrella,
+                family_scale=bool(heatmap and heat_scope == "family"),
+                heatmap_node=node_metric if heatmap else None,
+                heatmap_edge=edge_metric if heatmap else None,
+                heatmap_global=bool(heatmap and heat_scope == "global"),
+                validate=False,
+            )
+        return zip_path.read_bytes()
+
+
+@st.cache_data(show_spinner=False)
 def _render_svg_cached(jucm_bytes: bytes, style: str,
                        heatmap: bool = False,
                        node_metric: Optional[str] = None,
@@ -5307,7 +5364,7 @@ if _view == "Model":
             st.stop()
 
     _svg_ok = _svg is not None
-    d1, d2, d3, d4 = st.columns(4)
+    d1, d2, d3, d4, d5 = st.columns(5)
 
     # Download SVG.
     d1.download_button(
@@ -5348,7 +5405,32 @@ if _view == "Model":
         file_name=_safe_download_name(Path(log_name).stem, ".jucm"),
         mime="application/xml",
     )
-    with d4.popover("Pin to dashboard ▦", width="stretch"):
+    # BPMN 2.0 — built on request (a press, then the download), keyed like
+    # the PNG so a heat-map or model change re-arms it.
+    _bpmn_key = f"model_bpmn::{file_hash}::{_heat_tag}"
+    with d4:
+        if _bpmn_key in st.session_state:
+            st.download_button(
+                "Download BPMN", data=st.session_state[_bpmn_key],
+                file_name=_safe_download_name(Path(log_name).stem, ".bpmn"),
+                mime="application/xml", key="model_bpmn_download",
+                help="Standard BPMN 2.0 XML with diagram interchange — "
+                     "opens in bpmn.io, Camunda Modeler or pm4py. Components "
+                     "become lanes, so the maps are laid out in horizontal "
+                     "swim-lanes (the on-screen picture may differ). Carries "
+                     "the active heat-map as colours.",
+            )
+        elif st.button("Prepare BPMN…", key="model_bpmn_prepare",
+                       help="Export the model as a standard BPMN 2.0 file "
+                            "(components as lanes, heat-map as colours)."):
+            with st.spinner("Exporting BPMN 2.0..."):
+                try:
+                    st.session_state[_bpmn_key] = _bpmn_cached(
+                        mined["jucm"], **_heat_kwargs)
+                except Exception as exc:
+                    st.warning(f"BPMN export failed: {exc}")
+            st.rerun()
+    with d5.popover("Pin to dashboard ▦", width="stretch"):
         st.caption(
             "Adds the model to the Dashboards view as a widget. The pin "
             "is live: it renders whatever the model currently is, so it "
@@ -6381,6 +6463,13 @@ if _view == "Family":
                             **_view_heat_args())
                         _grid_png, _, _grid_png_err = _render_family_grid(
                             _fam_fp, style, fam["family"], **_view_heat_args())
+                        try:
+                            _fam_bpmn = _family_bpmn_zip(
+                                _fam_fp, fam["family"], _umb_bytes,
+                                **_view_heat_args())
+                            _fam_bpmn_err = None
+                        except Exception as _exc:
+                            _fam_bpmn, _fam_bpmn_err = None, str(_exc)
 
                     # Umbrella-derived metrics, shown here beside the umbrella
                     # file because that is what they describe (and what was
@@ -6404,7 +6493,7 @@ if _view == "Family":
                         ),
                     )
 
-                    fd1, fd2, fd3, fd4, fd5 = st.columns(5)
+                    fd1, fd2, fd3, fd4, fd5, fd6 = st.columns(6)
                     fd1.download_button(
                         "Per-cell models (.zip)", data=_zip,
                         file_name=_safe_download_name(f"{stem}_family", ".zip"),
@@ -6466,6 +6555,23 @@ if _view == "Family":
                         )
                     elif _report_error:
                         fd5.caption(f"Report unavailable: {_report_error}")
+                    if _fam_bpmn is not None:
+                        fd6.download_button(
+                            "BPMN 2.0 (.zip)", data=_fam_bpmn,
+                            file_name=_safe_download_name(
+                                f"{stem}_family_bpmn", ".zip",
+                            ),
+                            mime="application/zip",
+                            help="One standard BPMN 2.0 file per cell plus "
+                                 "the umbrella as family_umbrella.bpmn (its "
+                                 "variation points are inclusive choices "
+                                 "over the cell plug-ins). Components become "
+                                 "lanes; the active heat-map rides as "
+                                 "colours, on the family-wide scale when "
+                                 "that scope is selected.",
+                        )
+                    elif _fam_bpmn_err:
+                        fd6.caption(f"BPMN unavailable: {_fam_bpmn_err}")
 
 # ===== Compare view =======================================================
 if _view == "Compare":
