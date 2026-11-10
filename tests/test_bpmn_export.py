@@ -527,6 +527,188 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(list(root.iter(f"{NS_U}metric")), [])
 
 
+NS_COLOR = "{http://www.omg.org/spec/BPMN/non-normative/color/1.0}"
+NS_BIOC = "{http://bpmn.io/schema/bpmn/biocolor/1.0}"
+
+
+class HeatMapTests(unittest.TestCase):
+    """The visible heat-map layer: BPMN-in-Color + bioc attributes on the
+    diagram shapes and edges, with the PNG renderer's ramps."""
+
+    def _annotated(self):
+        ucm = claims_ucm()
+        m = ucm.maps[0]
+        values = {"Register": "100", "Check A": "40", "Check B": "60",
+                  "Review": "100", "Rework": "20", "Pay": "100",
+                  "Notify": "100", "Close": "100"}
+        times = {"Register": "1h", "Check A": "2d", "Check B": "30m",
+                 "Review": "1d", "Rework": "3d", "Pay": "1h",
+                 "Notify": "5m", "Close": "1m"}
+        for n in m.resp_refs:
+            n.add_metadata("perf_frequency", values[n.resp_def.name])
+            n.add_metadata("perf_mean_time", times[n.resp_def.name])
+        fork = next(n for n in m.nodes if isinstance(n, UCM.OrFork)
+                    and n.name == "OrFork")
+        fork.add_metadata("perf_branch0_frequency", "40")
+        fork.add_metadata("perf_branch1_frequency", "60")
+        return ucm
+
+    def _shape_attrs(self, root):
+        out = {}
+        for sh in root.iter(f"{NS_DI}BPMNShape"):
+            out[sh.get("bpmnElement")] = sh
+        return out
+
+    def test_no_colours_without_a_heat_map(self):
+        xml = serialize_to_string(self._annotated())
+        self.assertNotIn("border-color", xml)
+        self.assertNotIn("bioc:", xml.split("<bpmn:collaboration")[1])
+
+    def test_node_heat_colours_the_task_shapes(self):
+        root = parse(serialize_to_string(self._annotated(),
+                                         heatmap_node="frequency"))
+        tasks = {t.get("name"): t.get("id") for t in root.iter(f"{NS_B}task")}
+        sh = self._shape_attrs(root)
+        hot = sh[tasks["Register"]]
+        cold = sh[tasks["Rework"]]
+        # Count metric: the blue ramp, light to dark, both attribute sets.
+        self.assertEqual(hot.get(f"{NS_COLOR}border-color"), "#14378c")
+        self.assertEqual(hot.get(f"{NS_BIOC}stroke"), "#14378c")
+        self.assertEqual(cold.get(f"{NS_COLOR}border-color"), "#96c3fa")
+        self.assertIsNotNone(hot.get(f"{NS_COLOR}background-color"))
+        self.assertIsNotNone(hot.get(f"{NS_BIOC}fill"))
+        # Gateways and events carry no node heat.
+        for g in root.iter(f"{NS_B}exclusiveGateway"):
+            self.assertIsNone(sh[g.get("id")].get(f"{NS_COLOR}border-color"))
+
+    def test_time_metric_uses_the_red_ramp(self):
+        root = parse(serialize_to_string(self._annotated(),
+                                         heatmap_node="mean_time"))
+        tasks = {t.get("name"): t.get("id") for t in root.iter(f"{NS_B}task")}
+        sh = self._shape_attrs(root)
+        self.assertEqual(sh[tasks["Rework"]].get(f"{NS_COLOR}border-color"),
+                         "#7f1414")
+        self.assertEqual(sh[tasks["Close"]].get(f"{NS_COLOR}border-color"),
+                         "#faaaaa")
+
+    def test_edge_heat_colours_the_flows(self):
+        root = parse(serialize_to_string(self._annotated(),
+                                         heatmap_edge="frequency"))
+        coloured = [e for e in root.iter(f"{NS_DI}BPMNEdge")
+                    if e.get(f"{NS_COLOR}border-color")]
+        self.assertEqual(len(coloured), 2)
+        colours = sorted(e.get(f"{NS_COLOR}border-color") for e in coloured)
+        self.assertEqual(colours, ["#14378c", "#96c3fa"])
+        for e in coloured:
+            self.assertEqual(e.get(f"{NS_BIOC}stroke"),
+                             e.get(f"{NS_COLOR}border-color"))
+            self.assertIsNone(e.get(f"{NS_COLOR}background-color"))
+
+    def test_global_scale_spans_every_map(self):
+        ucm = dynamic_stub_ucm()
+        work = {n.resp_def.name: n for m in ucm.maps for n in m.resp_refs}
+        work["Work0"].add_metadata("perf_frequency", "10")
+        work["Work1"].add_metadata("perf_frequency", "90")
+        local = parse(serialize_to_string(ucm, heatmap_node="frequency"))
+        glob = parse(serialize_to_string(ucm, heatmap_node="frequency",
+                                         heatmap_global=True))
+
+        def colour(root, name):
+            tid = next(t.get("id") for t in root.iter(f"{NS_B}task")
+                       if t.get("name") == name)
+            return self._shape_attrs(root)[tid].get(f"{NS_COLOR}border-color")
+
+        # Alone on its map each task is the map's maximum: full emphasis.
+        self.assertEqual(colour(local, "Work0"), "#14378c")
+        self.assertEqual(colour(local, "Work1"), "#14378c")
+        # Against the whole model, Work0 is the minimum.
+        self.assertEqual(colour(glob, "Work0"), "#96c3fa")
+        self.assertEqual(colour(glob, "Work1"), "#14378c")
+
+    @unittest.skipIf(_lxml is None, "lxml not installed")
+    def test_coloured_file_still_validates(self):
+        schema = _lxml.XMLSchema(_lxml.parse(XSD))
+        xml = serialize_to_string(self._annotated(), heatmap_node="frequency",
+                                  heatmap_edge="frequency", heatmap_global=True)
+        self.assertTrue(schema.validate(_lxml.fromstring(xml.encode("utf-8"))),
+                        "; ".join(str(e) for e in schema.error_log))
+
+
+class CanonicalSizeTests(unittest.TestCase):
+
+    def _boxes(self, root):
+        sh = shapes(root)
+        tasks = {t.get("name"): sh[t.get("id")]
+                 for t in root.iter(f"{NS_B}task")}
+        gateways = [sh[g.get("id")]
+                    for tag in ("exclusiveGateway", "parallelGateway")
+                    for g in root.iter(f"{NS_B}{tag}")]
+        events = [sh[e.get("id")] for tag in ("startEvent", "endEvent")
+                  for e in root.iter(f"{NS_B}{tag}")]
+        return sh, tasks, gateways, events
+
+    def test_standard_sizes(self):
+        root = parse(serialize_to_string(claims_ucm(), sizes="canonical"))
+        sh, tasks, gateways, events = self._boxes(root)
+        for x, y, w, h in tasks.values():
+            self.assertEqual((w, h), bpmn_exporter.CANONICAL_TASK)
+        for x, y, w, h in gateways:
+            self.assertEqual((w, h), (bpmn_exporter.CANONICAL_GATEWAY,) * 2)
+        for x, y, w, h in events:
+            self.assertEqual((w, h), (bpmn_exporter.CANONICAL_EVENT,) * 2)
+
+    def test_no_two_shapes_overlap_and_order_is_kept(self):
+        ucm = claims_ucm()
+        root = parse(serialize_to_string(ucm, sizes="canonical"))
+        sh, tasks, gateways, events = self._boxes(root)
+        boxes = list(tasks.values()) + gateways + events
+        for i, (ax, ay, aw, ah) in enumerate(boxes):
+            for bx, by, bw, bh in boxes[i + 1:]:
+                separated = (ax + aw <= bx or bx + bw <= ax
+                             or ay + ah <= by or by + bh <= ay)
+                self.assertTrue(separated, ((ax, ay, aw, ah), (bx, by, bw, bh)))
+        # Relative arrangement: a task left of (above) another in the UCM
+        # stays left of (above) it.
+        centres = {name: (x + w / 2, y + h / 2)
+                   for name, (x, y, w, h) in tasks.items()}
+        for a in ucm.maps[0].resp_refs:
+            for b in ucm.maps[0].resp_refs:
+                if a.x < b.x:
+                    self.assertLess(centres[a.resp_def.name][0],
+                                    centres[b.resp_def.name][0])
+                if a.y < b.y:
+                    self.assertLess(centres[a.resp_def.name][1],
+                                    centres[b.resp_def.name][1])
+
+    def test_lanes_still_tile_and_scale_with_the_layout(self):
+        root = parse(serialize_to_string(claims_ucm(), sizes="canonical"))
+        sh = shapes(root)
+        pool = sh[root.find(f"{NS_B}collaboration/{NS_B}participant").get("id")]
+        lanes = [sh[l.get("id")] for l in root.iter(f"{NS_B}lane")]
+        bands = sorted((y, y + h) for x, y, w, h in lanes)
+        self.assertAlmostEqual(bands[0][0], pool[1])
+        self.assertAlmostEqual(bands[-1][1], pool[1] + pool[3])
+        for (a0, a1), (b0, b1) in zip(bands, bands[1:]):
+            self.assertAlmostEqual(a1, b0)
+        # Every task's centre lies inside its lane's band.
+        lane_of = {}
+        for lane in root.iter(f"{NS_B}lane"):
+            for r in lane.findall(f"{NS_B}flowNodeRef"):
+                lane_of[r.text] = sh[lane.get("id")]
+        for t in root.iter(f"{NS_B}task"):
+            x, y, w, h = sh[t.get("id")]
+            lx, ly, lw, lh = lane_of[t.get("id")]
+            self.assertGreaterEqual(y + h / 2, ly)
+            self.assertLessEqual(y + h / 2, ly + lh)
+
+    def test_layout_sizes_are_unchanged_by_default(self):
+        root = parse(serialize_to_string(claims_ucm()))
+        sh = shapes(root)
+        for t in root.iter(f"{NS_B}task"):
+            self.assertNotEqual(tuple(sh[t.get("id")][2:]),
+                                bpmn_exporter.CANONICAL_TASK)
+
+
 class ApiTests(unittest.TestCase):
 
     def test_convert_to_bpmn_xml_matches_write(self):

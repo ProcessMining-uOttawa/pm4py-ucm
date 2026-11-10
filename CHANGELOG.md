@@ -23,7 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   metadata travels as `<ucm:metric>` extension elements on tasks and
   flows, and the selected edge overlay text becomes the flow's label
   (`annotate="edges"`, default; `"all"` adds text annotations under
-  tasks). The mapping and its decisions are in `docs/bpmn_export.md`.
+  tasks). `heatmap_node=` / `heatmap_edge=` colour tasks and flows by a
+  metric with the PNG heat-map's ramps, written as OMG *BPMN in Color*
+  attributes and their bpmn.io `bioc` twins; `sizes="canonical"` draws
+  standard 100 × 80 / 50 × 50 / 36 × 36 shapes and scales the layout
+  uniformly so nothing overlaps. The mapping and its decisions are in
+  `docs/bpmn_export.md`.
   Tests validate every export against the OMG BPMN 2.0 schema (vendored
   under `tests/data/bpmn-xsd`; `lxml` is now a dev dependency).
 

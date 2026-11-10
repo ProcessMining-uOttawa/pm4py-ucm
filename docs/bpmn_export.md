@@ -1,14 +1,14 @@
 # BPMN 2.0 export
 
-> **Status: Stages 1 and 2 implemented** in
+> **Status: Stages 1 to 3 implemented** in
 > `pm4py_ucm/objects/ucm/exporter/variants/bpmn.py`, exposed as
 > `pm4py_ucm.write_bpmn` / `convert_to_bpmn_xml`, tested by
 > `tests/test_bpmn_export.py` (XSD conformance against the vendored OMG
 > schema, pm4py round trip, lane tiling, layout transfer, stubs, metrics).
 > Verified by eye in bpmn-js: flat, decomposed and dynamic-stub models import
-> without warnings. **Not yet built:** the visible heat-map layer and
-> `sizes="canonical"` (Stage 3), the web-app download buttons (Stage 4), and
-> the long tail of §12 step 5. The three structural decisions were settled by
+> without warnings, and so do heat-mapped and canonical-size exports of the
+> demo claims log. **Not yet built:** the web-app download buttons (Stage 4)
+> and the long tail of §12 step 5. The three structural decisions were settled by
 > Daniel Amyot on 2026-11-10; §10 lists them and what implementation decided
 > since.
 
@@ -183,10 +183,11 @@ preview, which is the expectation to set.
 | pool | bounding box of all lanes plus a 30 px label strip on the left |
 
 `sizes="canonical"` switches to the standard 100 × 80 task / 50 × 50 gateway /
-36 × 36 event boxes and **scales the whole layout uniformly** by the factor
-needed so that no two neighbouring shapes overlap (computed from the minimum
-centre-to-centre distance over the layout's edges). Topology and relative
-arrangement are preserved; absolute coordinates are not.
+36 × 36 event boxes and **scales the whole layout uniformly** by the smallest
+factor ≥ 1 that keeps every flow's two ends, and every two shapes sharing a
+column or a row, 20 px apart (`CANONICAL_GAP`). Component rectangles, lanes
+and bends scale with it. Topology and relative arrangement are preserved;
+absolute coordinates are not.
 
 Edges: a `BPMNEdge` gets waypoints source-centre → each removed
 `EmptyPoint`/`Connect`/`DirectionArrow` centre in order → target-centre. The
@@ -228,11 +229,14 @@ so edge metrics are **more** complete in BPMN than in `.jucm`.)
 
 **Visible layer** (`annotate="edges"` default; `"none"`, `"all"`):
 
-- **Heat-map colours.** The currently selected overlay's node fill and edge
-  stroke colours, as computed by the classic renderer's ramps, go on the
-  `BPMNShape`/`BPMNEdge` as `color:background-color` / `color:border-color`
-  (OMG BPMN in Color) and the equivalent `bioc:fill` / `bioc:stroke`. Edge
-  thickness has no standard; it is dropped (the colour carries the value).
+- **Heat-map colours** (`heatmap_node=` / `heatmap_edge=` metric keys,
+  `heatmap_global=`; the PNG renderer's parameter names). The node fill and
+  edge stroke colours, computed by the classic renderer's own helpers (value
+  parsing, segment attribution, normalisation, blue ramp for counts and red
+  for times), go on the `BPMNShape`/`BPMNEdge` as `color:background-color` /
+  `color:border-color` (OMG BPMN in Color) and the equivalent `bioc:fill` /
+  `bioc:stroke`. Edge thickness has no standard; it is dropped (the colour
+  carries the value). Only tasks and flows are coloured, as in the PNG.
 - **Edge metrics** as the `sequenceFlow` `name`, in the same short form the
   PNG shows (`258`, `25% of 258`, `3.2 d`). Every tool renders flow names as
   edge labels. When a flow already has a condition label, the metric is
@@ -373,8 +377,10 @@ Decided during implementation (Stage 1):
 2. **Stage 2, stubs** — **done**: §3.3 with `stubs="call"`, multi-diagram
    files, dynamic stubs as collapsed sub-processes with inclusive gateways
    and their own diagram.
-3. **Stage 3, visible annotations and sizes**: §7 visible layer, `overlay`,
-   `sizes="canonical"`.
+3. **Stage 3, visible annotations and sizes** — **done**: §7 heat-map
+   colours (`heatmap_node` / `heatmap_edge` / `heatmap_global`),
+   `sizes="canonical"`. The orthogonal-routing option for loop back-edges
+   was not built; it stays a candidate.
 4. **Stage 4, app**: download buttons in Model and Family views, browser-pane
    verification against bpmn.io.
 5. **Stage 5, long tail**: import-only elements, `stubs="inline"`, `data`,

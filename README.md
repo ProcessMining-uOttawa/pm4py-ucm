@@ -428,8 +428,12 @@ preconditions — Z.151 semantics. Node centres transfer 1:1 from the UCM
 coordinates. Performance metadata travels as `<ucm:metric>` extension
 elements on tasks and flows, and the selected edge overlay text becomes the
 flow's label (`annotate="edges"`; `"all"` adds text annotations under tasks;
-`"none"` keeps the file plain). Options: `lanes="none"`,
-`lane_names="with_kind"`, `metrics="none"`, `validate=False`. The mapping and
+`"none"` keeps the file plain). `heatmap_node="frequency"` /
+`heatmap_edge="mean_time"` colour tasks and flows with the PNG heat-map's
+ramps (readable by bpmn.io and Camunda); `sizes="canonical"` draws standard
+BPMN shape sizes and scales the layout to fit them. Other options:
+`lanes="none"`, `lane_names="with_kind"`, `metrics="none"`,
+`validate=False`. The mapping and
 its limits (pm4py's reader cannot read call activities) are in
 [`docs/bpmn_export.md`](docs/bpmn_export.md).
 

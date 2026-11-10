@@ -55,12 +55,23 @@ NS_XSI = "http://www.w3.org/2001/XMLSchema-instance"
 NS_UCM = "urn:pm4py-ucm:bpmn:1.0"
 #: Prefix under which the extension namespace is declared.
 UCM_PREFIX = "ucm"
+#: OMG "BPMN in Color" (non-normative) and bpmn.io's older twin: the two
+#: attribute sets viewers read heat-map colours from.
+NS_COLOR = "http://www.omg.org/spec/BPMN/non-normative/color/1.0"
+NS_BIOC = "http://bpmn.io/schema/bpmn/biocolor/1.0"
 
 #: Fixed shape sizes (``sizes="layout"``), in BPMNDI pixels. Gateways and
 #: events are drawn at the habitual BPMN sizes closest to the UCM glyphs
 #: they replace; tasks take the label footprint the layouter reserved.
 GATEWAY_SIZE = 36
 EVENT_SIZE = 30
+#: Standard BPMN shape sizes (``sizes="canonical"``): the layout is scaled
+#: up uniformly until neighbouring shapes of these sizes no longer touch.
+CANONICAL_TASK = (100, 80)
+CANONICAL_GATEWAY = 50
+CANONICAL_EVENT = 36
+#: Clearance kept between two neighbouring canonical shapes.
+CANONICAL_GAP = 20
 #: Left strip of a horizontal pool that carries its name.
 POOL_LABEL_STRIP = 30
 #: Left strip of a lane that carries its name.
@@ -73,7 +84,7 @@ _ROUTING_TYPES = (UCM.EmptyPoint, UCM.Connect, UCM.DirectionArrow)
 _STUBS = ("call",)
 _LANES = ("components", "none")
 _LANE_NAMES = ("plain", "with_kind")
-_SIZES = ("layout",)
+_SIZES = ("layout", "canonical")
 _METRICS = ("extension", "none")
 _ANNOTATE = ("none", "edges", "all")
 
@@ -114,6 +125,9 @@ def serialize_to_string(
     sizes: str = "layout",
     metrics: str = "extension",
     annotate: str = "edges",
+    heatmap_node: Optional[str] = None,
+    heatmap_edge: Optional[str] = None,
+    heatmap_global: bool = False,
     layout: bool = True,
     validate: bool = True,
     encoding: str = "UTF-8",
@@ -132,8 +146,13 @@ def serialize_to_string(
         ``"plain"`` names a lane after its component; ``"with_kind"``
         appends the component kind, e.g. ``Clerk «Actor»``.
     sizes
-        ``"layout"``: shapes take the footprint the layouter reserved, so
-        node centres transfer 1:1 (the only mode so far).
+        ``"layout"`` (default): shapes take the footprint the layouter
+        reserved, so node centres transfer 1:1 and the file opens looking
+        like the ``style="bpmn"`` preview. ``"canonical"``: standard BPMN
+        sizes (100 × 80 tasks, 50 × 50 gateways, 36 × 36 events) and the
+        whole layout scaled up uniformly, by the smallest factor that keeps
+        neighbouring shapes apart; topology and relative arrangement are
+        preserved, absolute coordinates are not.
     metrics
         ``"extension"`` (default) writes every ``perf_*`` metadata entry as a
         ``<ucm:metric>`` extension element; ``"none"`` drops them.
@@ -142,6 +161,16 @@ def serialize_to_string(
         puts the selected edge overlay text in the sequence flow's name;
         ``"all"`` additionally attaches the node overlay text as a
         ``textAnnotation``.
+    heatmap_node, heatmap_edge
+        Metric keys (``"frequency"``, ``"mean_time"``, …) whose values
+        colour the task boxes and the sequence flows, with the ramps the PNG
+        heat-map uses (blue for counts, red for times): written as OMG
+        *BPMN in Color* attributes and their bpmn.io ``bioc`` twins on the
+        diagram shapes and edges, so any viewer that knows either shows
+        them and every other ignores them.
+    heatmap_global
+        Normalise the heat-map against the whole model's min/max instead
+        of each map's own (same meaning as in the PNG renderer).
     layout
         Run the bundled swim-lane layouter when no node is positioned yet.
         Positioned models keep their coordinates, unless two sibling
@@ -177,7 +206,9 @@ def serialize_to_string(
                 _relayout_map(ucm, m)
 
     opts = _Options(stubs=stubs, lanes=lanes, lane_names=lane_names,
-                    metrics=metrics, annotate=annotate)
+                    sizes=sizes, metrics=metrics, annotate=annotate,
+                    heatmap_node=heatmap_node, heatmap_edge=heatmap_edge,
+                    heatmap_global=heatmap_global)
     model = _Model(ucm, opts)
     w = _XmlWriter(encoding=encoding)
     _emit_definitions(w, model)
@@ -222,8 +253,16 @@ def _relayout_map(ucm: UCM, m: "UCM.UCMmap") -> None:
                 DEFAULT_Y_ORIGIN)
 
 
-def _shape_size(n: "UCM.PathNode") -> Tuple[int, int]:
+def _shape_size(n: "UCM.PathNode", sizes: str = "layout") -> Tuple[int, int]:
     """``(width, height)`` of the BPMN shape standing in for ``n``."""
+    if sizes == "canonical":
+        if isinstance(n, (UCM.RespRef, UCM.Stub, UCM.Anything)):
+            return CANONICAL_TASK
+        if isinstance(n, (UCM.OrFork, UCM.OrJoin, UCM.AndFork, UCM.AndJoin)):
+            return CANONICAL_GATEWAY, CANONICAL_GATEWAY
+        if isinstance(n, _ROUTING_TYPES):
+            return CANONICAL_GATEWAY, CANONICAL_GATEWAY
+        return CANONICAL_EVENT, CANONICAL_EVENT
     if isinstance(n, (UCM.RespRef, UCM.Stub, UCM.Anything)):
         hw, hh = _node_half_size(n) if isinstance(n, UCM.RespRef) else (
             _label_half_size(_node_name(n)))
@@ -279,12 +318,18 @@ def _clip_to_box(cx: float, cy: float, w: float, h: float,
 # ---------------------------------------------------------------------------
 
 class _Options:
-    def __init__(self, stubs, lanes, lane_names, metrics, annotate) -> None:
+    def __init__(self, stubs, lanes, lane_names, sizes, metrics, annotate,
+                 heatmap_node=None, heatmap_edge=None,
+                 heatmap_global=False) -> None:
         self.stubs = stubs
         self.lanes = lanes
         self.lane_names = lane_names
+        self.sizes = sizes
         self.metrics = metrics
         self.annotate = annotate
+        self.heatmap_node = heatmap_node
+        self.heatmap_edge = heatmap_edge
+        self.heatmap_global = heatmap_global
 
 
 class _Flow:
@@ -338,11 +383,52 @@ class _ProcessModel:
         self.flows: List[_Flow] = []
         self.lanes: List[_Lane] = []
         self.bounds = (0.0, 0.0, 0.0, 0.0)
+        #: Uniform scale applied to every UCM coordinate (1.0 unless
+        #: ``sizes="canonical"`` needs room).
+        self.s = 1.0
+        self.sizes: Dict["UCM.PathNode", Tuple[int, int]] = {}
+        self.node_heat: Dict["UCM.PathNode", float] = {}
+        self.edge_heat: Dict[_Flow, float] = {}
         self._build_nodes()
         self._build_flows()
+        self.sizes = {n: _shape_size(n, opts.sizes) for n in self.nodes}
+        if opts.sizes == "canonical":
+            self.s = self._canonical_scale()
         self._build_bounds()
         if opts.lanes == "components":
             self._build_lanes()
+
+    # -- coordinates ------------------------------------------------------
+    def xy(self, n) -> Tuple[float, float]:
+        return n.x * self.s, n.y * self.s
+
+    def pt(self, x, y) -> Tuple[float, float]:
+        return x * self.s, y * self.s
+
+    def _canonical_scale(self) -> float:
+        """Smallest factor >= 1 that keeps every flow's two ends, and every
+        two shapes that share a column or a row, ``CANONICAL_GAP`` apart."""
+        need = 1.0
+        pairs = {(f.source, f.target) for f in self.flows}
+        by_x: Dict[int, List] = {}
+        by_y: Dict[int, List] = {}
+        for n in self.nodes:
+            by_x.setdefault(n.x, []).append(n)
+            by_y.setdefault(n.y, []).append(n)
+        for group in list(by_x.values()) + list(by_y.values()):
+            group = sorted(group, key=lambda n: (n.x, n.y))
+            for a, b in zip(group, group[1:]):
+                pairs.add((a, b))
+        for a, b in pairs:
+            if a is b:
+                continue
+            dx, dy = abs(a.x - b.x), abs(a.y - b.y)
+            (aw, ah), (bw, bh) = self.sizes[a], self.sizes[b]
+            if dx >= dy and dx > 0:
+                need = max(need, ((aw + bw) / 2 + CANONICAL_GAP) / dx)
+            elif dy > 0:
+                need = max(need, ((ah + bh) / 2 + CANONICAL_GAP) / dy)
+        return need
 
     # -- nodes ------------------------------------------------------------
     def _build_nodes(self) -> None:
@@ -377,16 +463,18 @@ class _ProcessModel:
         xs: List[float] = []
         ys: List[float] = []
         for n in self.nodes:
-            w, h = _shape_size(n)
-            xs += [n.x - w / 2, n.x + w / 2]
-            ys += [n.y - h / 2, n.y + h / 2]
+            w, h = self.sizes[n]
+            x, y = self.xy(n)
+            xs += [x - w / 2, x + w / 2]
+            ys += [y - h / 2, y + h / 2]
         for f in self.flows:
             for bx, by in f.bends:
-                xs.append(bx)
-                ys.append(by)
+                x, y = self.pt(bx, by)
+                xs.append(x)
+                ys.append(y)
         for c in self.map.cont_refs:
-            xs += [c.x, c.x + c.width]
-            ys += [c.y, c.y + c.height]
+            xs += [c.x * self.s, (c.x + c.width) * self.s]
+            ys += [c.y * self.s, (c.y + c.height) * self.s]
         if not xs:
             xs, ys = [0.0, 100.0], [0.0, 100.0]
         x0 = min(xs) - POOL_PADDING - POOL_LABEL_STRIP
@@ -424,13 +512,14 @@ class _ProcessModel:
                     # a child lane named after the component.
                     own_lane = new_lane(lane_name(cr), None)
                     own_lane.nodes = own
-                    ys = [n.y for n in own]
+                    ys = [self.xy(n)[1] for n in own]
                     own_lane.y0, own_lane.y1 = min(ys) - 20, max(ys) + 20
                     lane.children.append(own_lane)
                     lane.children.sort(key=lambda l: l.y0)
             else:
                 lane.nodes = own
-            lane.y0, lane.y1 = float(cr.y), float(cr.y + cr.height)
+            lane.y0 = cr.y * self.s
+            lane.y1 = (cr.y + cr.height) * self.s
             return lane
 
         top = sorted((c for c in self.map.cont_refs if c.parent is None),
@@ -442,7 +531,7 @@ class _ProcessModel:
         # one: a separate "(unassigned)" band would have to move them.
         for n in self.nodes:
             if n.cont_ref is None:
-                self._leaf_lane_at(self.lanes, n.y).nodes.append(n)
+                self._leaf_lane_at(self.lanes, self.xy(n)[1]).nodes.append(n)
 
         # Tile: lanes share boundaries at the midpoints between bands and
         # the outermost ones reach the pool border.
@@ -481,6 +570,47 @@ class _ProcessModel:
         return out
 
 
+def _compute_heat(model: _Model) -> None:
+    """Fill each process's ``node_heat`` / ``edge_heat`` with the heat-map
+    emphasis ``t`` in ``[0, 1]`` of every task and flow that has a value for
+    the chosen metric -- read, attributed and normalised by the same helpers
+    the PNG renderer uses, so the colours agree."""
+    from pm4py_ucm.visualization.ucm.variants import classic as _c
+    opts = model.opts
+    node_span = edge_span = None
+    if opts.heatmap_global:
+        node_span, edge_span = _c.heat_span(
+            [model.ucm], opts.heatmap_node, opts.heatmap_edge)
+    for p in model.processes:
+        if opts.heatmap_node:
+            vals = {}
+            for n in p.nodes:
+                if isinstance(n, UCM.RespRef):
+                    v = _c._perf_metric_value(n, opts.heatmap_node)
+                    if v is not None:
+                        vals[n] = v
+            p.node_heat = _c._heat_normalize(vals, span=node_span)
+        if opts.heatmap_edge:
+            vals = {}
+            for f in p.flows:
+                v = _c._edge_perf_metric_value(f.arcs[0], opts.heatmap_edge)
+                if v is not None:
+                    vals[f] = v
+            p.edge_heat = _c._heat_normalize(vals, span=edge_span)
+
+
+def _heat_attrs(t: float, metric: str, fill: bool) -> List[Tuple[str, str]]:
+    """BPMN-in-Color and bioc attributes for emphasis ``t`` of ``metric``."""
+    from pm4py_ucm.visualization.ucm.variants import classic as _c
+    time_based = _c._metric_is_time(metric)
+    stroke = _c._heat_color(t, time_based)
+    attrs = [("color:border-color", stroke), ("bioc:stroke", stroke)]
+    if fill:
+        wash = _c._heat_fill_color(t, time_based)
+        attrs += [("color:background-color", wash), ("bioc:fill", wash)]
+    return attrs
+
+
 def _is_pass_through(n: "UCM.PathNode") -> bool:
     return len(n.pred_connections) == 1 and len(n.succ_connections) == 1
 
@@ -513,6 +643,8 @@ class _Model:
         self.opts = opts
         self.processes = [_ProcessModel(ucm, m, i, opts)
                           for i, m in enumerate(ucm.maps)]
+        if opts.heatmap_node or opts.heatmap_edge:
+            _compute_heat(self)
         self.by_map = {p.map: p for p in self.processes}
         plugin_maps = {b.plugin for m in ucm.maps for n in m.nodes
                        if isinstance(n, UCM.Stub) for b in n.bindings}
@@ -535,6 +667,8 @@ def _emit_definitions(w: "_XmlWriter", model: _Model) -> None:
         ("xmlns:di", NS_DI),
         ("xmlns:xsi", NS_XSI),
         (f"xmlns:{UCM_PREFIX}", NS_UCM),
+        ("xmlns:color", NS_COLOR),
+        ("xmlns:bioc", NS_BIOC),
         ("id", "Definitions_1"),
         ("name", ucm.name or "UCM"),
         ("targetNamespace", NS_UCM),
@@ -968,30 +1102,36 @@ def _emit_diagram(w, model: _Model, p: _ProcessModel) -> None:
                                      lane_w - depth * LANE_LABEL_STRIP,
                                      lane.y1 - lane.y0))
         w.close("bpmndi:BPMNShape")
-    sizes = {n: _shape_size(n) for n in p.nodes}
+    sizes = p.sizes
     for n in p.nodes:
         sw, sh = sizes[n]
+        nx, ny = p.xy(n)
         attrs = [("id", f"{p.node_ids[n]}_di"), ("bpmnElement", p.node_ids[n])]
         if isinstance(n, UCM.Stub) and n.dynamic:
             attrs.append(("isExpanded", "false"))
+        if n in p.node_heat:
+            attrs += _heat_attrs(p.node_heat[n], model.opts.heatmap_node, True)
         w.open("bpmndi:BPMNShape", attrs)
-        w.empty("dc:Bounds", _bounds(n.x - sw / 2, n.y - sh / 2, sw, sh))
+        w.empty("dc:Bounds", _bounds(nx - sw / 2, ny - sh / 2, sw, sh))
         if not isinstance(n, (UCM.RespRef, UCM.Stub)) and _node_name(n):
             # Events and gateways show their name beside the glyph.
             lw = max(40, min(120, 7 * len(_node_name(n))))
             w.open("bpmndi:BPMNLabel", [])
-            w.empty("dc:Bounds", _bounds(n.x - lw / 2, n.y + sh / 2 + 4, lw, 14))
+            w.empty("dc:Bounds", _bounds(nx - lw / 2, ny + sh / 2 + 4, lw, 14))
             w.close("bpmndi:BPMNLabel")
         w.close("bpmndi:BPMNShape")
     for f in p.flows:
         sw, sh = sizes[f.source]
         tw, th = sizes[f.target]
-        pts = [(float(f.source.x), float(f.source.y))]
-        pts += [(float(bx), float(by)) for bx, by in f.bends]
-        pts.append((float(f.target.x), float(f.target.y)))
+        pts = [p.xy(f.source)]
+        pts += [p.pt(bx, by) for bx, by in f.bends]
+        pts.append(p.xy(f.target))
         pts[0] = _clip_to_box(pts[0][0], pts[0][1], sw, sh, *pts[1])
         pts[-1] = _clip_to_box(pts[-1][0], pts[-1][1], tw, th, *pts[-2])
-        w.open("bpmndi:BPMNEdge", [("id", f"{f.id}_di"), ("bpmnElement", f.id)])
+        attrs = [("id", f"{f.id}_di"), ("bpmnElement", f.id)]
+        if f in p.edge_heat:
+            attrs += _heat_attrs(p.edge_heat[f], model.opts.heatmap_edge, False)
+        w.open("bpmndi:BPMNEdge", attrs)
         for x, y in pts:
             w.empty("di:waypoint", _point(x, y))
         if _has_condition(f) and f.condition.label:
@@ -1009,17 +1149,18 @@ def _emit_diagram(w, model: _Model, p: _ProcessModel) -> None:
                 continue
             nid = p.node_ids[n]
             sw, sh = sizes[n]
+            nx, ny = p.xy(n)
             aw = max(60, min(200, 7 * max(len(l) for l in text.splitlines())))
             ah = 14 * len(text.splitlines()) + 8
-            ax, ay = n.x - aw / 2, n.y + sh / 2 + 6
+            ax, ay = nx - aw / 2, ny + sh / 2 + 6
             w.open("bpmndi:BPMNShape", [("id", f"Annotation_{nid}_di"),
                                         ("bpmnElement", f"Annotation_{nid}")])
             w.empty("dc:Bounds", _bounds(ax, ay, aw, ah))
             w.close("bpmndi:BPMNShape")
             w.open("bpmndi:BPMNEdge", [("id", f"Association_{nid}_di"),
                                        ("bpmnElement", f"Association_{nid}")])
-            w.empty("di:waypoint", _point(n.x, n.y + sh / 2))
-            w.empty("di:waypoint", _point(n.x, ay))
+            w.empty("di:waypoint", _point(nx, ny + sh / 2))
+            w.empty("di:waypoint", _point(nx, ay))
             w.close("bpmndi:BPMNEdge")
     w.close("bpmndi:BPMNPlane")
     w.close("bpmndi:BPMNDiagram")
