@@ -311,7 +311,12 @@ the family-wide heat-map scale when that scope is selected. Both read the
 model back from the cached `.jucm` bytes, whose graphviz layout places
 component clusters side by side, so the exporter re-lays the maps out in
 swim-lanes (the warning is silenced there and the help text says the
-picture may differ from the on-screen one).
+picture may differ from the on-screen one). Both pass `stubs="inline"`
+(`_APP_BPMN_OPTIONS` in the app, pinned by a test): bpmn.io, where the
+downloads are most likely to be opened, drills into a collapsed sub-process
+but offers no way to reach the process a call activity points at and no
+diagram switcher, so the library default would leave every composite
+activity a dead end there. The library keeps `stubs="call"` (decision 1).
 
 **Known layout consequence.** The app's on-screen render and `.jucm` use
 graphviz, and graphviz clusters are not lane-compatible (§4), so an app
@@ -413,5 +418,6 @@ Decided during implementation (Stage 1):
 Not planned, noted so they are not forgotten: a BPMN **importer**
 (`convert_to_ucm(bpmn)`; pm4py already parses BPMN), exposing `stubs`,
 `sizes` and `routing` as choices in the web app's download (today the app
-uses the defaults), tagging `∨` forks in the tree converter (decision 4), and
+fixes `stubs="inline"` and takes the other defaults), tagging `∨` forks in
+the tree converter (decision 4), and
 a Camunda Modeler / Signavio pass over the goldens beyond bpmn-js.

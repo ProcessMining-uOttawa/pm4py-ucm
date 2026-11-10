@@ -745,6 +745,13 @@ def _render_cached(jucm_bytes: bytes, style: str,
 # cached wrappers below.
 
 
+# Both BPMN downloads nest plug-ins as collapsed sub-processes rather than
+# the library's default call activities: bpmn.io (where most people will
+# open the file) drills into a collapsed sub-process but has no way to reach
+# the process a call activity points at, and pm4py's reader needs it too.
+_APP_BPMN_OPTIONS = {"stubs": "inline"}
+
+
 @st.cache_data(show_spinner=False)
 def _bpmn_cached(jucm_bytes: bytes,
                  heatmap: bool = False,
@@ -757,7 +764,8 @@ def _bpmn_cached(jucm_bytes: bytes,
     The ``.jucm`` holds the graphviz layout, whose component clusters may sit
     side by side; BPMN lanes must stack, so the exporter lays the maps out
     again with the swim-lane layouter (its warning is expected here and is
-    silenced). Node metrics ride in the ``.jucm`` metadata already."""
+    silenced). Node metrics ride in the ``.jucm`` metadata already.
+    Stubs are inlined (``_APP_BPMN_OPTIONS``) so viewers can drill down."""
     with tempfile.TemporaryDirectory() as td:
         jucm_path = Path(td) / "model.jucm"
         jucm_path.write_bytes(jucm_bytes)
@@ -770,6 +778,7 @@ def _bpmn_cached(jucm_bytes: bytes,
             heatmap_edge=edge_metric if heatmap else None,
             heatmap_global=bool(heatmap and heatmap_global),
             validate=False,
+            **_APP_BPMN_OPTIONS,
         )
     return xml.encode("utf-8")
 
@@ -798,6 +807,7 @@ def _family_bpmn_zip(mine_fingerprint: str, _family, umbrella_jucm: bytes,
                 heatmap_edge=edge_metric if heatmap else None,
                 heatmap_global=bool(heatmap and heat_scope == "global"),
                 validate=False,
+                **_APP_BPMN_OPTIONS,
             )
         return zip_path.read_bytes()
 
@@ -5415,14 +5425,18 @@ if _view == "Model":
                 file_name=_safe_download_name(Path(log_name).stem, ".bpmn"),
                 mime="application/xml", key="model_bpmn_download",
                 help="Standard BPMN 2.0 XML with diagram interchange — "
-                     "opens in bpmn.io, Camunda Modeler or pm4py. Components "
-                     "become lanes, so the maps are laid out in horizontal "
-                     "swim-lanes (the on-screen picture may differ). Carries "
-                     "the active heat-map as colours.",
+                     "opens in bpmn.io, Camunda Modeler or pm4py. Composite "
+                     "activities are collapsed sub-processes: drill into "
+                     "them in the viewer. Components become lanes, so the "
+                     "maps are laid out in horizontal swim-lanes (the "
+                     "on-screen picture may differ). Carries the active "
+                     "heat-map as colours.",
             )
         elif st.button("Prepare BPMN…", key="model_bpmn_prepare",
                        help="Export the model as a standard BPMN 2.0 file "
-                            "(components as lanes, heat-map as colours)."):
+                            "(components as lanes, composite activities as "
+                            "drill-down sub-processes, heat-map as "
+                            "colours)."):
             with st.spinner("Exporting BPMN 2.0..."):
                 try:
                     st.session_state[_bpmn_key] = _bpmn_cached(
@@ -6565,7 +6579,8 @@ if _view == "Family":
                             help="One standard BPMN 2.0 file per cell plus "
                                  "the umbrella as family_umbrella.bpmn (its "
                                  "variation points are inclusive choices "
-                                 "over the cell plug-ins). Components become "
+                                 "over the cell plug-ins, each a drill-down "
+                                 "sub-process). Components become "
                                  "lanes; the active heat-map rides as "
                                  "colours, on the family-wide scale when "
                                  "that scope is selected.",

@@ -482,7 +482,8 @@ class _ProcessModel:
         for n in self.map.nodes:
             if isinstance(n, _ROUTING_TYPES) and _is_pass_through(n):
                 continue
-            self.node_ids[n] = f"{_id_prefix(n)}_{self.index}_{k}"
+            self.node_ids[n] = (f"{_id_prefix(n, self.opts.stubs == 'inline')}"
+                                f"_{self.index}_{k}")
             self.nodes.append(n)
             k += 1
 
@@ -661,7 +662,7 @@ def _is_pass_through(n: "UCM.PathNode") -> bool:
     return len(n.pred_connections) == 1 and len(n.succ_connections) == 1
 
 
-def _id_prefix(n: "UCM.PathNode") -> str:
+def _id_prefix(n: "UCM.PathNode", inline: bool = False) -> str:
     if isinstance(n, UCM.StartPoint):
         return "StartEvent"
     if isinstance(n, UCM.EndPoint):
@@ -671,7 +672,7 @@ def _id_prefix(n: "UCM.PathNode") -> str:
     if isinstance(n, (UCM.OrFork, UCM.OrJoin, UCM.AndFork, UCM.AndJoin)):
         return "Gateway"
     if isinstance(n, UCM.Stub):
-        return "SubProcess" if n.dynamic else "CallActivity"
+        return "SubProcess" if (n.dynamic or inline) else "CallActivity"
     if isinstance(n, UCM.Timer):
         return "TimerEvent"
     if isinstance(n, UCM.WaitingPlace):

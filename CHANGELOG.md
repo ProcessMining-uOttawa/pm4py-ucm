@@ -41,7 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   heat-map as colours; the Family view's Downloads row has *BPMN 2.0
   (.zip)* with one file per cell plus `family_umbrella.bpmn`. Components
   become lanes, so these exports are laid out in horizontal swim-lanes and
-  may differ from the on-screen graphviz picture.
+  may differ from the on-screen graphviz picture. The app exports with
+  `stubs="inline"`, so composite activities are collapsed sub-processes
+  that bpmn.io drills into (a call activity's process is unreachable
+  there).
   Tests validate every export against the OMG BPMN 2.0 schema (vendored
   under `tests/data/bpmn-xsd`; `lxml` is now a dev dependency).
 

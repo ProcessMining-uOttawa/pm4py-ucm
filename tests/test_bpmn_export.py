@@ -824,6 +824,7 @@ class InlineStubTests(unittest.TestCase):
         for sub in subs:
             self.assertIn(sub.get("id"), planes)
             self.assertEqual(shapes_by_el[sub.get("id")].get("isExpanded"), "false")
+            self.assertTrue(sub.get("id").startswith("SubProcess_"), sub.get("id"))
         # Every task is in exactly one lane somewhere.
         tasks = {t.get("id") for t in root.iter(f"{NS_B}task")}
         refs = [r.text for r in root.iter(f"{NS_B}flowNodeRef")]
@@ -948,6 +949,26 @@ class RoutingTests(unittest.TestCase):
         xml = serialize_to_string(claims_ucm(), routing="orthogonal")
         self.assertTrue(schema.validate(_lxml.fromstring(xml.encode("utf-8"))),
                         "; ".join(str(e) for e in schema.error_log))
+
+
+class AppDownloadTests(unittest.TestCase):
+    """The V6 app's two BPMN downloads use ``stubs="inline"``: bpmn.io drills
+    into collapsed sub-processes but cannot reach a call activity's process,
+    so the library default (call activities) would leave the composite
+    activities dead ends there. Pinned by reading the app source, since the
+    app is not importable in tests."""
+
+    def test_app_bpmn_downloads_inline_stubs(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        app = os.path.join(here, os.pardir, "web", "streamlit_app_v6.py")
+        with open(app, encoding="utf-8") as f:
+            src = f.read()
+        m = re.search(r"^_APP_BPMN_OPTIONS\s*=\s*(\{.*?\})\s*$", src, re.M)
+        self.assertIsNotNone(m, "the app lost its _APP_BPMN_OPTIONS constant")
+        self.assertEqual(eval(m.group(1)), {"stubs": "inline"})
+        for call in ("convert_to_bpmn_xml(", "write_bpmn_family("):
+            start = src.index("pm4py_ucm." + call)
+            self.assertIn("**_APP_BPMN_OPTIONS", src[start:start + 600], call)
 
 
 class ApiTests(unittest.TestCase):

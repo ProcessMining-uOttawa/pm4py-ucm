@@ -22,8 +22,8 @@ changelog entry, heat-map colours and `sizes="canonical"`, the V6 downloads
 (Model: Prepare/Download BPMN; Family: BPMN 2.0 .zip) and
 `write_bpmn_family`, and the `stubs="inline"` / `data="objects"` /
 `routing="orthogonal"` options. Nothing of the plan is left; the doc's §13
-notes possible later work. Note the app's exports are swim-lane laid out, not graphviz (see the doc's
-§9). Settled
+notes possible later work. Note the app's exports are swim-lane laid out, not graphviz, and use
+`stubs="inline"` (bpmn.io cannot drill into call activities; see the doc's §9). Settled
 decisions and the ones made during implementation are in the doc's §10.
 
 - `main` carries 0.8.4, tagged `v0.8.4`, published to PyPI.
