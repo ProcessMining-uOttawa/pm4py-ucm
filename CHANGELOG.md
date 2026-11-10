@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.5] — 2026-11-10
+
 ### Added
 
 - **BPMN 2.0 export.** `pm4py_ucm.write_bpmn(ucm, path)` and
