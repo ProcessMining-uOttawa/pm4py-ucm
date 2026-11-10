@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **BPMN 2.0 export.** `pm4py_ucm.write_bpmn(ucm, path)` and
+  `convert_to_bpmn_xml(ucm)` write a UCM as standard BPMN 2.0 XML with
+  diagram interchange, openable in bpmn.io, Camunda Modeler and
+  `pm4py.read_bpmn`. The whole model is one pool whose **lanes are the
+  components** (nested through `childLaneSet`, tiling the pool from the
+  swim-lane layout); responsibilities become tasks, OR/AND forks and joins
+  exclusive/parallel gateways, routing points waypoints; a **static stub is
+  a call activity** to its plug-in's process (one process and one diagram
+  per map) and a **dynamic stub a collapsed sub-process** choosing
+  inclusively among its plug-ins, with the binding preconditions as
+  guards. Node centres transfer 1:1 from the UCM coordinates. Performance
+  metadata travels as `<ucm:metric>` extension elements on tasks and
+  flows, and the selected edge overlay text becomes the flow's label
+  (`annotate="edges"`, default; `"all"` adds text annotations under
+  tasks). The mapping and its decisions are in `docs/bpmn_export.md`.
+  Tests validate every export against the OMG BPMN 2.0 schema (vendored
+  under `tests/data/bpmn-xsd`; `lxml` is now a dev dependency).
+
 ## [0.8.4] — 2026-09-17
 
 ### Fixed

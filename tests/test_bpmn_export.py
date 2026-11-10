@@ -1,0 +1,552 @@
+"""Tests for the BPMN 2.0 exporter (``docs/bpmn_export.md``).
+
+Four kinds of guarantee:
+
+* **conformance** — every export validates against the OMG BPMN 2.0 XSD
+  (vendored under ``tests/data/bpmn-xsd``; needs ``lxml``, skipped
+  otherwise);
+* **round trip** — ``pm4py.read_bpmn`` recovers the control flow of a
+  stub-free model (pm4py's reader knows no ``callActivity``, so models
+  with stubs are checked structurally instead);
+* **lanes** — components become lanes that tile the pool: sibling bands
+  are disjoint, contiguous and span the pool; every flow node is in
+  exactly one leaf lane; nesting becomes ``childLaneSet``;
+* **layout** — node centres are the UCM coordinates, routing points
+  become waypoints, and a model whose components overlap vertically is
+  re-laid out with a warning.
+"""
+
+import os
+import re
+import tempfile
+import unittest
+import warnings
+import xml.etree.ElementTree as ET
+from types import SimpleNamespace as NS
+
+import pm4py_ucm
+from pm4py_ucm import UCM
+from pm4py_ucm.objects.ucm.conversion import decomposition
+from pm4py_ucm.objects.ucm.conversion.from_process_tree import apply as convert
+from pm4py_ucm.objects.ucm.exporter.variants import bpmn as bpmn_exporter
+from pm4py_ucm.objects.ucm.exporter.variants.bpmn import serialize_to_string
+
+try:
+    from lxml import etree as _lxml
+except ImportError:  # pragma: no cover
+    _lxml = None
+
+try:
+    import pm4py as _pm4py
+except ImportError:  # pragma: no cover
+    _pm4py = None
+
+HERE = os.path.dirname(__file__)
+XSD = os.path.join(HERE, "data", "bpmn-xsd", "BPMN20.xsd")
+FIXTURES = os.path.join(HERE, "fixtures")
+
+NS_B = "{http://www.omg.org/spec/BPMN/20100524/MODEL}"
+NS_DI = "{http://www.omg.org/spec/BPMN/20100524/DI}"
+NS_DC = "{http://www.omg.org/spec/DD/20100524/DC}"
+NS_DD = "{http://www.omg.org/spec/DD/20100524/DI}"
+NS_U = "{urn:pm4py-ucm:bpmn:1.0}"
+
+
+def leaf(label):
+    return NS(operator=None, children=[], label=label)
+
+
+def op(o, *kids):
+    return NS(operator=NS(value=o), children=list(kids), label=None)
+
+
+def claims_tree():
+    """Sequence, choice, loop and parallelism in one tree."""
+    return op("->", leaf("Register"),
+              op("X", leaf("Check A"), leaf("Check B")),
+              op("*", leaf("Review"), leaf("Rework")),
+              op("+", leaf("Pay"), leaf("Notify")),
+              leaf("Close"))
+
+
+PERFORMERS = {"Register": "Clerk", "Check A": "Clerk", "Check B": "Expert",
+              "Review": "Expert", "Rework": "Expert", "Pay": "Finance",
+              "Notify": "Finance", "Close": "Clerk"}
+
+
+def claims_ucm():
+    ucm = convert(claims_tree())
+    ucm.bind_performers(PERFORMERS)
+    return ucm
+
+
+def dynamic_stub_ucm():
+    """``start → dynamic stub → end`` with two plug-ins guarded by
+    preconditions, built by hand the way the family assembler does."""
+    u = UCM(name="Dyn")
+    root = u.add_map(UCM.UCMmap(name="Root"))
+    s = UCM.StartPoint(name="go")
+    st = UCM.Stub(name="Variants", dynamic=True)
+    e = UCM.EndPoint(name="done")
+    root.add_connection(s, st)
+    root.add_connection(st, e)
+    for i in range(2):
+        m = u.add_map(UCM.UCMmap(name=f"Plug{i}"))
+        ps = UCM.StartPoint(name="in")
+        r = UCM.RespRef(name=f"Work{i}",
+                        resp_def=u.get_or_add_responsibility(f"Work{i}"))
+        pe = UCM.EndPoint(name="out")
+        m.add_connection(ps, r)
+        m.add_connection(r, pe)
+        b = UCM.PluginBinding(st, m)
+        b.precondition = UCM.Condition(label=f"v{i}", expression=f"variant == {i}")
+        b.add_in(st.pred_connections[0], ps)
+        b.add_out(pe, st.succ_connections[0])
+        st.bindings.append(b)
+    return u
+
+
+def parse(xml: str):
+    return ET.fromstring(xml.encode("utf-8"))
+
+
+def shapes(root):
+    """``bpmnElement → (x, y, w, h)`` over every BPMNShape."""
+    out = {}
+    for sh in root.iter(f"{NS_DI}BPMNShape"):
+        b = sh.find(f"{NS_DC}Bounds")
+        out[sh.get("bpmnElement")] = tuple(float(b.get(k))
+                                           for k in ("x", "y", "width", "height"))
+    return out
+
+
+class XsdConformanceTests(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        if _lxml is None:
+            raise unittest.SkipTest("lxml not installed")
+        cls.schema = _lxml.XMLSchema(_lxml.parse(XSD))
+
+    def assertValid(self, xml: str):
+        doc = _lxml.fromstring(xml.encode("utf-8"))
+        ok = self.schema.validate(doc)
+        self.assertTrue(ok, "\n".join(str(e) for e in self.schema.error_log))
+
+    def test_flat_model(self):
+        self.assertValid(serialize_to_string(claims_ucm()))
+
+    def test_every_option(self):
+        ucm = claims_ucm()
+        self.assertValid(serialize_to_string(ucm, lanes="none"))
+        self.assertValid(serialize_to_string(
+            ucm, lane_names="with_kind", annotate="all", metrics="none"))
+
+    def test_decomposed_model(self):
+        tree = op("->", op("->", leaf("A1"), leaf("A2"), leaf("A3")),
+                  op("X", op("->", leaf("B1"), leaf("B2"), leaf("B3")),
+                     op("->", leaf("C1"), leaf("C2"), leaf("C3"))),
+                  op("->", leaf("D1"), leaf("D2"), leaf("D3")))
+        ucm = decomposition.apply(tree, {"decomposition": "aggressive"})
+        self.assertGreater(len(ucm.maps), 1)
+        self.assertValid(serialize_to_string(ucm))
+
+    def test_dynamic_stub(self):
+        self.assertValid(serialize_to_string(dynamic_stub_ucm()))
+
+    def test_jucmnav_fixtures(self):
+        for name in ("SimpleExample.jucm", "SimpleExampleWithStub.jucm"):
+            ucm = pm4py_ucm.read_ucm(os.path.join(FIXTURES, name))
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                self.assertValid(serialize_to_string(ucm, validate=False))
+
+
+class RoundTripTests(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        if _pm4py is None:
+            raise unittest.SkipTest("pm4py not installed")
+
+    def test_pm4py_reads_the_control_flow_back(self):
+        ucm = claims_ucm()
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "claims.bpmn")
+            self.assertEqual(pm4py_ucm.write_bpmn(ucm, path), path)
+            graph = _pm4py.read_bpmn(path)
+        nodes = graph.get_nodes()
+        names = sorted(n.get_name() for n in nodes if type(n).__name__ == "Task")
+        self.assertEqual(names, sorted(PERFORMERS))
+        kinds = {}
+        for n in nodes:
+            kinds[type(n).__name__] = kinds.get(type(n).__name__, 0) + 1
+        # 1 start, 1 end, 8 tasks, OR fork+join, loop join+fork, AND fork+join
+        self.assertEqual(kinds.get("NormalStartEvent"), 1)
+        self.assertEqual(kinds.get("NormalEndEvent"), 1)
+        self.assertEqual(kinds.get("ExclusiveGateway"), 4)
+        self.assertEqual(kinds.get("ParallelGateway"), 2)
+        # Every routing point was folded into a flow: as many flows as
+        # arcs between real nodes.
+        self.assertEqual(len(graph.get_flows()), 18)
+
+
+class MappingTests(unittest.TestCase):
+
+    def setUp(self):
+        self.ucm = claims_ucm()
+        self.xml = serialize_to_string(self.ucm)
+        self.root = parse(self.xml)
+        self.process = self.root.find(f"{NS_B}process")
+
+    def test_one_pool_one_process(self):
+        parts = self.root.findall(f"{NS_B}collaboration/{NS_B}participant")
+        self.assertEqual(len(parts), 1)
+        self.assertEqual(parts[0].get("processRef"), self.process.get("id"))
+        self.assertEqual(self.process.get("isExecutable"), "false")
+
+    def test_element_kinds(self):
+        tags = [c.tag.replace(NS_B, "") for c in self.process]
+        self.assertEqual(tags.count("task"), 8)
+        self.assertEqual(tags.count("startEvent"), 1)
+        self.assertEqual(tags.count("endEvent"), 1)
+        self.assertEqual(tags.count("exclusiveGateway"), 4)
+        self.assertEqual(tags.count("parallelGateway"), 2)
+        self.assertEqual(tags.count("sequenceFlow"), 18)
+        self.assertNotIn("EmptyPoint", self.xml)
+
+    def test_generated_gateway_names_are_dropped(self):
+        for g in self.process.iter(f"{NS_B}exclusiveGateway"):
+            self.assertIsNone(g.get("name"))
+        directions = {g.get("gatewayDirection")
+                      for g in self.process.iter(f"{NS_B}exclusiveGateway")}
+        self.assertEqual(directions, {"Diverging", "Converging"})
+
+    def test_unconditioned_choice_has_no_conditions(self):
+        # The plain converter puts ``branch0``-style labels with a ``true``
+        # expression on choice arcs; those are not guards and BPMN gets
+        # neither a conditionExpression nor a default flow for them.
+        self.assertNotIn("conditionExpression", self.xml)
+        for g in self.process.iter(f"{NS_B}exclusiveGateway"):
+            self.assertIsNone(g.get("default"))
+        for f in self.process.iter(f"{NS_B}sequenceFlow"):
+            self.assertIsNone(f.get("name"))
+
+    def test_real_guards_become_condition_expressions(self):
+        m = self.ucm.maps[0]
+        fork = next(n for n in m.nodes if isinstance(n, UCM.OrFork)
+                    and n.name == "OrFork")
+        a, b = fork.succ_connections
+        a.set_condition(UCM.Condition(label="small", expression="amount < 100"))
+        b.set_condition(UCM.Condition(label="else", expression="true"))
+        root = parse(serialize_to_string(self.ucm))
+        flows = {f.get("id"): f for f in root.iter(f"{NS_B}sequenceFlow")}
+        gw = next(g for g in root.iter(f"{NS_B}exclusiveGateway")
+                  if g.get("default"))
+        default = flows[gw.get("default")]
+        self.assertIsNone(default.find(f"{NS_B}conditionExpression"))
+        guarded = [f for f in flows.values()
+                   if f.find(f"{NS_B}conditionExpression") is not None]
+        self.assertEqual(len(guarded), 1)
+        self.assertEqual(guarded[0].get("name"), "small")
+        self.assertEqual(guarded[0].find(f"{NS_B}conditionExpression").text,
+                         "amount < 100")
+
+    def test_responsibility_traceability(self):
+        task = next(t for t in self.process.iter(f"{NS_B}task")
+                    if t.get("name") == "Pay")
+        ext = task.find(f"{NS_B}extensionElements/{NS_U}ucm")
+        self.assertEqual(ext.get("responsibility"), "Pay")
+        self.assertEqual(ext.get("performer"), "Finance")
+
+    def test_incoming_outgoing_match_flows(self):
+        flows = {f.get("id"): (f.get("sourceRef"), f.get("targetRef"))
+                 for f in self.process.iter(f"{NS_B}sequenceFlow")}
+        for node in self.process:
+            tag = node.tag.replace(NS_B, "")
+            if tag in ("sequenceFlow", "laneSet", "extensionElements",
+                       "documentation"):
+                continue
+            nid = node.get("id")
+            for inc in node.findall(f"{NS_B}incoming"):
+                self.assertEqual(flows[inc.text][1], nid)
+            for out in node.findall(f"{NS_B}outgoing"):
+                self.assertEqual(flows[out.text][0], nid)
+
+    def test_options_are_checked(self):
+        with self.assertRaises(ValueError):
+            serialize_to_string(self.ucm, lanes="pools")
+        with self.assertRaises(ValueError):
+            serialize_to_string(self.ucm, annotate="everything")
+
+    def test_output_is_deterministic(self):
+        self.assertEqual(self.xml, serialize_to_string(claims_ucm()))
+
+
+class LaneTests(unittest.TestCase):
+
+    def _lanes(self, root):
+        return {l.get("id"): l for l in root.iter(f"{NS_B}lane")}
+
+    def test_components_are_lanes_that_tile_the_pool(self):
+        root = parse(serialize_to_string(claims_ucm()))
+        lanes = self._lanes(root)
+        self.assertEqual(sorted(l.get("name") for l in lanes.values()),
+                         ["Clerk", "Expert", "Finance"])
+        sh = shapes(root)
+        pool = sh[root.find(f"{NS_B}collaboration/{NS_B}participant").get("id")]
+        bands = sorted((sh[lid][1], sh[lid][1] + sh[lid][3]) for lid in lanes)
+        self.assertAlmostEqual(bands[0][0], pool[1])
+        self.assertAlmostEqual(bands[-1][1], pool[1] + pool[3])
+        for (a0, a1), (b0, b1) in zip(bands, bands[1:]):
+            self.assertAlmostEqual(a1, b0)     # contiguous, no overlap
+        for lid in lanes:
+            x, y, w, h = sh[lid]
+            self.assertAlmostEqual(x, pool[0] + bpmn_exporter.POOL_LABEL_STRIP)
+            self.assertAlmostEqual(w, pool[2] - bpmn_exporter.POOL_LABEL_STRIP)
+
+    def test_every_flow_node_in_exactly_one_lane(self):
+        root = parse(serialize_to_string(claims_ucm()))
+        process = root.find(f"{NS_B}process")
+        node_ids = {c.get("id") for c in process
+                    if c.tag.replace(NS_B, "") not in
+                    ("sequenceFlow", "laneSet", "extensionElements",
+                     "documentation")}
+        refs = [r.text for r in root.iter(f"{NS_B}flowNodeRef")]
+        self.assertEqual(sorted(refs), sorted(node_ids))
+
+    def test_tasks_sit_in_their_performers_lane(self):
+        root = parse(serialize_to_string(claims_ucm()))
+        tasks = {t.get("id"): t.get("name")
+                 for t in root.iter(f"{NS_B}task")}
+        for lane in root.iter(f"{NS_B}lane"):
+            for r in lane.findall(f"{NS_B}flowNodeRef"):
+                if r.text in tasks:
+                    self.assertEqual(PERFORMERS[tasks[r.text]], lane.get("name"))
+
+    def test_nested_components_become_child_lane_sets(self):
+        ucm = convert(op("->", leaf("A"), leaf("B"), leaf("C")))
+        m = ucm.maps[0]
+        outer = ucm.get_or_add_component("Outer")
+        inner = ucm.get_or_add_component("Inner")
+        outer_ref = m.add_component_ref(outer)
+        inner_ref = m.add_component_ref(inner, parent=outer_ref)
+        for n in m.resp_refs:
+            n.cont_ref = inner_ref if n.resp_def.name == "B" else outer_ref
+        root = parse(serialize_to_string(ucm))
+        outer_lane = next(l for l in root.iter(f"{NS_B}lane")
+                          if l.get("name") == "Outer" and
+                          l.find(f"{NS_B}childLaneSet") is not None)
+        children = outer_lane.findall(f"{NS_B}childLaneSet/{NS_B}lane")
+        self.assertEqual(sorted(c.get("name") for c in children),
+                         ["Inner", "Outer"])
+        # A lane with children references no flow node itself.
+        self.assertEqual(outer_lane.findall(f"{NS_B}flowNodeRef"), [])
+        sh = shapes(root)
+        ox, oy, ow, oh = sh[outer_lane.get("id")]
+        for c in children:
+            cx, cy, cw, ch = sh[c.get("id")]
+            self.assertGreaterEqual(cy, oy - 1e-6)
+            self.assertLessEqual(cy + ch, oy + oh + 1e-6)
+            self.assertAlmostEqual(cx, ox + bpmn_exporter.LANE_LABEL_STRIP)
+
+    def test_lane_kind_and_names(self):
+        root = parse(serialize_to_string(claims_ucm(), lane_names="with_kind"))
+        names = {l.get("name") for l in root.iter(f"{NS_B}lane")}
+        self.assertIn("Clerk «Team»", names)
+        lane = next(iter(root.iter(f"{NS_B}lane")))
+        self.assertEqual(
+            lane.find(f"{NS_B}extensionElements/{NS_U}ucm").get("kind"), "Team")
+
+    def test_no_lanes_option(self):
+        root = parse(serialize_to_string(claims_ucm(), lanes="none"))
+        self.assertEqual(list(root.iter(f"{NS_B}laneSet")), [])
+        self.assertEqual(len(root.findall(f"{NS_B}collaboration/{NS_B}participant")), 1)
+
+
+class LayoutTests(unittest.TestCase):
+
+    def test_node_centres_are_the_ucm_coordinates(self):
+        ucm = claims_ucm()
+        root = parse(serialize_to_string(ucm))
+        sh = shapes(root)
+        tasks = {t.get("name"): t.get("id") for t in root.iter(f"{NS_B}task")}
+        for n in ucm.maps[0].resp_refs:
+            x, y, w, h = sh[tasks[n.resp_def.name]]
+            self.assertAlmostEqual(x + w / 2, n.x)
+            self.assertAlmostEqual(y + h / 2, n.y)
+
+    def test_routing_points_become_waypoints(self):
+        ucm = claims_ucm()
+        m = ucm.maps[0]
+        bends = [n for n in m.nodes if isinstance(n, UCM.EmptyPoint)]
+        self.assertTrue(bends)
+        root = parse(serialize_to_string(ucm))
+        pts = set()
+        for e in root.iter(f"{NS_DI}BPMNEdge"):
+            for wp in e.findall(f"{NS_DD}waypoint"):
+                pts.add((float(wp.get("x")), float(wp.get("y"))))
+        for b in bends:
+            self.assertIn((float(b.x), float(b.y)), pts)
+        # Every edge has at least two waypoints.
+        for e in root.iter(f"{NS_DI}BPMNEdge"):
+            self.assertGreaterEqual(len(e.findall(f"{NS_DD}waypoint")), 2)
+
+    def test_edge_ends_touch_shape_borders(self):
+        root = parse(serialize_to_string(claims_ucm()))
+        sh = shapes(root)
+        flows = {f.get("id"): (f.get("sourceRef"), f.get("targetRef"))
+                 for f in root.iter(f"{NS_B}sequenceFlow")}
+        for e in root.iter(f"{NS_DI}BPMNEdge"):
+            src, tgt = flows[e.get("bpmnElement")]
+            wps = e.findall(f"{NS_DD}waypoint")
+            for wp, box in ((wps[0], sh[src]), (wps[-1], sh[tgt])):
+                x, y = float(wp.get("x")), float(wp.get("y"))
+                bx, by, bw, bh = box
+                on_border = (abs(x - bx) < 1e-6 or abs(x - bx - bw) < 1e-6
+                             or abs(y - by) < 1e-6 or abs(y - by - bh) < 1e-6)
+                self.assertTrue(on_border, (e.get("bpmnElement"), (x, y), box))
+                self.assertTrue(bx - 1e-6 <= x <= bx + bw + 1e-6)
+                self.assertTrue(by - 1e-6 <= y <= by + bh + 1e-6)
+
+    def test_overlapping_components_trigger_relayout_warning(self):
+        ucm = claims_ucm()
+        pm4py_ucm.objects.ucm.layout.layouter.apply_layout(ucm)
+        m = ucm.maps[0]
+        a, b = m.cont_refs[0], m.cont_refs[1]
+        b.y, b.height = a.y, a.height   # side by side: not lanes
+        with warnings.catch_warnings(record=True) as ws:
+            warnings.simplefilter("always")
+            root = parse(serialize_to_string(ucm))
+        self.assertTrue(any("re-laid out" in str(w.message) for w in ws))
+        sh = shapes(root)
+        bands = sorted((sh[l.get("id")][1], sh[l.get("id")][1] + sh[l.get("id")][3])
+                       for l in root.iter(f"{NS_B}lane"))
+        for (a0, a1), (b0, b1) in zip(bands, bands[1:]):
+            self.assertLessEqual(a1, b0 + 1e-6)
+
+    def test_unpositioned_model_is_laid_out(self):
+        ucm = claims_ucm()
+        self.assertTrue(all(n.x == 0 and n.y == 0 for n in ucm.maps[0].nodes))
+        serialize_to_string(ucm)
+        self.assertTrue(any(n.x or n.y for n in ucm.maps[0].nodes))
+
+
+class StubTests(unittest.TestCase):
+
+    def test_static_stub_is_a_call_activity_to_its_plugin_process(self):
+        ucm = pm4py_ucm.read_ucm(os.path.join(FIXTURES, "SimpleExampleWithStub.jucm"))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            root = parse(serialize_to_string(ucm, validate=False))
+        processes = {p.get("id"): p for p in root.findall(f"{NS_B}process")}
+        self.assertEqual(len(processes), len(ucm.maps))
+        calls = list(root.iter(f"{NS_B}callActivity"))
+        self.assertEqual(len(calls), 1)
+        self.assertIn(calls[0].get("calledElement"), processes)
+        # One diagram per process, each with its own plane.
+        self.assertEqual(len(root.findall(f"{NS_DI}BPMNDiagram")), len(ucm.maps))
+
+    def test_dynamic_stub_is_an_inclusive_choice_of_call_activities(self):
+        root = parse(serialize_to_string(dynamic_stub_ucm()))
+        sub = next(iter(root.iter(f"{NS_B}subProcess")))
+        self.assertEqual(sub.get("name"), "Variants")
+        incl = sub.findall(f"{NS_B}inclusiveGateway")
+        self.assertEqual({g.get("gatewayDirection") for g in incl},
+                         {"Diverging", "Converging"})
+        self.assertEqual(list(sub.iter(f"{NS_B}exclusiveGateway")), [])
+        calls = sub.findall(f"{NS_B}callActivity")
+        self.assertEqual(len(calls), 2)
+        guarded = [f for f in sub.findall(f"{NS_B}sequenceFlow")
+                   if f.find(f"{NS_B}conditionExpression") is not None]
+        self.assertEqual(sorted(f.find(f"{NS_B}conditionExpression").text
+                                for f in guarded),
+                         ["variant == 0", "variant == 1"])
+        # Collapsed in the parent, expanded in its own diagram.
+        sh_attrs = {s.get("bpmnElement"): s for s in root.iter(f"{NS_DI}BPMNShape")}
+        self.assertEqual(sh_attrs[sub.get("id")].get("isExpanded"), "false")
+        planes = {p.get("bpmnElement") for p in root.iter(f"{NS_DI}BPMNPlane")}
+        self.assertIn(sub.get("id"), planes)
+
+
+class MetricsTests(unittest.TestCase):
+
+    def _annotated(self):
+        ucm = claims_ucm()
+        m = ucm.maps[0]
+        pay = next(n for n in m.resp_refs if n.resp_def.name == "Pay")
+        pay.add_metadata("perf_frequency", "258")
+        pay.add_metadata("perf_mean_time", "3.2 d")
+        pay.add_metadata("_perf", "258 · 3.2 d")
+        pay.add_metadata("note", "manual")
+        fork = next(n for n in m.nodes if isinstance(n, UCM.OrFork)
+                    and n.name == "OrFork")
+        fork.add_metadata("perf_branch0_traversal_frequency", "40")
+        fork.add_metadata("perf_branch0_traversal_percentage", "25% of 160")
+        fork.add_metadata("_perf_branch0", "25% of 160")
+        return ucm
+
+    def test_metrics_become_extension_elements(self):
+        root = parse(serialize_to_string(self._annotated()))
+        pay = next(t for t in root.iter(f"{NS_B}task") if t.get("name") == "Pay")
+        metrics = {m.get("name"): m.get("value")
+                   for m in pay.iter(f"{NS_U}metric")}
+        self.assertEqual(metrics, {"frequency": "258", "mean_time": "3.2 d"})
+        plain = {m.get("name"): m.get("value")
+                 for m in pay.iter(f"{NS_U}metadata")}
+        self.assertEqual(plain, {"note": "manual"})
+        self.assertEqual(pay.get("name"), "Pay")   # names stay clean
+
+    def test_edge_metrics_land_on_the_flow(self):
+        root = parse(serialize_to_string(self._annotated()))
+        flows = [f for f in root.iter(f"{NS_B}sequenceFlow")
+                 if f.find(f"{NS_B}extensionElements/{NS_U}metric") is not None]
+        self.assertEqual(len(flows), 1)
+        metrics = {m.get("name"): m.get("value")
+                   for m in flows[0].iter(f"{NS_U}metric")}
+        self.assertEqual(metrics, {"traversal_frequency": "40",
+                                   "traversal_percentage": "25% of 160"})
+        # annotate="edges" (default): the overlay text is the flow's name.
+        self.assertEqual(flows[0].get("name"), "25% of 160")
+
+    def test_annotate_none_and_all(self):
+        ucm = self._annotated()
+        root = parse(serialize_to_string(ucm, annotate="none"))
+        for f in root.iter(f"{NS_B}sequenceFlow"):
+            self.assertIsNone(f.get("name"))
+        self.assertEqual(list(root.iter(f"{NS_B}textAnnotation")), [])
+        root = parse(serialize_to_string(ucm, annotate="all"))
+        notes = list(root.iter(f"{NS_B}textAnnotation"))
+        self.assertEqual(len(notes), 1)
+        self.assertEqual(notes[0].find(f"{NS_B}text").text, "258 · 3.2 d")
+        assoc = next(iter(root.iter(f"{NS_B}association")))
+        self.assertEqual(assoc.get("targetRef"), notes[0].get("id"))
+
+    def test_metrics_none_drops_them(self):
+        root = parse(serialize_to_string(self._annotated(), metrics="none"))
+        self.assertEqual(list(root.iter(f"{NS_U}metric")), [])
+
+
+class ApiTests(unittest.TestCase):
+
+    def test_convert_to_bpmn_xml_matches_write(self):
+        ucm = claims_ucm()
+        text = pm4py_ucm.convert_to_bpmn_xml(ucm)
+        self.assertTrue(text.startswith("<?xml"))
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "x.bpmn")
+            pm4py_ucm.write_bpmn(ucm, path)
+            with open(path, encoding="utf-8") as f:
+                self.assertEqual(f.read(), text)
+
+    def test_validation_refuses_a_malformed_model(self):
+        u = UCM(name="bad")
+        m = u.add_map(UCM.UCMmap(name="M"))
+        m.add_node(UCM.StartPoint(name="dangling"))
+        with self.assertRaises(ValueError):
+            pm4py_ucm.convert_to_bpmn_xml(u)
+        pm4py_ucm.convert_to_bpmn_xml(u, validate=False)
+
+
+if __name__ == "__main__":
+    unittest.main()

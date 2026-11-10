@@ -30,6 +30,7 @@ log = pm4py.read_xes("running-example.xes")
 ucm = pm4py_ucm.discover_ucm_inductive(log)
 pm4py_ucm.view_ucm(ucm)
 pm4py_ucm.write_ucm(ucm, "running-example.jucm")  # opens in jUCMNav
+pm4py_ucm.write_bpmn(ucm, "running-example.bpmn")  # opens in bpmn.io, Camunda
 ```
 
 **Ways to get started:**
@@ -405,6 +406,32 @@ graphviz one. Force the built-in layouter explicitly with:
 pm4py_ucm.write_ucm(ucm, "log.jucm",
                     parameters={"layout_engine": "builtin"})
 ```
+
+### Export to standard BPMN 2.0
+
+`write_bpmn` writes the same model as a BPMN 2.0 XML file with diagram
+interchange, so it opens in bpmn.io, Camunda Modeler, Signavio or
+`pm4py.read_bpmn`, laid out like the `style="bpmn"` preview:
+
+```python
+pm4py_ucm.write_bpmn(ucm, "log.bpmn")
+xml = pm4py_ucm.convert_to_bpmn_xml(ucm)      # the same, as a string
+```
+
+The whole UCM is **one pool whose lanes are the components** (nested
+components nest as child lanes); responsibilities become tasks, OR/AND forks
+and joins exclusive/parallel gateways, routing bends waypoints. A **static
+stub is a call activity** to the plug-in's own process (every map is a
+process with its own diagram), and a **dynamic stub a collapsed sub-process**
+that chooses *inclusively* among its plug-ins, guarded by the binding
+preconditions — Z.151 semantics. Node centres transfer 1:1 from the UCM
+coordinates. Performance metadata travels as `<ucm:metric>` extension
+elements on tasks and flows, and the selected edge overlay text becomes the
+flow's label (`annotate="edges"`; `"all"` adds text annotations under tasks;
+`"none"` keeps the file plain). Options: `lanes="none"`,
+`lane_names="with_kind"`, `metrics="none"`, `validate=False`. The mapping and
+its limits (pm4py's reader cannot read call activities) are in
+[`docs/bpmn_export.md`](docs/bpmn_export.md).
 
 ### Mine performers too — surface them as URN components
 
@@ -1037,6 +1064,7 @@ pm4py_ucm/
 │   ├── conversion/from_process_tree.py    # PM4Py process tree → UCM
 │   ├── conversion/decomposition.py        # hierarchical decomposition rules + presets
 │   ├── exporter/variants/jucm.py          # UCM → jUCMNav .jucm (XMI 2.0)
+│   ├── exporter/variants/bpmn.py          # UCM → BPMN 2.0 XML + BPMNDI
 │   ├── importer/variants/jucm.py          # jUCMNav .jucm → UCM
 │   ├── layout/layouter.py                 # built-in layered auto-layout
 │   ├── layout/graphviz_layouter.py        # graphviz positions, matching the PNG
@@ -1159,6 +1187,7 @@ reach you in the first place:
 | `discover_ucm_family` | each cell as it is mined, naming the cell |
 | `assemble_ucm_family` | the finished container, both modes |
 | `write_ucm` | before writing; nothing is written if it fails |
+| `write_bpmn` | likewise |
 
 Each takes `validate=True` by default and raises `ValueError` otherwise.
 

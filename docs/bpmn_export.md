@@ -1,12 +1,16 @@
 # BPMN 2.0 export
 
-> **Status: design, not implemented.** Written 2026-11-10 after a mapping
-> discussion. Nothing in the library or the web app emits BPMN yet; the only
-> BPMN-related code is the PNG/SVG renderer's `style="bpmn"` look
-> (`pm4py_ucm/visualization/ucm/variants/classic.py`). The three structural
-> decisions (call activities for static stubs, inclusive gateways for dynamic
-> stubs, no task typing) were **settled by Daniel Amyot on 2026-11-10** and are
-> recorded in §10 together with the decisions still open.
+> **Status: Stages 1 and 2 implemented** in
+> `pm4py_ucm/objects/ucm/exporter/variants/bpmn.py`, exposed as
+> `pm4py_ucm.write_bpmn` / `convert_to_bpmn_xml`, tested by
+> `tests/test_bpmn_export.py` (XSD conformance against the vendored OMG
+> schema, pm4py round trip, lane tiling, layout transfer, stubs, metrics).
+> Verified by eye in bpmn-js: flat, decomposed and dynamic-stub models import
+> without warnings. **Not yet built:** the visible heat-map layer and
+> `sizes="canonical"` (Stage 3), the web-app download buttons (Stage 4), and
+> the long tail of §12 step 5. The three structural decisions were settled by
+> Daniel Amyot on 2026-11-10; §10 lists them and what implementation decided
+> since.
 
 ## 1. The feature
 
@@ -323,10 +327,17 @@ Still open:
 
 | # | decision | proposed default | why it matters |
 |---|---|---|---|
-| 4 | tag `∨` forks in the converter so BPMN can emit inclusive gateways | yes, as metadata | Tiny change to `from_process_tree`; otherwise every OR becomes XOR. |
-| 5 | always re-layout with the swim-lane layouter vs reuse coordinates + lane-fitting pass | reuse + fit | Keeps a jUCMNav-edited layout; fitting only moves Y per component. |
-| 6 | extension namespace URI | `http://pm4py-ucm.org/schema/bpmn/1.0` | Needs a stable URI; it is only an identifier. |
-| 7 | `(unassigned)` lane vs nodes outside lanes | lane | Rendering consistency. |
+| 4 | tag `∨` forks in the converter so BPMN can emit inclusive gateways | yes, as metadata | Tiny change to `from_process_tree`; otherwise every OR becomes XOR. The exporter already honours `_op = OR` metadata. |
+
+Decided during implementation (Stage 1):
+
+| # | decision | choice | why |
+|---|---|---|---|
+| 5 | re-layout vs reuse coordinates | **reuse**; a map whose sibling components overlap vertically is re-laid out with the swim-lane layouter and a `UserWarning` says so | A per-component Y-shift pass would have to drag the bound nodes and the unbound ones between them along; re-layout is honest and rare (hand-drawn or graphviz layouts only). |
+| 6 | extension namespace URI | `urn:pm4py-ucm:bpmn:1.0`, prefix `ucm` | A URN claims no web domain. |
+| 7 | nodes bound to no component | **nearest lane** by geometry (the lane whose band holds the node's Y, else the closest band) | A separate "(unassigned)" band would have to move the nodes and showed up as a sliver between two real lanes. Gateways and events sitting in a participant's lane is ordinary BPMN. |
+| 8 | generated gateway names | **dropped** (`OrFork`, `LoopJoin`, … as the converters name them) | They say nothing a gateway glyph does not; user-given names stay. |
+| 9 | condition labels on unguarded branches | **dropped**, like the `.jucm` default | The converter labels choice arcs `branch0`/`branch1` with expression `true`; only a real guard yields a `conditionExpression` and a visible label, and a lone unguarded branch among guarded ones becomes the gateway's `default`. |
 
 ## 11. Risks
 
@@ -340,17 +351,28 @@ Still open:
   `participant` whose `processRef` has lanes. Golden files are checked in
   bpmn.io and `pm4py.read_bpmn` first; others as found.
 - **pm4py's reader** ignores lanes, conditions and extensions, so the
-  round-trip test can only cover control flow. That is enough for what it
-  guards.
+  round-trip test can only cover control flow. It also does not know
+  `callActivity` (2.7.x crashes on a flow into one), so `pm4py.read_bpmn`
+  only reads **stub-free** exports; models with stubs are checked
+  structurally and in bpmn-js instead. `stubs="inline"` (Stage 5) would be
+  the pm4py-friendly alternative.
+- **Loop back-edges** are drawn with the UCM's straight segments through the
+  bend points, and a BPMN task box is wider than the UCM cross it replaces,
+  so a back-edge leaving a loop body's last task may cross that task's own
+  box. Faithful to the layout, but a candidate for an orthogonal-routing
+  option in Stage 3.
 - **Scope creep** into a BPMN importer. Not this feature.
 
 ## 12. Plan
 
-1. **Stage 1, core writer**: §3.1, §3.2 for generated node kinds, §4, §5
-   (`sizes="layout"`), §7 machine layer, XSD + round-trip + lane tests, golden
-   for the running example. `write_bpmn` in the API.
-2. **Stage 2, stubs**: §3.3 with `stubs="call"`, multi-diagram files, golden
-   for a decomposed model. Dynamic stubs.
+1. **Stage 1, core writer** — **done**: §3.1, §3.2 for every node kind, §4,
+   §5 (`sizes="layout"`), §7 machine layer and the `annotate` edge/all
+   layers, XSD + round-trip + lane + layout tests. `write_bpmn` and
+   `convert_to_bpmn_xml` in the API. (No byte-golden yet: the format may
+   still move in Stage 3; the tests pin structure and geometry instead.)
+2. **Stage 2, stubs** — **done**: §3.3 with `stubs="call"`, multi-diagram
+   files, dynamic stubs as collapsed sub-processes with inclusive gateways
+   and their own diagram.
 3. **Stage 3, visible annotations and sizes**: §7 visible layer, `overlay`,
    `sizes="canonical"`.
 4. **Stage 4, app**: download buttons in Model and Family views, browser-pane

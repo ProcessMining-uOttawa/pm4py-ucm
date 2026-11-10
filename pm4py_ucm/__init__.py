@@ -19,6 +19,8 @@ for the details. The most common entry points are re-exported here::
 from .api import (
     read_ucm,
     write_ucm,
+    write_bpmn,
+    convert_to_bpmn_xml,
     discover_ucm_inductive,
     discover_resources,
     discover_components,
@@ -79,6 +81,8 @@ __all__ = [
     "UCM",
     "read_ucm",
     "write_ucm",
+    "write_bpmn",
+    "convert_to_bpmn_xml",
     "discover_ucm_inductive",
     "discover_resources",
     "discover_components",

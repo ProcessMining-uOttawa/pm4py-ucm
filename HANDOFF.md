@@ -11,6 +11,18 @@ tooling described below.
 
 ## State on arrival
 
+**In flight (2026-11-10): the BPMN 2.0 export.** Design in
+[`docs/bpmn_export.md`](docs/bpmn_export.md) (PR #133, branch
+`docs/bpmn-export-design`); Stages 1–2 implemented on
+`feat/bpmn-export-stage1`, stacked on that branch:
+`pm4py_ucm/objects/ucm/exporter/variants/bpmn.py`, `write_bpmn` /
+`convert_to_bpmn_xml` in the API, `tests/test_bpmn_export.py` (34 tests,
+XSD under `tests/data/bpmn-xsd`, `lxml` dev dependency), README section and
+changelog entry. Left for later stages: visible heat-map colours and
+`sizes="canonical"` (Stage 3), the V6 download buttons (Stage 4), the
+`stubs="inline"` / `data` options and `write_bpmn_family` (Stage 5). Settled
+decisions and the ones made during implementation are in the doc's §10.
+
 - `main` carries 0.8.4, tagged `v0.8.4`, published to PyPI.
 - All three version sites read **0.8.4** and are kept in lock-step by a test:
   `pyproject.toml`, `pm4py_ucm/__init__.py`, `web/sessions/codegen.py`

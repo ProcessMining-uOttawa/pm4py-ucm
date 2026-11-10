@@ -23,6 +23,7 @@ from typing import Any, Dict, Optional, Union
 from .objects.ucm.obj import UCM
 from .objects.ucm.validate import check_generated as _check_generated
 from .objects.ucm.exporter.variants import jucm as _jucm_exporter
+from .objects.ucm.exporter.variants import bpmn as _bpmn_exporter
 from .objects.ucm.importer.variants import jucm as _jucm_importer
 from .objects.ucm.conversion import from_process_tree as _tree_converter
 from .objects.ucm.conversion.decomposition import (  # noqa: F401
@@ -59,6 +60,35 @@ def write_ucm(
     """Write a Use Case Map as a jUCMNav-compatible ``.jucm`` (XMI) file."""
     _jucm_exporter.apply(ucm, file_path, parameters=parameters)
     return file_path
+
+
+def write_bpmn(
+    ucm: UCM,
+    file_path: str,
+    **options: Any,
+) -> str:
+    """Write a Use Case Map as a standard **BPMN 2.0** file with diagram
+    interchange, openable in bpmn.io, Camunda Modeler or ``pm4py.read_bpmn``.
+
+    The mapping is documented in ``docs/bpmn_export.md``: one pool whose
+    lanes are the components, responsibilities as tasks, OR/AND forks and
+    joins as exclusive/parallel gateways, static stubs as call activities
+    to the plug-in's process, dynamic stubs as a sub-process choosing
+    inclusively among its plug-ins, node centres carried over 1:1 from the
+    UCM layout, and performance metadata as extension elements.
+
+    ``options`` are the keyword arguments of
+    :func:`pm4py_ucm.objects.ucm.exporter.variants.bpmn.serialize_to_string`
+    (``lanes``, ``lane_names``, ``metrics``, ``annotate``, ``layout``,
+    ``validate``, ``encoding``)."""
+    _bpmn_exporter.apply(ucm, file_path, parameters=options)
+    return file_path
+
+
+def convert_to_bpmn_xml(ucm: UCM, **options: Any) -> str:
+    """Return the BPMN 2.0 XML of ``ucm`` as a string (see
+    :func:`write_bpmn`) — what a download button hands out."""
+    return _bpmn_exporter.serialize_to_string(ucm, **options)
 
 
 # ---------------------------------------------------------------------------
