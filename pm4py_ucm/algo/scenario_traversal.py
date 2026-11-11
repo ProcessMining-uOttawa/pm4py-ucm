@@ -131,14 +131,23 @@ def _compile(expr: str, var_names: Iterable[str]):
                 out.append(f"V[{tok!r}]")
             else:
                 out.append(repr(tok))
+    # Tokens are joined with spaces so two adjacent operators can never fuse
+    # into one Python does know but jUCMNav does not: ``* *`` would otherwise
+    # become ``**`` (``9 ** 9 ** 9`` is a memory bomb) and ``< <`` a shift.
+    # Python then rejects them as syntax, which lands in ExpressionError.
     try:
-        code = compile("".join(out), "<ucm-expr>", "eval")
+        code = compile(" ".join(out), "<ucm-expr>", "eval")
     except SyntaxError as exc:
         raise ExpressionError(f"{expr!r}: {exc}") from exc
 
     def _run(values, _code=code):
         try:
-            return eval(_code, {"__builtins__": {}}, {"V": values})
+            # The code object was built above from a closed grammar: numbers,
+            # a fixed operator set, and identifiers that became either a
+            # ``V[...]`` lookup or a string literal. No attribute access, no
+            # subscript on anything but V, no call target but a literal, no
+            # builtins — so this eval cannot reach beyond the value map.
+            return eval(_code, {"__builtins__": {}}, {"V": values})  # nosec B307
         except KeyError as exc:
             raise ExpressionError(f"uninitialised variable {exc}") from exc
         except TypeError as exc:

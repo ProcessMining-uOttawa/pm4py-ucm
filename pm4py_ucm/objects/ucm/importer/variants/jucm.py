@@ -29,7 +29,8 @@ enough to be ignored gracefully; the round-trip is UCM-only.
 from __future__ import annotations
 
 import re
-import xml.etree.ElementTree as ET  # nosec B405 — DTDs rejected in _forbid_dtd
+# B405: DTDs are rejected by _forbid_dtd() before anything is parsed.
+import xml.etree.ElementTree as ET  # nosec B405
 from typing import Dict, IO, List, Optional, Tuple, Union
 
 from ...obj import UCM

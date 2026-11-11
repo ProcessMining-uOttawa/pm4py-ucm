@@ -14,7 +14,10 @@ either passed silently for a dozen releases or cost real time when it failed:
   it is not;
 * the tag's commit containing ``.github/workflows/publish.yml``, without which
   the release-triggered run is created *silently not at all*;
-* a clean tree on ``main``, so the tag lands on what was reviewed.
+* a clean tree on ``main``, so the tag lands on what was reviewed;
+* the static security scan (``bandit -r pm4py_ucm web -ll``) reporting no
+  medium- or high-severity finding, so every release carries the scan the
+  README documents instead of relying on someone remembering it.
 
 It does not run the test suite — that is the slow part and CI does it — and it
 does not touch anything. Exit code 0 means ready.
@@ -53,6 +56,42 @@ def version_sites() -> dict:
 
 def version_key(tag: str):
     return tuple(int(p) for p in re.findall(r"\d+", tag))
+
+
+def bandit_scan() -> tuple:
+    """Run the documented scan and summarise it as a (status, detail) row.
+
+    Medium/high findings fail the gate; a missing ``bandit`` is a warning
+    (``pip install -e .[dev]``) rather than a failure, so the tool still
+    reports on a machine without the dev extras. Low findings are the
+    accepted baseline the README describes and are only counted."""
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "bandit", "-r", "pm4py_ucm", "web",
+             "-q", "-f", "json"],
+            capture_output=True, text=True, cwd=ROOT)
+    except OSError as exc:  # pragma: no cover - no python?
+        return WARN, f"could not run bandit: {exc}"
+    if "No module named bandit" in proc.stderr:
+        return WARN, "bandit not installed — pip install -e .[dev]"
+    try:
+        import json
+        results = json.loads(proc.stdout).get("results", [])
+    except ValueError:
+        return BAD, "bandit produced no report: " + proc.stderr.strip()[-200:]
+    by_sev = {}
+    for r in results:
+        by_sev[r["issue_severity"]] = by_sev.get(r["issue_severity"], 0) + 1
+    serious = [r for r in results
+               if r["issue_severity"] in ("MEDIUM", "HIGH")]
+    low = by_sev.get("LOW", 0)
+    if serious:
+        where = "; ".join(
+            f"{r['test_id']} {Path(r['filename']).as_posix()}:{r['line_number']}"
+            for r in serious[:5])
+        return BAD, (f"{len(serious)} medium/high finding(s): {where}"
+                     + (" …" if len(serious) > 5 else ""))
+    return OK, f"no medium/high finding ({low} low, the accepted baseline)"
 
 
 def main() -> int:
@@ -122,6 +161,12 @@ def main() -> int:
             rows.append((BAD, "tag free", f"{want} already exists"))
         else:
             rows.append((OK, "tag free", f"{want} is available"))
+
+    # --- the static security scan ---------------------------------------
+    status, detail = bandit_scan()
+    if status == BAD:
+        ready = False
+    rows.append((status, "bandit", detail))
 
     # --- the publish workflow must be in the tagged commit --------------
     wf = sh("git", "show", "HEAD:.github/workflows/publish.yml")
