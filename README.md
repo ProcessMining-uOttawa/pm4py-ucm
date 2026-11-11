@@ -1409,7 +1409,12 @@ CI minutes required:
 bandit -r pm4py_ucm web -ll     # medium+ severity; ships in .[dev]
 ```
 
-The medium/high baseline is clean. The `.jucm` importer refuses DTDs
+The medium/high baseline is clean, and `tools/release_check.py` runs this
+scan as part of the release gate, so no release goes out with a medium- or
+high-severity finding. The scenario-traversal guard evaluator compiles jUCMNav
+expressions through a closed grammar before `eval` (no attribute access,
+subscripts, string literals or fused operators such as `**`), and a test pins
+the escapes it refuses. The `.jucm` importer refuses DTDs
 before parsing (`_forbid_dtd`) so untrusted `.jucm` input cannot trigger
 XML entity-expansion ("billion laughs") — a zero-dependency alternative
 to `defusedxml`. Event-log (XES) parsing is delegated to PM4Py.

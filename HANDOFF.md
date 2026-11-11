@@ -179,8 +179,10 @@ anything a check reports.
 
 Start with `python tools/release_check.py <version>`: version sites, changelog
 state, branch and tree, whether the tag is free **by version order** (a lexical
-sort puts `v0.7.10` before `v0.7.5`), and whether `publish.yml` is present at
-HEAD — without it the release-triggered run is created *silently not at all*.
+sort puts `v0.7.10` before `v0.7.5`), whether `publish.yml` is present at
+HEAD — without it the release-triggered run is created *silently not at all* —
+and the Bandit scan, which fails the gate on any medium/high finding (the scan
+had not run between 2026-07-14 and 0.8.5 because nothing made it run).
 
 The cross-cutting claims are guarded by `tests/test_release_consistency.py`
 rather than by a checklist: a superseded app described as deployed, a retired

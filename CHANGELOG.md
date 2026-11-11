@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **The Bandit scan is part of the release gate.** `tools/release_check.py`
+  runs `bandit -r pm4py_ucm web` and fails on any medium- or high-severity
+  finding; the scan had not run since 2026-07-14. The one finding it would
+  have reported, the `eval` in the scenario-traversal guard evaluator, is
+  now documented in place: the expression is compiled through a closed
+  grammar first. That grammar also gained one fix — tokens are joined with
+  spaces, so `* *` can no longer fuse into Python's `**` (a guard like
+  `9 ** 9 ** 9` in an untrusted `.jucm` was a memory bomb), nor `< <` into a
+  shift; such guards now raise `ExpressionError`.
+
 ### Fixed
 
 - **The PyPI project page showed no screenshots.** `README.md` doubles as the

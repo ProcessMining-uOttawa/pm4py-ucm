@@ -265,6 +265,11 @@ def test_the_release_tooling_is_present_and_runnable():
     proc = subprocess.run([sys.executable, str(checker)],
                           capture_output=True, text=True, cwd=str(_ROOT))
     assert "version sites" in proc.stdout, proc.stdout + proc.stderr
+    # The static scan is part of the gate; a release must not go out with a
+    # medium/high Bandit finding, and this is where that is enforced.
+    bandit_row = [l for l in proc.stdout.splitlines() if "] bandit" in l]
+    assert bandit_row, "release_check.py no longer reports the bandit scan"
+    assert "[FAIL]" not in bandit_row[0], bandit_row[0]
 
     # Every command the skill tells a reader to run must exist.
     text = skill.read_text(encoding="utf-8")

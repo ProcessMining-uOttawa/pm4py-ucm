@@ -293,6 +293,36 @@ class TestExpressions:
         _scenario(u, inits=[(var, "v1")], starts=[sp], ends=[ep])
         assert st.check_traversal(u) == []
 
+class TestExpressionGrammar:
+    """The guard language is compiled to Python and run through ``eval``.
+    That is safe only because the tokenizer admits a closed grammar; these
+    pin the escapes it must refuse, since a ``.jucm`` can come from anywhere."""
+
+    @pytest.mark.parametrize("expr", [
+        "x.__class__",              # attribute access
+        "x[0]",                     # subscript
+        "'a' == x",                 # string literal
+        '__import__("os")',         # call with a string
+        "9 ** 9 ** 9",              # two '*' must not fuse into '**'
+        "1 << 999999999",           # two '<' must not fuse into '<<'
+        "x // 2",                   # nor two '/' into '//'
+    ])
+    def test_escapes_and_fused_operators_are_refused(self, expr):
+        with pytest.raises(st.ExpressionError):
+            st._compile(expr, ["x"])
+
+    def test_legitimate_operators_still_work(self):
+        f = st._compile("- -x + 2 * 3 >= 8 && !(x < 0) || x == v1", ["x"])
+        assert f({"x": 2}) is True
+        assert f({"x": 1}) is False
+
+    def test_bare_identifiers_cannot_reach_python_names(self):
+        # ``__class__`` is an identifier, hence a string literal, not a name.
+        f = st._compile("x == __class__", ["x"])
+        assert f({"x": "__class__"}) is True
+        assert f({"x": 1}) is False
+
+
 class TestTypeDefaults:
     """A declared variable holds a default before any initialization.
 

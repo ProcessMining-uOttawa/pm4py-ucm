@@ -28,8 +28,11 @@ python tools/release_check.py <version>
 
 It reports the version sites, the changelog state, the branch and tree, whether
 the tag is free (**by version order** — a lexical sort puts `v0.7.10` before
-`v0.7.5` and will tell you a taken tag is free), and whether
-`.github/workflows/publish.yml` is present at HEAD. It changes nothing.
+`v0.7.5` and will tell you a taken tag is free), whether
+`.github/workflows/publish.yml` is present at HEAD, and the **Bandit scan**
+(`bandit -r pm4py_ucm web -ll`): a medium- or high-severity finding fails the
+gate; fix it or document it with a justified `# nosec`, never by lowering the
+threshold. It changes nothing.
 
 Then the suite, which carries the drift guards:
 
