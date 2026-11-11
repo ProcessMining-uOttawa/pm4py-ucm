@@ -20,8 +20,15 @@ permissions:
   id-token: write
 
 # One in-flight Pages deployment at a time; don't cancel a running one.
+#
+# The group was called ``pages`` until 2026-11-11, when a re-run of a
+# failed docs run (an apt mirror outage on the hosted runners) wedged in
+# that group: it stayed "queued" with no job, and neither the UI cancel,
+# the force-cancel API nor a fresh workflow_dispatch (which died with
+# startup_failure behind it) could clear it. A new group name sidesteps
+# the stuck run; the old one can age out on GitHub's side.
 concurrency:
-  group: pages
+  group: pages-deploy
   cancel-in-progress: false
 
 jobs:
