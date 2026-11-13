@@ -152,6 +152,8 @@ _SAMPLE_DESCRIPTIONS = {
     "ClaimsPaymentLog": "synthetic insurance claims-payment process (XES)",
     "IssueTrackerSyntheticLog": "synthetic software issue-tracking workflow (XES)",
     "devlog": "real AI-assisted developer-activity log over two periods, rich case attributes (CSV)",
+    "Procure-to-Pay": "purchasing process with start and complete timestamps, roles and resources (CSV)",
+    "RefundProcess": "customer refund process across three channels (CSV)",
 }
 _LOGO_PATH = Path(__file__).resolve().parent / "assets" / "logo.png"
 _DISPLAY_WIDTH_PX = 1100
