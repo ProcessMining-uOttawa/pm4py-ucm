@@ -1,6 +1,13 @@
-# Handoff — after 0.8.5
+# Handoff — after 0.9.0
 
-**0.8.5 is released.** It adds the standard **BPMN 2.0 export**: design in
+**0.9.0 is released.** It makes the Dashboards view start itself:
+**dashboards suggested from the log**, an **Activity axis**, a per-activity
+**rework rate**, the concurrency-aware **behavioural variants** as a segment
+axis, and **value axes** on the charts (PRs #139–#141). It is a minor
+release because it **drops Python 3.9** and claims 3.13 and 3.14. Design and
+rules in [`docs/dashboard_suggestions.md`](docs/dashboard_suggestions.md).
+
+Before it, 0.8.5 added the standard **BPMN 2.0 export**: design in
 [`docs/bpmn_export.md`](docs/bpmn_export.md) (PR #133), all five stages of
 its plan in one PR (#134), shipped at patch level at the maintainer's
 request because nothing that existed changes behaviour. Before it, 0.8.4 was
@@ -13,18 +20,103 @@ tooling described below.
 
 ## State on arrival
 
-- `main` carries 0.8.5, tagged `v0.8.5`, published to PyPI.
-- All three version sites read **0.8.5** and are kept in lock-step by a test:
+- `main` carries 0.9.0, tagged `v0.9.0`, published to PyPI.
+- All three version sites read **0.9.0** and are kept in lock-step by a test:
   `pyproject.toml`, `pm4py_ucm/__init__.py`, `web/sessions/codegen.py`
   (`GENERATOR_VERSION`).
 - `CHANGELOG.md` has a fresh empty `[Unreleased]`.
-- Suite: **1277 passed, 0 failed, 0 skipped** (~6 min locally); CI green on
-  Python 3.9–3.12.
+- Suite: **1476 passed, 0 failed, 0 skipped** (~3 min locally); CI
+  green on Python 3.10–3.14. `requires-python` is `>=3.10`.
 - **One deployment.** https://pm4py-ucm.streamlit.app/ serves V6 through the
   `streamlit_app.py` shim. The second deployment
   (`pm4py-ucm-scenarios`, which served the frozen V2) has been **deleted** —
   the SAM 2026 paper that required it was accepted and its final version
   points at the main app. That URL now 404s; do not link it.
+
+## What 0.9.0 added
+
+All in `pm4py_ucm/algo/dashboards/` and the app's Dashboards view; mining,
+scenarios, families and the exporters are untouched.
+
+- **`suggest.py` — `suggest_dashboards(table)`.** Profiles the fact table
+  and returns whole dashboards (Overview, Bottlenecks, Rework and flow,
+  Segments, Behavioural variants), each widget with a `why`. Deterministic,
+  no LLM. Each dashboard opens with KPIs that *name* what matters and
+  follows with a bar or heatmap of *everything*. A suggestion is a list of
+  ordinary widget specs, computed in Python and shipped in the page config
+  (`dashboard_html(suggestions=…)`): the island only shows it, so there is
+  no JS twin and nothing to keep in parity.
+- **App.** A log's first dashboard is seeded from the Overview
+  (`_dashboard_suggestions`, cached on `_fact_table`'s own arguments); the
+  green **✦ Suggest** button opens the gallery; *Add* creates a new named
+  dashboard or fills an empty one, and never replaces a built one.
+- **Activity axis** (`ACTIVITY_AXIS = "activity"`, both engines). Varies a
+  per-activity metric's own `activity` parameter instead of partitioning
+  cases; returns the same shape as any segmented widget. Not in
+  `segment_axes` (the filter picker enumerates that); the composer offers
+  it, disabled for metrics that are not per activity.
+- **`actRework`** — share of the cases *performing* an activity that
+  perform it more than once. `docs/metrics.md` §2 sets it against
+  `actRepeats` and the overlay's `repeat_frequency`.
+- **Behavioural variants.** `build_fact_table(behaviour=clustering)` adds
+  the case attribute `behavioural variant` (`BEHAVIOUR_ATTRIBUTE`), so it
+  segments and filters with **no engine code of its own**. Ids are the
+  clustering's (`v3` here is `v3` in the scenario reports). The app supplies
+  it from the shared replay table (`_behaviour_clustering`), only when the
+  replay was not skipped; the fact-table cache is keyed on the noise
+  threshold for that reason. An exported script rebuilds it when a
+  dashboard names the axis.
+- **Value axes** (`axisTicks` in `dash-ui.js`, rendering only) on bars,
+  lines and histograms; bars are now proportional from zero.
+- **Tests**: `tests/test_dashboard_suggestions.py` (every rule, plus "every
+  suggestion computes, binds and satisfies the viz guards" in both
+  engines); Activity-axis, `actRework`, behavioural-variant and value-axis
+  classes in `tests/test_dashboards.py`, with parity specs.
+- **Python**: 3.9 dropped (`ubuntu-latest` moved to 26.04, which has no 3.9
+  build); 3.13 and 3.14 claimed.
+
+Decisions the maintainer made or accepted, so they are not re-litigated:
+`actRework`'s denominator is the cases performing the activity; suggested
+targets are prefilled at today's value and switched **off**; suggestions
+hold up to 10 widgets; tier 2 goes through an **external** LLM and an
+exported brief, not an in-tool provider.
+
+Traps this release taught:
+
+- **The composer's formula validator rewrites `spec.params` for every
+  metric.** Reading an edited widget's params after it restored nothing, so
+  every parameterised widget reopened on the log's default activities and
+  saved them back. Found only by opening a suggested widget in the editor.
+  The same pass restored only `hist`/`box` as a chart shape. Both fixed;
+  both would have been invisible to the suite, which has no DOM harness.
+- **Directly-follows cannot tell concurrency from choice.** `a ∥ b` shows
+  `a → b` and `b → a`, and whatever precedes them appears to choose. The
+  suggestion rule separates the two by *cases*: a loop's two directions
+  share their cases, concurrency's barely overlap (`_interleaved`). It is
+  still a heuristic; the mined model knows its forks exactly.
+- **An axis chosen from the log's shape can be empty for one widget.** The
+  strongest attribute gave "sojourn of Check by channel" one bar, because
+  only one channel performs Check. Every suggested chart is computed once
+  and kept only if it draws (`_draws`).
+- **A count displays as a whole number**, so an average of 0.3 repeats
+  reads "0". That is why `actRework` exists and why case counts use the ƒ
+  formula `1` summed.
+- **A case-constant `org:resource` is detected as a case attribute too**,
+  duplicating the `resource` axis. The proposer skips it.
+- **Bars were scaled to `max(1, largest value)`**, so any bar chart of
+  sub-day durations was flat. Nobody had noticed without an axis to read.
+- **The app caches the dashboard HTML** (`st.cache_data`), and the bundle
+  is read inside that cached function: after editing `dash-ui.js` or the
+  CSS, restart the server, or the page keeps the old assets.
+- **A hidden app window stops the browser pane from drawing**: screenshots
+  and coordinate clicks time out. DOM reads and clicks through
+  `javascript_tool` still work, including inside the island's iframe.
+- **Inline Python in a Bash heredoc loses a level of backslashes** — a
+  `\\n` written into a test file arrived as a real newline and broke the
+  file. Write patch scripts with the Write tool and run them.
+- **`ubuntu-latest` is not a fixed image.** It moved to 26.04 between two
+  PRs and took Python 3.9 with it. To trial a new Python, use the
+  non-blocking `experimental` job described in a comment in `tests.yml`.
 
 ## What 0.8.5 added
 
@@ -268,11 +360,30 @@ events; ~10 min to mine after reduction).
 
 ## Open items, by value
 
+0. **Dashboards, next steps** (all designed in
+   `docs/dashboard_suggestions.md`, none built):
+   - **Tier 2 — definitions from an external LLM.** Export a brief
+     (`describe_log`), and make **⬆ Load** validate and repair what comes
+     back. The validating loader is useful on its own and comes first.
+   - **Tier 3 — dashboards from a GRL goal model.** Blocked on the GRL
+     metamodel (`goal_insights.md` P0) and on binding an indicator to a
+     metric.
+   - **Anchor decision points to the mined model's OR-forks** instead of
+     the directly-follows heuristic.
+   - **Activity-axis cost on large logs is unmeasured.** The metric runs
+     once per activity in the browser; IRCC (274 activities, 543k events)
+     is the case to time.
+   - **A duration of exactly one hour can read "1.0 h" in Python and
+     "60.0 m" in the browser**: the engines sum floats in different orders
+     and the unit boundary sits on the last bit. Cosmetic, pre-existing.
+
 1. **The five README screenshots show a UI that no longer exists.**
    `web/PM4Py-UCM-*.png` were captured at **v0.5.2**: the tabbed layout, a
    "Decomposition (Model tab only)" heading, no left rail, no cost screen, no
    Simulation. They are three releases and a redesign out of date, and there is
-   no shot of the Scenarios view's Simulation section at all.
+   no shot of the Scenarios view's Simulation section at all. 0.9.0 made
+   the Dashboards shot staler still: value axes on every chart, the green
+   Suggest button, heatmaps.
 
    The maintainer captures these by hand, and that is the arrangement — but
    note **an agent cannot do it**: the browser pane caps a screenshot at
