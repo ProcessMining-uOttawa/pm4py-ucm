@@ -24,15 +24,19 @@ tooling described below.
   and **verified installable** (`pip install "pm4py-ucm==0.9.0" --dry-run
   --no-cache-dir`). The maintainer confirmed the README images render on
   PyPI and that the deployed app runs 0.9.0.
-- Since `v0.9.0` only documentation has changed: the `docs/` index (PR
-  #143) and a **documentation audit** of every prose file against the code
-  (see below). No behaviour has changed.
+- Since `v0.9.0`: the `docs/` index (PR #143), a **documentation audit**
+  of every prose file against the code (PR #145, see below), and the
+  **fixes for the code defects that audit reported** (branch
+  `fix/audit-code-defects`, see below). The fixes change two numbers a
+  user sees on dashboards, so the next release carries upgrade notes.
 - All three version sites read **0.9.0** and are kept in lock-step by a test:
   `pyproject.toml`, `pm4py_ucm/__init__.py`, `web/sessions/codegen.py`
   (`GENERATOR_VERSION`).
-- `CHANGELOG.md`'s `[Unreleased]` holds the `docs/` index and the audit.
-  Documentation only: it does not call for a release on its own, though the
-  root README is the PyPI page and only refreshes there with a release.
+- `CHANGELOG.md`'s `[Unreleased]` holds the `docs/` index, the audit and
+  the fixes, with upgrade notes. The fixes are worth a patch release; the
+  three small additions (`max_enum_cardinality` /
+  `numeric_coercion_threshold` on `discover_ucm_family`, `coarsen_loops`
+  on `compute_family_stats`, `ModelFamily.case_id_col`) are additive.
 - **[`docs/README.md`](docs/README.md) indexes the documents** (PR #143):
   each by the question it answers, its kind (contract, design note,
   measurements, proposal), whether it is built, and the test that holds it
@@ -41,7 +45,7 @@ tooling described below.
   implemented" headers since before they shipped; a design note's status
   line is prose, so nothing guards it — update it in the PR that ships the
   feature.
-- Suite: **1476 passed, 0 failed, 0 skipped** (~3 min locally); CI
+- Suite: **1525 passed, 0 failed, 0 skipped** (~3 min locally); CI
   green on Python 3.10–3.14. `requires-python` is `>=3.10`.
 - **One deployment.** https://pm4py-ucm.streamlit.app/ serves V6 through the
   `streamlit_app.py` shim. The second deployment
@@ -73,6 +77,47 @@ docstrings the audit found stale, and a new
 - The sample log has **78,126 events**, not "~90 K".
 - `CONTRIBUTING.md` is now in the link guard
   (`tests/test_release_consistency.py`).
+
+## The audit's code defects, fixed (after 0.9.0)
+
+The audit listed defects it deliberately left alone. All but one are
+fixed, each with a test that failed first. What is worth knowing:
+
+- **`actService` and the case start.** The fact table's case start is the
+  first *completion*, on every log; `duration`, the time axes and the date
+  filter all read it. That was kept. What changed is the start-time
+  offset `sdt`, now a signed `int32`, so a start before the case start is
+  a valid value instead of "missing". Moving the case start to the
+  earliest start timestamp would have fixed service time too, but it
+  would also have changed `duration` on interval logs, which is the open
+  question below. The JS decoder reads the sentinel from the buffer's
+  type, so a payload built by 0.9.0 (unsigned) still decodes.
+- **`per_case` is one decision, taken once.** `_share_mode(target)` /
+  `shareMode(target)` (target on *and* mode `per_case`) is asked in
+  `compute_widget`, which sets the widget's `unit` to `%` for every
+  shape. Before, only `_kpi` switched, and it did so even with the target
+  off. A segmented widget's own `value` is now the overall share, which
+  is what its scorecard row compares with the share goal.
+- **`discover_scenarios` consumes `discovery_parameters` itself**, because
+  it pins the tree before calling `discover_ucm_inductive`; left in
+  `params` they reach that function beside a `process_tree` and are
+  reported as ignored.
+- **A custom case-id column is only partly supported in families.**
+  Mining, statistics and the combined assembly's frequency/time overlay
+  now follow `ModelFamily.case_id_col`. The default tree miner, the
+  replay-based traversal counts and the umbrella's path scenarios still
+  assume `case:concept:name`. Nobody has asked for more; rename the
+  column first.
+- **`TestJsParity` did not catch either dashboard defect**, because both
+  engines were wrong in the same way and its fixture is not an interval
+  log. `TestJsParityOnAnIntervalLog` now covers service and waiting time.
+  Parity proves agreement, not correctness: a metric also needs a
+  hand-computed expectation.
+- **A fresh worktree on Windows fails two tests that are not broken.**
+  With `core.autocrlf=true`, `tests/fixtures/regression_no_decomp.jucm`
+  is checked out with CRLF and `RegressionGuardTests` compares bytes.
+  Strip the carriage returns in the working copy (the index is LF, so
+  nothing is committed) or the suite reports 2 failures.
 
 ## What 0.9.0 added
 
@@ -405,40 +450,29 @@ events; ~10 min to mine after reduction).
 
 ## Open items, by value
 
-A. **Code defects the documentation audit found** — reported, not fixed;
-   the documents describe the intended behaviour and say nothing false
-   about these. Each needs a test first.
-   - **`actService` loses the first event of almost every case.**
-     `build_fact_table` discards a start timestamp earlier than the case
-     start, but the case start is the first *completion*, so any first
-     event with a duration is dropped. On the claims sample the audit
-     measured 5,597 of 5,600 first events missing. The suggested "avg
-     service" KPI inherits it.
-   - **A `per_case` target on a segmented widget is formatted with the
-     metric's unit**: a share of 44.2% prints as "44.2 d". Only the
-     unsegmented KPI switches to `%`.
-   - **`discover_scenarios` ignores `discovery_parameters`** (it mines with
-     a bare `pm4py.discover_process_tree_inductive(log)`), so a noise
-     threshold can only be set by passing a pre-mined `process_tree`. The
-     README documents that workaround.
-   - **`discover_ucm_family` does not forward `numeric_coercion_threshold`
-     or `max_enum_cardinality`**, although `partition_log`'s docstring tells
-     users to pass the former; `api.compute_family_stats` does not expose
-     `coarsen_loops`; `assembly._cell_sub_log` hard-codes
-     `"case:concept:name"`.
-   - **Case duration has two definitions on interval logs**: dashboards and
-     the partition advisor use first-to-last completion, the family
-     statistics earliest start to latest completion (14.92 d against
-     15.07 d on the claims sample). Both contracts now say so; confirm it
-     is intended.
-   - **`web/sessions/migrate.py` sets `_newer_schema` and nothing reads
-     it**; the key is written back into the saved file.
-   - **The app's Decomposition help text says the Scenarios view "always
-     runs flat"**, but scenarios are attached to the model built with the
-     sidebar's decomposition. Check in the app before rewording.
-   - **`.devcontainer/devcontainer.json` installs from a root
-     `requirements.txt` that does not exist** (it is `web/requirements.txt`),
-     so a Codespace gets Streamlit and nothing else.
+A. **What is left of the documentation audit's code findings.** The
+   defects themselves are fixed (see "The audit's code defects, fixed").
+   - **Case duration has two definitions on interval logs** — a question
+     for the maintainer, deliberately not touched: dashboards and the
+     partition advisor use first-to-last completion, the family statistics
+     earliest start to latest completion (14.92 d against 15.07 d on the
+     claims sample). Both contracts say so; confirm it is intended. If the
+     dashboards should follow the family statistics, the case start in
+     `build_fact_table` becomes the earliest start timestamp, and
+     `duration`, the time axes and the date filter move with it.
+   - **A project from a newer schema is re-saved with this app's
+     `schema_version`** (`ProjectDoc.to_dict` always writes the current
+     one), so the file then claims an older schema than its content.
+     Harmless while the schema is at version 1; decide before version 2.
+     Whether the *app's* save path preserves a newer file's unknown keys
+     at all (it rebuilds the document from the collected settings) was
+     not checked.
+   - **A histogram or box plot under a per-case target is probably drawn
+     with a `%` axis**: the KPI's unit is `%` in that mode and `dash-ui.js`
+     passes `w.unit` to `_histSvg` / `_boxSvg`, whose values are the raw
+     metric. Read from the code, not reproduced in the browser.
+   - **A custom case-id column in families** stops at the default tree
+     miner, the traversal counts and the path scenarios (see above).
    - Comments in `dash-ui.js` still name `components.html`; the app embeds
      through `st.iframe`. Cosmetic; left because the file is a shipped
      asset.

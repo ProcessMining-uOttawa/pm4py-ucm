@@ -124,10 +124,11 @@ A column is numeric when its **values** are, not when its dtype says so:
 XES exports routinely serialise numbers as strings, so an object column
 is coerced first and treated as numeric when at least 99% of its
 non-null values parse. Values that do not parse become missing, and land
-in the **Unknown** bucket. (The share is the `numeric_coercion_threshold`
-parameter of the lower-level
-[`partition_log`](../pm4py_ucm/algo/discovery/families/partition.py);
-`discover_ucm_family` does not expose it.)
+in the **Unknown** bucket. The share is `numeric_coercion_threshold`:
+pass `discover_ucm_family(..., numeric_coercion_threshold=1.01)` to keep
+a column of numeric strings (codes, say) as an enumeration instead.
+`max_enum_cardinality` (default 40) is the most distinct values a string
+attribute may have and still be offered as an enumeration.
 
 Two consequences worth knowing before you partition:
 
@@ -451,7 +452,10 @@ statistics designed for *comparison across cells* (definitions:
   cases**, distinct activities, rework (share of cases repeating an
   activity, mean repeats per case), start and end activities, the
   concurrency-aware behavioural variant count beside the plain
-  sequence-variant count, and replay fitness.
+  sequence-variant count, and replay fitness. Variants are counted with
+  loop iterations coarsened to `{0, 1, ≥2}`;
+  `compute_family_stats(family, coarsen_loops=False)` tells every
+  iteration count apart.
 - **Activity level** — execution frequency, relative frequency, case
   coverage, repeats, **sojourn time** (time since the case's previous
   event ≈ waiting + service — derivable from *any* timestamped log, so

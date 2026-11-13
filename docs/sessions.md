@@ -299,7 +299,9 @@ settings file recognise the right log.
   (`web/sessions/migrate.py`, `{from_version: fn}`) up to the current
   version; each is a tiny pure function. **The schema is still at version 1
   and the chain is empty** — every change so far has been additive. A file
-  from a *newer* schema still loads (its unknown keys are preserved).
+  from a *newer* schema still loads (its unknown keys are preserved);
+  `ProjectDoc.from_newer_app` is then true and the app says so in its load
+  notes, since settings it does not know were not applied.
 - **Additive changes need no migration.** A new id falls back to its default
   in an old file. The one renamed setting, `overlay_heatmap_global` →
   `overlay_heatmap_scope`, is read by `_apply_project_config` when the new id

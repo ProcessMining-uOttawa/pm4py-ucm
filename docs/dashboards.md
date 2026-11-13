@@ -102,11 +102,11 @@ without the decoder caring:
 | buffer | per | holds |
 |---|---|---|
 | `off` | case (+1) | CSR offsets: case *i* owns events `[off[i], off[i+1])` |
-| `start` | case | first event's time, epoch seconds |
+| `start` | case | the case start: its first event's *completion* time, epoch seconds |
 | `act` | event | index into `activities` |
 | `dt` | event | seconds since the case's `start` |
 | `res` | event | index into `resources` (absent when the log has no resource column) |
-| `sdt` | event | start timestamp, seconds since the case's `start` (interval logs only) |
+| `sdt` | event | start timestamp, seconds since the case's `start` (interval logs only). **Signed** (`int32`): an event may start before the case start, and the first event of a case does whenever it has a duration |
 | `attr<i>`, `behaviour` | case | one column per case attribute: a dictionary index, or the raw number for a numeric attribute |
 
 Integer columns reserve their dtype's maximum as the *missing* sentinel;
@@ -165,6 +165,14 @@ On an interval log, a *start* timestamp that does not parse, or that lies
 after its own event's completion, is marked missing rather than clamped
 to a zero-length service time that would drag every mean down. The event
 is kept; it simply has no service or waiting time.
+
+A start timestamp **earlier than the case start is valid** and is kept.
+The case start is the first *completion* (which is what `duration`, the
+time axes and the date filter read), so the first event of a case starts
+before it whenever it has a duration, and a later event does too when
+activities overlap. Up to 0.9.0 such starts were marked missing, which
+removed the first event of nearly every case from `actService`; the
+case start itself, and therefore `duration`, was and is unaffected.
 
 ---
 
@@ -252,7 +260,7 @@ reconcile — and the composer surfaces it on the affected metrics.
 | `actRepeats` | activity | count | occurrences beyond the first; 0 when it runs once *and* when it never runs. |
 | `actRework` | activity | percent | 1 when the case runs the activity more than once, **among cases that run it at all**. |
 | `actSojourn` | activity | time | time since the case's previous event (waiting + service). |
-| `actService` | activity | time | start to completion. **Interval logs only.** |
+| `actService` | activity | time | start to completion, for every event with a valid start timestamp — a case's first event included. **Interval logs only.** |
 | `actWaiting` | activity | time | previous event's completion to this activity's start. **Interval logs only.** Negative values are kept — they mean real concurrency, not an error. |
 | `edgeFreq` | edge | count | directly-follows traversals of `from → to` within the case. |
 | `edgeTime` | edge | time | elapsed time across the `from → to` step, completion to completion. |
@@ -601,6 +609,11 @@ Two modes:
   threshold to have a state at all, so it is scored (as a `>=` target)
   against `shareGoal` / `shareWarn`, two further fields of the target;
   without a `shareGoal` the share is reported but has no state.
+  **Every value the widget reports is then a share**, whatever the metric
+  measures: its `unit` is `%`, and so are its headline, each bar and each
+  cell — a widget segmented by country reads "the share of each
+  country's cases within 14 days". The mode takes effect only while the
+  target is on.
 
 **Scoring is per segment, and a widget rolls up to its worst segment.** A
 heatmap of 40 segments with one breach is a breach; reporting its average
@@ -675,7 +688,8 @@ computation, not two. Every result carries `id`, `title`, `viz`, `unit`,
 * no axis — `value`, `text`, `state`, `sub` (the caption), plus
   `distribution` in `per_case` mode and `hist` / `box` for those shapes;
 * one axis — `axis` and `series`: `[{label, value, text, state, nCases}]`,
-  with the unsegmented `value` / `text` alongside;
+  with the unsegmented `value` / `text` alongside (in `per_case` mode, the
+  share over all the widget's cases);
 * two axes — `rowsAxis`, `colsAxis`, `rows`, `cols` and `cells[r][c]` =
   `{value, text, state, nCases}`;
 * a series metric — `series`: `[{label, value}]` per month, and the

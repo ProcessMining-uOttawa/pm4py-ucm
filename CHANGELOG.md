@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+> **Upgrade notes.**
+> - **Service time on dashboards now includes each case's first event.**
+>   On an interval log, `actService` (and the suggested "avg service"
+>   KPI) used to leave out any event that started before its case's first
+>   completion — in practice the first event of almost every case. An
+>   activity that opens cases therefore reads higher than before: on the
+>   bundled claims sample, service time of *Register Claim* goes from
+>   0.0 d (3 cases) to 0.15 d (all 5,600). `actWaiting`, `actSojourn` and
+>   case `duration` are unchanged.
+> - **A widget with a per-case target and a segment axis now reports
+>   shares in `%`**, like the unsegmented KPI always did: each bar and
+>   cell was already the share of cases meeting the target, but was
+>   printed with the metric's unit ("44.2 d" for 44.2%). The widget's own
+>   value (and its scorecard row) is now the overall share rather than
+>   the metric's aggregate.
+> - `discover_scenarios` no longer warns that `discovery_parameters` is
+>   ignored: it uses them. A call that passed a noise threshold there and
+>   got an unfiltered tree now gets the filtered one.
+
 ### Added
 
 - **An index for `docs/`** ([`docs/README.md`](docs/README.md)): every
@@ -21,6 +40,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `suggest_dashboards`, `compute_widget`, `write_dashboard`), and coverage of
   the replay-based traversal counts, `rank_partition_attributes`,
   `view_ucm_family` and `suggest_loop_iterations`.
+
+- **`discover_ucm_family(..., max_enum_cardinality=…,
+  numeric_coercion_threshold=…)`**: the two attribute-typing settings of
+  `partition_log`, whose documentation already told users to pass the
+  latter (above `1.0` keeps a column of numeric strings categorical).
+- **`compute_family_stats(family, coarsen_loops=False)`** counts
+  behavioural variants without collapsing loop iterations to `{0, 1, ≥2}`.
+- **`ModelFamily.case_id_col`** records the case-id column the family was
+  mined with; `compute_family_stats` defaults to it.
+- **The app says when a project was saved by a newer version** (in the
+  load notes), since settings it does not know were not applied.
+  `ProjectDoc.from_newer_app` carries the fact.
+
+### Fixed
+
+Code defects reported by the documentation audit, each now held by a test.
+
+- **Dashboards: `actService` dropped the first event of almost every
+  case.** A start timestamp earlier than the case start was treated as
+  invalid, but the case start is the first *completion*, so a first event
+  with any duration starts before it. The start-time offset in the fact
+  table (`sdt`) is now signed and such starts are kept, in the Python and
+  the browser engine alike. See the upgrade note.
+- **Dashboards: a per-case target on a segmented widget printed shares
+  with the metric's unit**, in both engines. The widget's `unit` is now
+  `%` for every shape, including the Activity axis. Also, a target that
+  is switched off but remembers its per-case mode no longer turns a KPI's
+  unit into `%`.
+- **`discover_scenarios` ignored `parameters["discovery_parameters"]`**
+  (and warned that it did), so a noise threshold needed a pre-mined
+  `process_tree`. It is forwarded to the inductive miner, as in
+  `discover_ucm_inductive`.
+- **Combined family assembly with a performance overlay raised `KeyError`
+  for a log whose case-id column is not `case:concept:name`**, even
+  though the family had been mined with `case_id_col=…`.
+- **Saved projects: a file from a newer schema had a stray
+  `_newer_schema` key written into it** on the next save. Nothing read
+  it. It is no longer written, and is dropped from files that carry it.
+- **Codespaces: the dev container installed Streamlit and nothing else.**
+  It looked for a root `requirements.txt`; the file is
+  `web/requirements.txt`.
+- **App: the Decomposition help said the Scenarios view "always runs
+  flat".** It builds its model with the sidebar's decomposition, and has
+  since decomposed models became fully supported by the synthesizer.
 
 ### Changed
 

@@ -314,10 +314,8 @@ def discover_scenarios(
 
     1. Discover a process tree using the inductive miner (or reuse a
        pre-built tree passed via ``parameters["process_tree"]``).
-    2. Convert it to a :class:`UCM` (decomposition is *not* applied for
-       scenario synthesis — the cluster engine wants a single map; if
-       the caller requests decomposition it is honoured but condition
-       emission may be skipped for plug-in maps).
+    2. Convert it to a :class:`UCM`, flat or decomposed as
+       ``decomposition`` asks (see that parameter).
     3. Cluster the log on the tree via concurrency-aware choice
        signatures; see
        :func:`pm4py_ucm.algo.discovery.variants.clustering.cluster`.
@@ -413,7 +411,7 @@ synthesize_scenarios` for details.
     #
     # ``discovery_parameters`` is consumed here for the same reason: left
     # in ``params`` it would reach discover_ucm_inductive alongside the
-    # pinned tree and be reported as ignored — which, before 0.9.1, it was.
+    # pinned tree and be reported as ignored — which, up to 0.9.0, it was.
     tree = params.pop("process_tree", None)
     disc_params = dict(params.pop("discovery_parameters", None) or {})
     if tree is None:
