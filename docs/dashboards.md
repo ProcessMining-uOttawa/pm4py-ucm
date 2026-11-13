@@ -436,6 +436,29 @@ a property of the metric. So they live in the composer (`syncViz`), and
 there is deliberately no per-metric or per-result-type viz list to drift
 out of step with them.
 
+### The value axis
+
+Bars, lines and histograms draw a **value axis**: a few round ticks from
+zero to just past the largest value, with faint gridlines. Without it a
+chart shows only shape — which month is highest, not how high — and every
+number costs a hover.
+
+* Ticks are chosen for roundness (steps of 1, 2, 2.5 or 5 × a power of
+  ten), about three intervals to a chart.
+* A duration is labelled in the unit that keeps its ticks round — a chart
+  peaking at 45 minutes reads `0 m … 60 m`, not fractions of a day — the
+  same largest-legible-unit rule a single value follows.
+* Counts tick in whole numbers; a share that reaches 100% gets no headroom
+  beyond it.
+* The axis always starts at **zero**, and a bar's height is its value over
+  the axis top. So bars are comparable by length, and a chart of sub-day
+  durations no longer flattens against a scale of one day.
+
+It is rendering only: `axisTicks` lives in `dash-ui.js`, reads the figures
+the engine already returns, and adds nothing to the contract. Pie, gauge
+and box plot already state their values (slices, the dial's scale,
+min / median / max) and are unchanged.
+
 ### What the extra-data shapes return
 
 * **Histogram** — `histogram(values)` returns `{bins: [{lo, hi, count}],

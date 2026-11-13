@@ -281,6 +281,15 @@
   color: var(--ink-2);
 }
 .pm-btn--ghost:hover { background: var(--desk); }
+/* The one button that offers to do the work for the user, so it is the one
+   green thing in a garnet toolbar. The "met" tokens already pair a green
+   with a tint that holds its contrast in both themes. */
+.pm-btn--suggest {
+  border-color: var(--met-fg);
+  background: var(--met-bg);
+  color: var(--met-fg);
+}
+.pm-btn--suggest:hover { background: var(--met-fg); color: var(--met-bg); }
 .pm-btn:disabled { opacity: .45; cursor: not-allowed; }
 
 /* =====================================================================
@@ -489,6 +498,7 @@
 .pm-w__chart { flex: 1; min-height: 0; margin-top: 8px; }
 .pm-w__chart .pm-chart { width: 100%; height: 100%; margin-top: 0; }
 .pm-chart__axis { stroke: var(--border); stroke-width: 1; }
+.pm-chart__grid { stroke: var(--border); stroke-width: 0.6; stroke-dasharray: 2 2; }
 .pm-chart__lab { fill: var(--muted); font-family: var(--f-mono); font-size: 9px; }
 .pm-chart__empty { color: var(--muted); font-size: 12px; margin-top: 8px; }
 
@@ -530,6 +540,42 @@
   margin-top: 6px;
 }
 .pm-axis__mid { color: var(--muted); }
+/* A chart whose first/last labels are drawn inside its SVG keeps only the
+   note, centred. */
+.pm-axis--note { justify-content: center; }
+
+/* A bar chart with its value axis: a gutter of tick labels, then the bars
+   over faint gridlines. Tick labels and gridlines are placed by the same
+   `bottom: N%` against the same box (hence no padding on the bars here),
+   so a label is always level with its line. */
+.pm-plot { flex: 1; min-height: 0; display: flex; margin-top: 9px; }
+.pm-plot .pm-bars {
+  position: relative;
+  padding-top: 0;
+  border-bottom: 1px solid var(--border);
+}
+.pm-plot .pm-bars > i { position: relative; min-height: 2px; }
+.pm-yaxis {
+  position: relative;
+  flex: none;
+  font-family: var(--f-mono);
+  font-size: 9.5px;
+  color: var(--muted);
+}
+.pm-yaxis > span {
+  position: absolute;
+  right: 5px;
+  transform: translateY(50%);
+  line-height: 1;
+  white-space: nowrap;
+}
+.pm-gridline {
+  position: absolute;
+  left: 0; right: 0;
+  height: 0;
+  border-top: 1px dashed var(--border);
+  pointer-events: none;
+}
 
 /* -- heatmap table --------------------------------------------------- */
 

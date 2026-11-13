@@ -1,6 +1,6 @@
 # Test suite
 
-**1472 tests** across **42 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
+**1476 tests** across **42 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
 
 > Regenerate this file with `python tests/gen_readme.py` after adding or removing tests. Purposes are the first sentence of each module's docstring; edit the docstring, not this table.
 
@@ -46,8 +46,8 @@
 |  | [`test_visualization.py`](test_visualization.py) | Tests for the graphviz-based UCM visualiser. | 35 |
 | | _Visualization subtotal_ | | **71** |
 | **Dashboards** | [`test_dashboard_suggestions.py`](test_dashboard_suggestions.py) | Tests for dashboard suggestions (``docs/dashboard_suggestions.md`` §2). | 86 |
-|  | [`test_dashboards.py`](test_dashboards.py) | Tests for user-defined dashboards: the client contract, the metric engine, and the parity of the Python engine with its JS counterpart. | 497 |
-| | _Dashboards subtotal_ | | **583** |
+|  | [`test_dashboards.py`](test_dashboards.py) | Tests for user-defined dashboards: the client contract, the metric engine, and the parity of the Python engine with its JS counterpart. | 501 |
+| | _Dashboards subtotal_ | | **587** |
 | **Sessions (save / share / resume)** | [`test_sessions.py`](test_sessions.py) | Tests for the project save/share/resume core (``web/sessions``). | 14 |
 |  | [`test_sessions_codegen.py`](test_sessions_codegen.py) | Tests for the Python code exporter (``web/sessions/codegen.py``). | 35 |
 |  | [`test_sessions_registry.py`](test_sessions_registry.py) | Tests for the Session Parameter Registry (``web/sessions/registry.py``). | 17 |
@@ -59,6 +59,6 @@
 |  | [`test_variant_log_filter.py`](test_variant_log_filter.py) | Selecting an event log down to chosen behavioural variants. | 11 |
 |  | [`test_xes_gz_upload.py`](test_xes_gz_upload.py) | An uploaded ``.xes.gz`` (bare, or inside a zip) must reach pm4py inflated. | 6 |
 | | _Other subtotal_ | | **57** |
-| | **Total** | | **1472** |
+| | **Total** | | **1476** |
 
 See the repository [`README.md`](../README.md#testing) for how to run the suite, and [`docs/metrics.md`](../docs/metrics.md) for the metric definitions the validation tests enforce.

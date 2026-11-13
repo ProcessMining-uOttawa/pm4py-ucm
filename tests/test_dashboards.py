@@ -2157,6 +2157,95 @@ class TestActivityAxis:
         assert "activity" not in [a["id"] for a in segment_axes(t)]
 
 
+#: Where a method of the Dashboard class ends in dash-ui.js.
+_END_OF_METHOD = chr(10) + "  }" + chr(10)
+
+
+class TestValueAxis:
+    """Bars, lines and histograms carry a value axis, so a chart can be
+    read without hovering every point (docs/dashboards.md §6)."""
+
+    _RUNNER = r"""
+import { axisTicks } from %(ui)s;
+import { readFileSync } from "node:fs";
+const cases = JSON.parse(readFileSync(process.argv[2], "utf8"));
+process.stdout.write(JSON.stringify(cases.map(([max, unit]) => {
+  const a = axisTicks(max, unit);
+  return { labels: a.ticks.map((t) => t.label), top: a.top,
+           pos: a.ticks.map((t) => t.pos), chars: a.chars };
+})));
+"""
+
+    # (largest value, unit) -> the labels a reader sees.
+    _CASES = [
+        ((26, "d"), ["0 d", "10 d", "20 d", "30 d"]),
+        # A duration is labelled in the unit that keeps its ticks round.
+        ((0.03, "d"), ["0 m", "20 m", "40 m", "60 m"]),
+        ((0.3, "d"), ["0 h", "2.5 h", "5 h", "7.5 h"]),
+        ((0.0004, "d"), ["0 s", "20 s", "40 s"]),
+        ((35.5, "%"), ["0%", "20%", "40%"]),
+        # A share that reaches 100% is not given headroom past it.
+        ((100, "%"), ["0%", "50%", "100%"]),
+        ((700, "n"), ["0", "250", "500", "750"]),
+        # Counts come whole: no tick at half a case.
+        ((2, "n"), ["0", "1", "2"]),
+        ((1, "n"), ["0", "1"]),
+        ((78126, "n"), ["0", "50k", "100k"]),
+        # Nothing to plot still yields an axis, not a division by zero.
+        ((0, "n"), ["0", "1"]),
+    ]
+
+    @pytest.fixture(scope="class")
+    def ticks(self, tmp_path_factory):
+        node = shutil.which("node")
+        if node is None:
+            pytest.skip("node is not available")
+        tmp = tmp_path_factory.mktemp("axis")
+        (tmp / "in.json").write_text(
+            json.dumps([list(c) for c, _ in self._CASES]), encoding="utf8")
+        runner = tmp / "runner.mjs"
+        runner.write_text(self._RUNNER % {"ui": json.dumps(
+            (ASSETS / "dash-ui.js").resolve().as_uri())}, encoding="utf8")
+        proc = subprocess.run(
+            [node, str(runner), str(tmp / "in.json")], capture_output=True,
+            text=True, encoding="utf8", timeout=120)
+        assert proc.returncode == 0, proc.stderr
+        return json.loads(proc.stdout)
+
+    def test_labels_are_round(self, ticks):
+        for (case, want), got in zip(self._CASES, ticks):
+            assert got["labels"] == want, case
+
+    def test_the_axis_covers_the_data_and_starts_at_zero(self, ticks):
+        for (case, _), got in zip(self._CASES, ticks):
+            assert got["top"] >= case[0], case
+            assert got["pos"][0] == 0 and got["pos"][-1] == 1, case
+            assert got["pos"] == sorted(got["pos"]), case
+            assert 2 <= len(got["labels"]) <= 5, case
+            assert got["chars"] == max(len(x) for x in got["labels"])
+
+    def test_every_chart_with_a_value_scale_draws_one(self):
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+
+        def body(name):
+            return ui.split(f"  {name} {{", 1)[1].split(_END_OF_METHOD, 1)[0]
+
+        assert "this._svgValueAxis(ax," in body("_lineSvg(pts, w)")
+        assert "this._svgValueAxis(ax," in body("_histSvg(hh, unit)")
+        bar = body("_barBody(w)")
+        assert 'class: "pm-yaxis"' in bar and "pm-gridline" in bar
+
+    def test_bars_are_proportional_from_zero(self):
+        """A bar is read against the ticks, so its height is its value over
+        the axis top — not an 8% floor plus a stretch to the largest value,
+        and not a share of 1 when every value is below 1 (which flattened
+        any chart of sub-day durations)."""
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        bar = ui.split("  _barBody(w) {", 1)[1].split(_END_OF_METHOD, 1)[0]
+        assert "(v / ax.top) * 100" in bar
+        assert "8 + u * 92" not in bar and "Math.max(1, ...vals)" not in bar
+
+
 def _fake_clustering(groups):
     """``[(variant_id, expression, [case ids])]`` as a clustering result."""
     from types import SimpleNamespace

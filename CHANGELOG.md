@@ -23,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   LLM from an exported brief; dashboards from a GRL goal model).
 - **Web app: ✦ Suggest.** The Dashboards view opens a log's first dashboard
   on the proposed Overview instead of a fixed six-widget starter, and a
-  **✦ Suggest** button (also shown on an empty dashboard) lists the
+  green **✦ Suggest** button (also shown on an empty dashboard) lists the
   proposals with their reasons; **Add** creates a new named dashboard, or
   fills the current one when it is empty. Existing dashboards are never
   replaced. Suggested KPIs come with a target prefilled at today's value
@@ -55,6 +55,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *Behavioural variants* dashboard when it is present, and an exported
   script rebuilds it when a dashboard uses it.
 
+- **Dashboards: value axes.** Bar charts, line charts and histograms now
+  show a value axis with round ticks and gridlines, so a chart can be read
+  without hovering each point. Durations are labelled in the unit that
+  keeps the ticks round (`0 m … 60 m` rather than fractions of a day). A
+  line chart's first and last labels moved inside the plot, where they line
+  up with it.
+
 ### Security
 
 - **The Bandit scan is part of the release gate.** `tools/release_check.py`
@@ -69,6 +76,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Bar charts of sub-day durations were flat.** Bar heights were scaled to
+  the largest value *or 1*, whichever was greater, so a chart whose values
+  were all below one day (or below 1 of anything) drew every bar near its
+  minimum height. Bars are now proportional from zero to the axis top.
 - **Editing a dashboard widget reset its activities.** Reopening any widget
   whose metric takes parameters (time between two activities, sojourn,
   branch probability, …) showed the log's default activities instead of the

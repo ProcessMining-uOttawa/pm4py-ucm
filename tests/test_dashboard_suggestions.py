@@ -754,6 +754,12 @@ class TestView:
         ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
         assert "_openSuggestions()" in ui and "_addSuggested(s)" in ui
         assert "✦ Suggest" in ui
+        # Both entry points are the green call to action, in both themes
+        # (the "met" tokens are defined for light and dark).
+        assert ui.count("pm-btn pm-btn--suggest") == 2
+        css = (ASSETS / "dash-styles.css").read_text(encoding="utf8")
+        rule = css.split(".pm-btn--suggest {", 1)[1].split("}", 1)[0]
+        assert "var(--met-fg)" in rule and "var(--met-bg)" in rule
         # Offered only where a dashboard can be restructured.
         assert "this.suggestions = this._multi" in ui
 

@@ -72,6 +72,65 @@ function donutPath(cx, cy, rIn, rOut, a0, a1) {
          `L${x2} ${y2} A${rIn} ${rIn} 0 ${large} 0 ${x3} ${y3} Z`;
 }
 
+/**
+ * The value axis of a chart: a few round ticks from zero to just past the
+ * largest value, each with a short label.
+ *
+ * Without it a bar or a line shows only *shape* — which month is highest,
+ * not how high — and the reader has to hover every point to learn the
+ * scale. Three intervals are aimed for: enough to read a value off, few
+ * enough to fit a 2 × 2 card.
+ *
+ * `unit` is the widget's ("d" days, "%" percent, "n" count). A duration is
+ * labelled in the unit that keeps the ticks round — a chart peaking at 45
+ * minutes gets "0 m, 20 m, 40 m, 60 m", not fractions of a day — which is
+ * the same largest-legible-unit rule `fmtDays` applies to a single value.
+ *
+ * Returns `{ top, ticks: [{ value, pos, label }], chars }`: `top` is the
+ * value at the top of the plot (≥ max), `pos` a tick's height as a
+ * fraction of it, `chars` the longest label's length, for sizing a gutter.
+ */
+export function axisTicks(max, unit) {
+  let scale = 1, suffix = "";
+  if (unit === "d") {
+    if (max >= 1) suffix = " d";
+    else if (max * 24 >= 1) { scale = 24; suffix = " h"; }
+    else if (max * 1440 >= 1) { scale = 1440; suffix = " m"; }
+    else { scale = 86400; suffix = " s"; }
+  } else if (unit === "%") {
+    suffix = "%";
+  }
+  const m = max > 0 && Number.isFinite(max) ? max * scale : 1;
+  const raw = m / 3;
+  const pow = Math.pow(10, Math.floor(Math.log10(raw)));
+  let step = [1, 2, 2.5, 5, 10].map((k) => k * pow)
+    .find((s) => s >= raw * (1 - 1e-9));
+  // Cases, events and seconds come whole: no tick at 0.5 of a case.
+  const whole = unit === "n" || suffix === " s";
+  if (whole && step < 1) step = 1;
+  if (whole && !Number.isInteger(step)) step = Math.ceil(step);
+  const n = Math.max(1, Math.ceil(m / step - 1e-9));
+  const decimals = step >= 1 && Number.isInteger(step) ? 0
+    : Math.max(1, Math.ceil(-Math.log10(step) - 1e-9) + (step / pow === 2.5 ? 1 : 0));
+  const text = (v) => {
+    if (v >= 1e6) return `${+(v / 1e6).toFixed(1)}M`;
+    if (v >= 1e4) return `${+(v / 1e3).toFixed(1)}k`;
+    return v.toLocaleString("en-US", {
+      minimumFractionDigits: 0, maximumFractionDigits: decimals });
+  };
+  const ticks = [];
+  for (let i = 0; i <= n; i++) {
+    ticks.push({ value: (i * step) / scale, pos: i / n,
+                 label: text(i * step) + suffix });
+  }
+  return { top: (n * step) / scale, ticks,
+           chars: Math.max(...ticks.map((t) => t.label.length)) };
+}
+
+//: Width of one character of the 9px mono axis label, in SVG user units —
+//: sizes the left gutter of a chart to its longest tick label.
+const TICK_CHAR = 5.5;
+
 export const STATE_LABEL = { met: "MET", risk: "AT RISK", missed: "MISSED" };
 
 //: Most bars a categorical axis draws before the renderer keeps only the
@@ -988,7 +1047,7 @@ export class Dashboard {
       }, "⬆ Load"));
       if (this.suggestions.length) {
         kids.push(h("button", {
-          class: "pm-btn pm-btn--ghost",
+          class: "pm-btn pm-btn--suggest",
           title: "Dashboards proposed from this log itself — its "
                + "bottlenecks, rework, decision points and the attributes "
                + "that split its cases — each widget with its reason.",
@@ -1033,7 +1092,8 @@ export class Dashboard {
             : "No widgets yet — use “+ Add widget” to build one.",
           this.suggestions.length ? h("div", { class: "pm-empty__act" },
             h("button", {
-              class: "pm-btn", onclick: () => this._openSuggestions(),
+              class: "pm-btn pm-btn--suggest",
+              onclick: () => this._openSuggestions(),
             }, "✦ Suggest dashboards for this log")) : null));
     }
     return h("div", { class: "pm-grid" },
@@ -1198,10 +1258,13 @@ export class Dashboard {
   }
 
   _histSvg(hh, unit) {
-    const W = 300, H = 132, padL = 6, padR = 6, padT = 6, padB = 20;
-    const plotW = W - padL - padR, plotH = H - padT - padB;
     const bins = hh.bins;
-    const maxC = Math.max(1, ...bins.map((b) => b.count));
+    // The value axis counts cases per bin.
+    const ax = axisTicks(Math.max(1, ...bins.map((b) => b.count)), "n");
+    const W = 300, H = 132, padL = 8 + ax.chars * TICK_CHAR, padR = 6,
+      padT = 9, padB = 20;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const maxC = ax.top;
     const bw = plotW / bins.length;
     const bars = bins.map((b, i) => {
       const barH = (b.count / maxC) * plotH;
@@ -1219,6 +1282,7 @@ export class Dashboard {
       viewBox: `0 0 ${W} ${H}`, class: "pm-chart pm-hist",
       role: "img", "aria-label": `Histogram of ${hh.n} cases`,
     },
+      ...this._svgValueAxis(ax, padL, padT, plotW, plotH),
       svgEl("line", { x1: padL, y1: padT + plotH, x2: padL + plotW,
         y2: padT + plotH, class: "pm-chart__axis" }),
       ...bars,
@@ -1291,23 +1355,49 @@ export class Dashboard {
   _lineBody(w) {
     const pts = w.series || [];
     if (!pts.length) return [h("div", { class: "pm-kpi__sub" }, "No data.")];
+    // The first and last labels are drawn inside the SVG, under the plot
+    // they belong to; a row of HTML below could not line up with a plot
+    // that starts after the value-axis gutter.
     return [
       h("div", { class: "pm-w__chart" }, this._lineSvg(pts, w)),
-      h("div", { class: "pm-axis" },
-        h("span", {}, pts[0].label),
-        pts.length > 2 && h("span", { class: "pm-axis__mid" },
-          `${pts.length} × ${axisLabel(w.axis) || "points"} · hover for values`),
-        pts.length > 1 && h("span", {}, pts[pts.length - 1].label)),
+      h("div", { class: "pm-axis pm-axis--note" },
+        h("span", { class: "pm-axis__mid" },
+          `${pts.length} × ${axisLabel(w.axis) || "points"} · hover for exact values`)),
     ];
   }
 
+  /**
+   * Gridlines and tick labels of a value axis, for an SVG chart whose plot
+   * area starts at (`padL`, `padT`) — shared by the line and the histogram
+   * so the two cannot drift. The zero tick has a label but no gridline:
+   * the chart's own baseline is already there.
+   */
+  _svgValueAxis(ax, padL, padT, plotW, plotH) {
+    const out = [];
+    for (const t of ax.ticks) {
+      const y = padT + plotH - t.pos * plotH;
+      if (t.pos > 0) {
+        out.push(svgEl("line", { x1: padL, y1: y, x2: padL + plotW, y2: y,
+          class: "pm-chart__grid" }));
+      }
+      out.push(svgEl("text", { x: padL - 4, y: y + 3, "text-anchor": "end",
+        class: "pm-chart__lab" }, t.label));
+    }
+    return out;
+  }
+
   _lineSvg(pts, w) {
-    const W = 300, H = 120, padL = 6, padR = 6, padT = 8, padB = 6;
+    const ax = axisTicks(
+      Math.max(0, ...pts.map((p) => p.value).filter((v) => v != null)),
+      w.unit);
+    const W = 300, H = 132, padL = 8 + ax.chars * TICK_CHAR, padR = 8,
+      padT = 9, padB = 18;
     const plotW = W - padL - padR, plotH = H - padT - padB;
-    const max = Math.max(1, ...pts.map((p) => p.value).filter((v) => v != null));
+    const max = ax.top;
     const x = (i) => (pts.length < 2 ? padL + plotW / 2
       : padL + (i / (pts.length - 1)) * plotW);
-    const y = (v) => padT + plotH - ((v == null ? 0 : v) / max) * plotH;
+    const y = (v) => padT + plotH
+      - (Math.max(0, v == null ? 0 : v) / max) * plotH;
     const dots = pts.map((p, i) => svgEl("circle", {
       cx: x(i), cy: y(p.value), r: 2.5, class: "pm-line__dot",
     }, svgEl("title", {}, `${p.label}: ${p.text || E.fmt(p.value, w.unit)}` +
@@ -1317,13 +1407,19 @@ export class Dashboard {
       viewBox: `0 0 ${W} ${H}`, class: "pm-chart pm-line",
       role: "img", "aria-label": `Line chart of ${pts.length} points`,
     },
+      ...this._svgValueAxis(ax, padL, padT, plotW, plotH),
       svgEl("line", { x1: padL, y1: padT + plotH, x2: padL + plotW,
         y2: padT + plotH, class: "pm-chart__axis" }),
       svgEl("polyline", {
         points: pts.map((p, i) => `${x(i)},${y(p.value)}`).join(" "),
         class: "pm-line__path",
       }),
-      ...dots);
+      ...dots,
+      svgEl("text", { x: padL, y: H - 5, class: "pm-chart__lab" },
+        pts[0].label),
+      pts.length > 1 && svgEl("text", { x: padL + plotW, y: H - 5,
+        "text-anchor": "end", class: "pm-chart__lab" },
+        pts[pts.length - 1].label));
   }
 
   /** A KPI against its target, as a dial. */
@@ -1476,12 +1572,25 @@ export class Dashboard {
     }
 
     const vals = pts.map((p) => p.value).filter((v) => v != null);
-    const max = Math.max(1, ...vals);
-    const bars = h("div", { class: "pm-bars" }, ...pts.map((p) => {
-      const u = p.value == null ? 0 : p.value / max;
+    // Heights are proportional from zero to the axis top, so a bar can be
+    // read against the ticks. (They used to start from an 8% floor and
+    // stretch to the largest value — or to 1 when every value was below
+    // it, which flattened any chart of sub-day durations.) Colour still
+    // runs to the largest *value*, so the tallest bar is the darkest.
+    const dataMax = Math.max(0, ...vals);
+    const ax = axisTicks(dataMax, w.unit);
+    const gutter = `${ax.chars + 1}ch`;
+    const bars = h("div", { class: "pm-bars" },
+      ...ax.ticks.filter((t) => t.pos > 0).map((t) => h("b", {
+        class: "pm-gridline", style: `bottom:${t.pos * 100}%`,
+      })),
+      ...pts.map((p) => {
+      const v = p.value == null ? 0 : Math.max(0, p.value);
+      const u = dataMax > 0 ? v / dataMax : 0;
       const bg = p.state ? `var(--${p.state}-fg)` : E.heat(u, this.dark).bg;
       return h("i", {
-        style: `height:${Math.round(8 + u * 92)}%;background:${bg}`,
+        style: `height:${((v / ax.top) * 100).toFixed(2)}%;background:${bg}`
+          + (p.value == null ? ";min-height:0" : ""),
         title: `${p.label}: ${p.text || E.fmt(p.value, w.unit)}` +
                (p.nCases != null ? ` (${p.nCases.toLocaleString("en-US")} cases)` : "") +
                this._segNote(w.axis, p.label),
@@ -1489,15 +1598,20 @@ export class Dashboard {
     }));
     const mid = dropped
       ? `top ${pts.length} of ${all.length} ${axisLabel(w.axis)} by value`
-      : `${pts.length} × ${axisLabel(w.axis) || "points"} · hover for values`;
-    const axis = h("div", { class: "pm-axis" },
+      : `${pts.length} × ${axisLabel(w.axis) || "points"} · hover for exact values`;
+    // Indented by the value-axis gutter, so the first and last labels sit
+    // under the first and last bars.
+    const axis = h("div", { class: "pm-axis", style: `padding-left:${gutter}` },
       h("span", {}, pts[0].label),
       pts.length > 2 && h("span", { class: "pm-axis__mid", title: dropped
         ? `${all.length} segments in total; the ${dropped} smallest are `
           + `not drawn. The widget's target state still considers all of them.`
         : "" }, mid),
       pts.length > 1 && h("span", {}, pts[pts.length - 1].label));
-    return [bars, axis];
+    const yaxis = h("div", { class: "pm-yaxis", style: `width:${gutter}` },
+      ...ax.ticks.map((t) => h("span", {
+        style: `bottom:${t.pos * 100}%` }, t.label)));
+    return [h("div", { class: "pm-plot" }, yaxis, bars), axis];
   }
 
   _tableBody(w, spec) {
