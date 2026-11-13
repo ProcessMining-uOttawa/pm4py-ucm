@@ -243,7 +243,8 @@ duration is **absent** (empty dict) when the log has no timestamps.
 down in [`pm4py_ucm.util.timing`](../pm4py_ucm/util/timing.py). The
 dashboards' `duration` metric ([`dashboards.md`](dashboards.md) §4) and
 the partition advisor's duration effect size
-([`model_families.md`](model_families.md)) use it too, and
+([`model_families.md`](model_families.md)) use it too, as does the web
+app's cycle-time log filter, and
 `TestOneCaseDuration` holds the three to one another; the dashboards
 store whole seconds, so their figure can differ by the rounding of two
 timestamps. (Up to 0.9.0 the dashboards and the advisor measured first

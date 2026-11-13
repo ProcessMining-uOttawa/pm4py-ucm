@@ -45,7 +45,7 @@ tooling described below.
   implemented" headers since before they shipped; a design note's status
   line is prose, so nothing guards it — update it in the PR that ships the
   feature.
-- Suite: **1536 passed, 0 failed, 0 skipped** (~3 min locally); CI
+- Suite: **1537 passed, 0 failed, 0 skipped** (~3 min locally); CI
   green on Python 3.10–3.14. `requires-python` is `>=3.10`.
 - **One deployment.** https://pm4py-ucm.streamlit.app/ serves V6 through the
   `streamlit_app.py` shim. The second deployment
@@ -103,10 +103,12 @@ each with a test that failed first. What is worth knowing:
 - **A broken start counts from its completion** (missing, unparseable, or
   after its own completion) in all three callers. The family statistics
   used to take `min(start)` as it came; on a clean log nothing changes.
-- **The app's log filter still measures first to last event.** The
-  cycle-time percentile band (`duration_pct` in `streamlit_app_v6.py`)
-  computes its own `max − min` over completions. The maintainer spoke of
-  the dashboards and the advisor only; see the open items.
+- **The app's cycle-time filter follows too** (the maintainer's "yes,
+  align it"). `_apply_log_filters` in `streamlit_app_v6.py` and its copy
+  in `web/sessions/codegen.py` call `case_durations`; the two must stay in
+  step, and `test_cycle_time_filter_measures_…` runs both. The sort is
+  now stable, so tied cases keep their order in the log. The ƒ predicate's
+  `duration()` already agreed: it goes through the dashboards' fact table.
 - **`per_case` is one decision, taken once.** `_share_mode(target)` /
   `shareMode(target)` (target on *and* mode `per_case`) is asked in
   `compute_widget`, which sets the widget's `unit` to `%` for every
@@ -467,14 +469,6 @@ events; ~10 min to mine after reduction).
 
 A. **What is left of the documentation audit's code findings.** The
    defects themselves are fixed (see "The audit's code defects, fixed").
-   - **The app's cycle-time filter is the last first-to-last-completion
-     duration.** The Model view's log filter keeps cases by a percentile
-     band of `max − min` completion (`duration_pct`,
-     `web/streamlit_app_v6.py`), so on an interval log it ranks cases by a
-     slightly different duration than the dashboards, the advisor and the
-     family report now share. Ask the maintainer; if it should follow,
-     call `pm4py_ucm.util.timing.case_durations`. Saved projects store the
-     percentile band, not durations, so they would keep loading.
    - **A project from a newer schema is re-saved with this app's
      `schema_version`** (`ProjectDoc.to_dict` always writes the current
      one), so the file then claims an older schema than its content.

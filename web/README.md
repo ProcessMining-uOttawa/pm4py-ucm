@@ -238,7 +238,8 @@ a middle band:
 - **Date range** — a slider over the log's own span, with a **cases in the
   window** choice (*intersecting* or *fully inside*).
 - **Cycle-time percentile (case duration)** — a two-handled band over each
-  case's **end-to-end cycle time** (last − first event): `0` = fastest,
+  case's **end-to-end cycle time** (earliest start to latest completion;
+  first to last event when the log has no start timestamps): `0` = fastest,
   `100` = slowest, so `0–10` keeps the fastest 10% of cases and `90–100` the
   slowest 10%. (Shown only when the log has a real time span.)
 - **Variants by frequency rank** — keep trace variants in the selected band,

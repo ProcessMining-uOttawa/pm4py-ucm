@@ -659,3 +659,56 @@ def test_the_xes_write_cannot_lose_the_csv():
     assert body.index("to_csv") < body.index("write_xes")
     assert "simulation_log.xes skipped" in body
 
+
+
+def _lead_in_log(pd):
+    """Four cases that all complete A at hour 0 and B at hour 10, so their
+    first-to-last-completion span is identical. A's own duration differs:
+    4 h, 1 h, 3 h, 2 h — the cases last 14, 11, 13 and 12 h from earliest
+    start to latest completion."""
+    base = pd.Timestamp("2026-01-01", tz="UTC")
+    rows = []
+    for cid, lead in (("c1", 4), ("c2", 1), ("c3", 3), ("c4", 2)):
+        rows.append((cid, "A", base - pd.Timedelta(hours=lead), base))
+        rows.append((cid, "B", base + pd.Timedelta(hours=9),
+                     base + pd.Timedelta(hours=10)))
+    return pd.DataFrame(rows, columns=[
+        "case:concept:name", "concept:name", "start_timestamp",
+        "time:timestamp"])
+
+
+def _app_apply_log_filters():
+    """``_apply_log_filters`` sliced out of the Streamlit script, which
+    cannot be imported (its module body calls Streamlit)."""
+    import pandas as pd
+    import pm4py
+    from pathlib import Path
+
+    app = (Path(__file__).resolve().parent.parent / "web"
+           / "streamlit_app_v6.py").read_text(encoding="utf-8")
+    m = re.search(r"\ndef _apply_log_filters\(.*?(?=\ndef )", app, re.S)
+    ns = {"pd": pd, "pm4py": pm4py}
+    exec(compile(m.group(0), "<streamlit_app_v6 slice>", "exec"), ns)
+    return ns["_apply_log_filters"]
+
+
+def test_cycle_time_filter_measures_earliest_start_to_latest_completion():
+    """The cycle-time band ranks cases by the package's one case duration
+    (pm4py_ucm.util.timing), in the app and in the generated script alike.
+    Between completions these four cases are tied."""
+    pd = pytest.importorskip("pandas")
+    pytest.importorskip("pm4py")
+    df = _lead_in_log(pd)
+
+    ns = {"__name__": "codegen_test"}
+    exec(compile(generate_script(_doc({})), "gen.py", "exec"), ns)
+
+    for apply in (ns["apply_log_filters"],
+                  lambda d, spec: _app_apply_log_filters()(
+                      d, tuple(spec.items()))):
+        fastest = apply(df, {"duration_pct": (0, 25)})
+        assert list(fastest["case:concept:name"].unique()) == ["c2"]
+        slowest = apply(df, {"duration_pct": (75, 100)})
+        assert list(slowest["case:concept:name"].unique()) == ["c1"]
+        middle = apply(df, {"duration_pct": (25, 75)})
+        assert sorted(middle["case:concept:name"].unique()) == ["c3", "c4"]

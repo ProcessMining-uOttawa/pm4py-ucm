@@ -1441,8 +1441,9 @@ def _apply_log_filters(log, filter_spec):
       predicate is true, e.g. ``attr("Channel") == "Web"`` or
       ``attr("amount") > 500 and duration() < 30``;
     * ``duration_pct`` ``(lo, hi)`` — keep cases whose end-to-end cycle time
-      (last − first event) falls in the ``[lo, hi]`` percentile band of the
-      remaining cases (0 = fastest, 100 = slowest);
+      (earliest start to latest completion; first to last event on a log
+      without start timestamps) falls in the ``[lo, hi]`` percentile band
+      of the remaining cases (0 = fastest, 100 = slowest);
     * ``variant_ranks`` ``(lo, hi)`` — keep trace variants ranked in
       ``[lo, hi]`` by frequency;
     * ``time_from`` / ``time_to`` (``"%Y-%m-%d %H:%M:%S"`` strings) +
@@ -1514,16 +1515,18 @@ def _apply_log_filters(log, filter_spec):
         keep_ids = set(predicate_case_ids(df, str(attr_expr)))
         df = df[df["case:concept:name"].isin(keep_ids)]
 
-    # End-to-end cycle-time band: keep cases whose per-case duration (last
-    # minus first event) falls in the [lo, hi] percentile of the remaining
-    # cases — 0 = fastest, 100 = slowest. Applied before the variant filter so
-    # the variant options are computed on the same population.
+    # End-to-end cycle-time band: keep cases whose per-case duration falls
+    # in the [lo, hi] percentile of the remaining cases — 0 = fastest, 100 =
+    # slowest. The duration is the package's one definition (earliest start
+    # to latest completion), the same the dashboards, the family report and
+    # the partition advisor show. Applied before the variant filter so the
+    # variant options are computed on the same population.
     dpct = spec.get("duration_pct")
     if dpct:
         lo_pct, hi_pct = dpct
-        ts = pd.to_datetime(df["time:timestamp"], utc=True, errors="coerce")
-        dur = ts.groupby(df["case:concept:name"]).agg(lambda s: s.max() - s.min())
-        dur = dur.sort_values()  # ascending: fastest case first
+        from pm4py_ucm.util.timing import case_durations
+        # Stable, so tied cases keep their order in the log.
+        dur = case_durations(df).sort_values(kind="stable")  # fastest first
         n = len(dur)
         if n:
             lo_i = int(lo_pct / 100.0 * n)          # floor
@@ -4566,15 +4569,18 @@ with _transforms_slot:
                     "traces_contained" if _tmode == "fully inside"
                     else "traces_intersecting")
         # End-to-end cycle time — a two-handled percentile band over per-case
-        # duration (last − first event). Needs a real time span (else every
-        # case has the same/zero duration and the band is meaningless).
+        # duration (earliest start to latest completion). Needs a real time
+        # span (else every case has the same/zero duration and the band is
+        # meaningless).
         if _f_dmin and _f_dmax and _f_dmin != _f_dmax:
             _cyc = _flt_exp.slider(
                 "Cycle-time percentile (case duration)", 0, 100,
                 value=_rv(f"flt_cyc::{_k}", (0, 100)), step=1,
                 key=f"flt_cyc::{_k}",
-                help="Keep cases by end-to-end cycle time (last minus first "
-                     "event). 0 = fastest, 100 = slowest. Drag the left handle "
+                help="Keep cases by end-to-end cycle time (earliest start to "
+                     "latest completion; first to last event when the log "
+                     "has no start timestamps). 0 = fastest, 100 = slowest. "
+                     "Drag the left handle "
                      "in to drop the fastest cases, the right handle in to drop "
                      "the slowest, or pick a middle band — e.g. 0–10 keeps the "
                      "fastest 10% of cases, 90–100 the slowest 10%.")

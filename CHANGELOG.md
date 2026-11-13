@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 >   ranking of `rank_partition_attributes`, can shift slightly. The
 >   attribute scores behind the suggested dashboards follow the dashboard
 >   duration and shift likewise.
+> - **The app's cycle-time filter ranks cases by the same duration.** On
+>   an interval log the percentile band of the Model view's log filter
+>   can therefore keep slightly different cases than before, including in
+>   a saved project that stores such a band and in a script generated
+>   from it.
 > - **Service time on dashboards now includes each case's first event.**
 >   On an interval log, `actService` (and the suggested "avg service"
 >   KPI) used to leave out any event that started before its case's first
@@ -76,10 +81,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Code defects reported by the documentation audit, each now held by a test.
 
 - **Case duration had two definitions on interval logs.** The family
-  statistics measured earliest start to latest completion; the dashboards
-  and the partition advisor measured first to last completion. All three
-  now use the first, defined once in `pm4py_ucm.util.timing` and held
-  together by a test. See the upgrade notes.
+  statistics measured earliest start to latest completion; the
+  dashboards, the partition advisor and the app's cycle-time log filter
+  (with the script generated from it) measured first to last completion.
+  All now use the first, defined once in `pm4py_ucm.util.timing` and held
+  together by tests. See the upgrade notes.
 - **Dashboards: `actService` dropped the first event of almost every
   case.** A start timestamp earlier than the case start was treated as
   invalid, but the case start was the first *completion*, so a first
