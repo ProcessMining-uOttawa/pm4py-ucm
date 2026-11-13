@@ -10,8 +10,9 @@ Public surface:
   :data:`SCHEMA_VERSION`, :data:`FORMAT`.
 * io — :func:`dumps`, :func:`loads`, :func:`save_settings`,
   :func:`save_bundle`, :func:`load`.
-* registry — the persisted-parameter registry and :func:`collect_config` /
-  :func:`apply_config` (added in P0's registry step).
+* registry — the persisted-parameter registry (:data:`REGISTRY`) with
+  :func:`collect`, :func:`param_ids` and :func:`defaults`. Restoring is the
+  app's job (``_apply_project_config``).
 * dashboards — :func:`wrap_registry` / :func:`unwrap_registry`, the versioned
   envelope for the browser-island dashboards a project carries (§11); the
   Streamlit-side transport lives in ``web/dashboards_bridge``.

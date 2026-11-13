@@ -894,12 +894,13 @@ def compute_family_stats(family, parameters: Optional[Dict[str, Any]] = None,
     data layer behind :func:`write_family_report` and the web app's
     Compare tab.
 
-    Three levels, all designed for ranking and cross-cell comparison:
+    Four levels, all designed for ranking and cross-cell comparison:
     **process** (cases, events, events per case, case-duration
     min/mean/median/max and **total**, behavioural variant counts,
     replay fitness), **activity** (frequency, case coverage, and — for
     interval logs with a ``start_timestamp`` column — service-time
-    min/mean/median/max/total per activity), and **choice** (OR-fork
+    min/mean/median/max/total per activity), **edge** (directly-follows
+    frequency and waiting times), and **choice** (OR-fork
     branch counts *aligned across cells* through the family's shared
     skeleton, so the same decision point is one comparable row for
     every combination).
@@ -915,7 +916,8 @@ def compute_family_stats(family, parameters: Optional[Dict[str, Any]] = None,
     tell every iteration count apart. Returns a
     :class:`~pm4py_ucm.algo.discovery.families.stats.FamilyStats`
     with pandas helpers (``process_frame``, ``activity_frame``,
-    ``choice_share_frame``) and a JSON-ready ``to_dict``."""
+    ``edge_frame``, ``choice_count_frame``, ``choice_share_frame``) and a
+    JSON-ready ``to_dict``. Every metric is defined in ``docs/metrics.md``."""
     params = dict(parameters or {})
     return _families.compute_family_stats(
         family,

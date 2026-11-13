@@ -2,13 +2,13 @@
 
 :func:`write_family_report` produces **one HTML file with zero external
 dependencies** — statistics embedded as JSON, per-cell model images
-embedded as base64 PNGs, and a few hundred lines of vanilla JavaScript
+embedded as base64 SVGs, and a few hundred lines of vanilla JavaScript
 for the interactivity. The file opens in any browser, works offline,
 can be archived as supplementary material for a paper, and several
 copies can be opened side by side ("multiple windows" = multiple tabs,
 each with a different pair selected).
 
-Five views:
+Six views:
 
 * **Overview** — sortable process-level table (cases, events, events
   per case, case-duration min/median/mean/max/**total**, variants,
@@ -19,6 +19,7 @@ Five views:
   aligned choice bars;
 * **Activities** — activities × cells matrix for any metric,
   row/column/global heat-mapping;
+* **Edges** — the same matrix for directly-follows activity pairs;
 * **Choices** — every OR-fork aligned across the family, one 100%
   stacked bar per cell with counts;
 * **Models** — the per-cell images as a browsable gallery.

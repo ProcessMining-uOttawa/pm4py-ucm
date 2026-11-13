@@ -2,7 +2,7 @@
 aggregation and target scoring.
 
 This is the Python half of a two-implementation engine: the JS half in
-``web/assets/dash-engine.js`` computes the same numbers in the browser
+``assets/dash-engine.js`` computes the same numbers in the browser
 from the same :mod:`~pm4py_ucm.algo.dashboards.contract` payload. The
 Python half exists to compute exports and previews server-side, to be
 the thing the test suite pins, and to be the reference the JS half is

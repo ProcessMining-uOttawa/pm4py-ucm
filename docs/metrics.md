@@ -3,9 +3,14 @@
 This document is the precise specification of every quantitative metric
 `pm4py-ucm` computes from an event log: the activity, edge, process and
 choice statistics shown in the performance overlays
-([`algo/performance.py`](../pm4py_ucm/algo/performance.py)) and the
+([`algo/performance.py`](../pm4py_ucm/algo/performance.py)), the
 family statistics reports
-([`algo/discovery/families/stats.py`](../pm4py_ucm/algo/discovery/families/stats.py)).
+([`algo/discovery/families/stats.py`](../pm4py_ucm/algo/discovery/families/stats.py))
+and the replay-based traversal counts
+([`algo/traversal.py`](../pm4py_ucm/algo/traversal.py)). The per-case
+dashboard metrics have their own contract, [`dashboards.md`](dashboards.md);
+how to produce an overlay or a report is in
+[`model_families.md`](model_families.md).
 
 It is the *contract* the validation suite
 ([`tests/test_metric_validation.py`](../tests/test_metric_validation.py))
@@ -40,9 +45,11 @@ Two log kinds follow from whether `start_timestamp` is present:
   instantaneous; service times are undefined (and omitted, never
   faked), and edge waiting is measured completion→**completion**.
 
-Within a case, events are ordered by `time:timestamp` (a stable sort;
-see [§7](#7-semantics-decisions)). All metrics are invariant to input
-row order — the computation sorts internally.
+Within a case, events are ordered by `time:timestamp`. The sort is
+stable, so events of one case that share a timestamp keep their input
+order (see [§7](#7-semantics-decisions)); apart from such ties, all
+metrics are invariant to input row order — the computation sorts
+internally.
 
 Durations are reported in **seconds** throughout.
 
@@ -97,14 +104,15 @@ the activity (the time the case spent since its previous step). On a
 single-timestamp log, sojourn is the only activity-level time available
 and is the honest stand-in for "how long this step took".
 
-The diagram-overlay layer
-([`NODE_METRICS`](../pm4py_ucm/algo/performance.py)) exposes only
-`frequency`, `case_coverage`, and the `*_time` / `sojourn_*_time` means,
-medians and totals. Every other entry (`relative_frequency`,
-`repeat_frequency`, `min`/`max`/`std`/`p90`/`p95`) is computed and
-carried in `PerformanceStats` / `FamilyStats` for the comparison reports
-but is **not** an overlay metric — so the `.jucm` overlay output is
-byte-unchanged by their presence.
+Every metric in the table is an overlay metric
+([`NODE_METRICS`](../pm4py_ucm/algo/performance.py)): any of them can be
+selected for display, and all that the log supports are written to the
+model as `perf_<metric>` metadata whatever the selection
+([`model_families.md` §2](model_families.md#2-performance-overlays)).
+`PerformanceStats` additionally carries the log-level
+`start_activities` / `end_activities` distributions
+([§4](#4-process-metrics-per-family-cell--sub-log)), which are not drawn
+on the model.
 
 ---
 
@@ -122,8 +130,8 @@ Computed per directly-follows pair `(a, b)` observed in the log.
 | Metric                | Definition |
 |-----------------------|------------|
 | `frequency`           | number of times `b` directly follows `a` (across all cases). |
-| `case_frequency`      | number of *distinct cases* in which `b` directly follows `a` at least once (`≤ frequency`). The gap `frequency − case_frequency` is rework on the handover. |
-| `relative_frequency`  | `frequency / (n_events − n_cases)` — share of all directly-follows traversals. Sums to 1 across pairs. |
+| `case_frequency`      | number of *distinct cases* in which `b` directly follows `a` at least once (`≤ frequency`). The gap `frequency − case_frequency` is rework on the handover. On the model: single-pair segments only ([§3.2](#32-aggregating-a-segment-over-several-pairs)). |
+| `relative_frequency`  | `frequency / (n_events − n_cases)` — share of all directly-follows traversals. Sums to 1 across pairs. On the model: single-pair segments only. |
 | `mean/median/min/max/total/std/p90/p95_time` | **waiting time** between the two events, aggregated over all occurrences of the pair. |
 | `percentage`          | *(overlay only, on OR-fork branches)* this branch's share of its fork's outgoing traversals — see [§3.3](#33-branch-percentage). |
 | `traversal_frequency`, `traversal_percentage` | replay-based — see [§9](#9-traversal-metrics-replay-on-the-model). |
@@ -166,9 +174,18 @@ statistics combine as:
 * `total_time` — **summed**;
 * `mean_time` — **frequency-weighted** mean of the pair means
   (`Σ meanᵢ·freqᵢ / Σ freqᵢ`), *not* the arithmetic mean of the means;
-* `median_time` — **only kept when the segment is a single pair**;
-  medians do not combine from summary statistics, so a multi-pair
-  segment reports no median rather than a wrong one.
+* `min_time` / `max_time` — the minimum / maximum over the pairs;
+* `median_time`, `std_time`, `p90_time`, `p95_time`, `case_frequency`
+  and `relative_frequency` — **only kept when the segment is a single
+  pair**. Medians, deviations and percentiles do not combine from
+  summary statistics, and distinct cases cannot be added across pairs,
+  so a multi-pair segment reports none of them rather than a wrong one.
+
+One annotation is written per segment, on its first arc (the one leaving
+the activity or the fork). An arc with no directly-follows evidence is
+left unannotated unless a traversal count exists for it
+([§9](#9-traversal-metrics-replay-on-the-model)) — which is the case for
+a silent skip.
 
 ### 3.3 Branch percentage
 
@@ -176,6 +193,17 @@ On an arc leaving an OR-fork, `percentage` is the branch segment's
 frequency divided by the sum of all the fork's branch segment
 frequencies. Branch percentages of a fork sum to 1 (100%). Percentage is
 undefined (and omitted) on arcs that do not leave an OR-fork.
+
+### 3.4 AND-fork branches
+
+Every case reaching an AND-fork runs **every** branch, but its
+directly-follows pair lands on only one of them — whichever branch
+happened to go first. Read literally, the branch counts would split the
+fork's inflow (`8 + 197 = 205`) and contradict the branch activities'
+own frequencies. So on an arc leaving an AND-fork, `frequency` (and
+`case_frequency`, where present) is the fork's **inflow** — the sum over
+its branch segments — on every branch. The waiting-time statistics stay
+the branch's own.
 
 ---
 
@@ -208,6 +236,10 @@ case:
 `duration.total` is the **sum** of case durations across the cell (added
 because it is a headline figure for effort/throughput comparisons). Case
 duration is **absent** (empty dict) when the log has no timestamps.
+
+The dashboards' `duration` metric is not this one on an interval log: it
+runs from the first to the last *completion*, leaving out the first
+event's lead-in ([`dashboards.md`](dashboards.md) §4).
 
 The single-timestamp case duration matches pm4py's
 `get_all_case_durations` exactly (validated on the claims log, all
@@ -297,11 +329,12 @@ the metric to behave, change it here first and let the test follow.
 |-----------|----------|-----------|
 | **Working calendars are not applied** (weekends, public holidays, shift/business hours) | All service, sojourn, waiting and case-duration times are **raw wall-clock** elapsed seconds — no non-working periods are subtracted. A gap spanning a weekend counts the full 48h+. | Calendars are organisation- and locale-specific; applying one would bake an assumption into every number. Consumers needing business-time can post-process with their own calendar. Documented so the wall-clock nature is explicit, not implied precision. |
 | **Overlapping activities on an interval log** (successor starts before predecessor completes) | Waiting time is reported **negative**, not clamped to 0. | The negative value is real information (resources worked in parallel / out of order); clamping hides it. Consumers that want non-negative waiting can clamp downstream. |
-| **Simultaneous (tied) timestamps** | Zero-duration edge; the pair is still counted. | A real adjacency with no measurable gap. |
+| **Simultaneous (tied) timestamps** | Zero-duration edge; the pair is still counted, in input row order. | A real adjacency with no measurable gap; the log's own order is the only evidence of which came first. |
 | **Single-event case** | Contributes to activity `frequency` and `case_coverage` but to no directly-follows pair. | It has no adjacency. |
 | **Timezone-aware timestamps** | Supported; differences are computed in true elapsed seconds. | — |
 | **First event of a case** | Excluded from sojourn (no predecessor). | Sojourn is defined relative to the previous event. |
-| **Multi-pair segment median** | Dropped (reported absent). | Medians cannot be combined from per-pair summaries without the raw samples. |
+| **Multi-pair segment median, std, percentiles, case frequency** | Dropped (reported absent); min and max are kept. | They cannot be combined from per-pair summaries without the raw samples ([§3.2](#32-aggregating-a-segment-over-several-pairs)). |
+| **AND-fork branch frequency** | The fork's inflow on every branch, not the branch's own directly-follows count. | Each case runs every branch; the pair count only records which went first ([§3.4](#34-and-fork-branches)). |
 | **Mixed int/float attribute values (partitioning)** | pandas dtype coercion may render `7` as `7.0`; this is a property of the frame, consistent across the vectorised and event-log paths. | Documented, not "fixed". |
 
 ---
@@ -314,7 +347,7 @@ The metrics are validated by four independent oracle strategies
 1. **Hardened distinct-value oracle** — a hand-computed fixture where
    every aggregate (min, median, mean, max, total) is a *different*
    number, asserted to the exact second. This catches mean↔median and
-   min↔max swaps that the older uniform-timing fixtures could not.
+   min↔max swaps, which a fixture with uniform timings cannot.
 2. **Invariants** — the algebraic identities of §2, §3 and §6 checked
    on random logs.
 3. **Metamorphic transforms** — duplicating cases scales counts/totals
@@ -366,8 +399,8 @@ A directly-follows pair `(a, b)` exists only when `b` immediately follows
 
 Both were observed on a 258-case clinical log: an activity with 257
 executions whose only outgoing edge read `40`; a fork with 197 inflow
-whose choice split `25`/`4`; and a death branch reported at `100 %` where
-the true figure is `25 %` (64 of 258).
+whose choice split `25`/`4`; and a branch whose alternative is a silent
+skip, reported at `100 %` where the true figure is `25 %` (64 of 258).
 
 ### 9.2 Definition
 
@@ -429,11 +462,18 @@ Two strategies, selected by `repair`:
   `traversal_frequency` can exceed the observed `frequency`. That gap is
   meaningful — it is how much the model over-claims.
 
-`TraversalStats` reports `fitting_cases`, `repaired_cases`,
-`unexplained_cases`, `coverage` and `fitting_ratio` so a consumer can
-state what the numbers cover. **`fitting_ratio` is the one to show a
-reader**; the web app puts it under the model's metrics row and, below
-70 %, points at the noise threshold as the knob that changes it.
+`TraversalStats` reports `total_cases`, `fitting_cases`,
+`repaired_cases` and `unexplained_cases` (the last three sum to the
+first), `coverage` = (fitting + repaired) / total and `fitting_ratio` =
+fitting / total, so a consumer can state what the numbers cover.
+**`fitting_ratio` is the one to show a reader**; the web app puts it
+under the model's metrics row and, below 70 %, points at the noise
+threshold as the knob that changes it.
+
+The counts themselves are `node_counts` (traversals per tree node — what
+the overlay shows), `node_cases` (distinct cases walking the node at
+least once) and `branch_counts` (per choice node, traversals per
+branch; they sum to the choice's own `node_counts` entry).
 
 ### 9.4 Alignment is bounded
 
@@ -454,6 +494,11 @@ coverage. Whatever is left unaligned is reported in
 either limit for the unbounded behaviour, or `repair=False` to skip
 alignment entirely.
 
+A third guard, `max_repair_sequences` (default 2 000), skips the repair
+phase altogether when the log has more *distinct* non-fitting sequences
+than that; `None` disables it. The shortfall is again visible as
+`unexplained_cases`.
+
 On that log the defaults bring the phase to about 10 s and lift coverage
 from 51 % (fitting only) to 63 %. On the bundled samples the budget is
 never reached — their alignments are milliseconds.
@@ -463,6 +508,9 @@ never reached — their alignments are milliseconds.
 Traversal counts are a function of the *parse*, not of the trace, so the
 work is deduplicated twice: once per distinct activity sequence (which is
 what saves the replay itself) and again per concurrency-aware signature
-(which is what the counts are keyed on). On the clinical log, 258 cases
-reduce to 111 distinct sequences and 14 signatures. Alignment repair
-likewise runs once per distinct non-fitting sequence.
+(which is what the counts are keyed on) — `n_sequences` and
+`n_signatures` on the result. On the clinical log, 258 cases reduce to
+111 distinct sequences and 14 signatures. Alignment repair likewise runs
+once per distinct non-fitting sequence. A caller that also clusters the
+log into behavioural variants can replay once and pass the shared
+`parses` table to `compute_traversal_stats`.

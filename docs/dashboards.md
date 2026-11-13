@@ -5,8 +5,11 @@ contract shipped to the browser
 ([`algo/dashboards/contract.py`](../pm4py_ucm/algo/dashboards/contract.py)),
 the metric catalog
 ([`algo/dashboards/catalog.py`](../pm4py_ucm/algo/dashboards/catalog.py)),
-and the computation engine
-([`algo/dashboards/engine.py`](../pm4py_ucm/algo/dashboards/engine.py)).
+the computation engine
+([`algo/dashboards/engine.py`](../pm4py_ucm/algo/dashboards/engine.py))
+and the page that carries them
+([`algo/dashboards/view.py`](../pm4py_ucm/algo/dashboards/view.py)).
+[§10](#10-python-api) lists the Python entry points.
 
 Dashboards *proposed* from the log — which widgets, and why — are specified
 separately in [`dashboard_suggestions.md`](dashboard_suggestions.md); they are
@@ -35,10 +38,9 @@ the app used.
 **The app's Dashboards view and the exported report are the same
 artifact**, built by
 [`view.dashboard_html`](../pm4py_ucm/algo/dashboards/view.py). The app
-embeds it in a `streamlit.components.v1.html` iframe; the export writes
-it to a file. The two outputs are byte-identical apart from the
-`readOnly` flag and the storage key — this is checked, not asserted by
-hand.
+embeds it in a sandboxed same-origin iframe (`st.iframe`); the export is
+that same document with its config swapped
+([§9](#the-page-exports-itself)).
 
 The engine therefore exists twice:
 
@@ -86,11 +88,43 @@ rejected:
 | IssueTracker | 11 284 / 100 k | 2.94 MB / 7.9 s | **0.92 MB / 0.1 s** |
 
 The encoding costs ~6 bytes per event plus ~8 bytes per case before
-base64's 4/3 expansion, so a 561 k-event log lands near 6 MB — comparable
-to the PNGs the family report already embeds. No sampling is needed for
-realistic logs; a byte budget (`max_payload_bytes`, default 24 MB) falls
-back to a deterministic case sample beyond it and records the true
-population in `sampled_from`, which the UI must surface.
+base64's 4/3 expansion, so a 561 k-event log lands near 6 MB. No sampling
+is needed for realistic logs. A byte budget (`max_payload_bytes`, default
+24 MB; `0` disables it) bounds the pathological case: when the estimated
+payload exceeds it *and* the log has more than `sample_cases` cases
+(default 40 000), that many cases are drawn with a fixed seed — so an
+export is reproducible — and the true population is recorded in
+`sampled_from`, which the UI must surface.
+
+The buffers, each declaring its own `dtype` so integer widths can widen
+without the decoder caring:
+
+| buffer | per | holds |
+|---|---|---|
+| `off` | case (+1) | CSR offsets: case *i* owns events `[off[i], off[i+1])` |
+| `start` | case | first event's time, epoch seconds |
+| `act` | event | index into `activities` |
+| `dt` | event | seconds since the case's `start` |
+| `res` | event | index into `resources` (absent when the log has no resource column) |
+| `sdt` | event | start timestamp, seconds since the case's `start` (interval logs only) |
+| `attr<i>`, `behaviour` | case | one column per case attribute: a dictionary index, or the raw number for a numeric attribute |
+
+Integer columns reserve their dtype's maximum as the *missing* sentinel;
+float columns use `NaN`. Both engines read either as "no value". The
+payload carries `version` (`CONTRACT_VERSION`), which the JS decoder
+checks.
+
+### Case attributes
+
+The attributes offered as filters and axes are the ones the Family view
+can partition on — the same detection and the same boolean / integer /
+enumeration typing ([`model_families.md` §1](model_families.md#partitioning)).
+An enumeration or boolean ships as a dictionary plus per-case codes, in
+the log's own spelling. A numeric attribute ships its raw per-case value
+plus bin edges, and the client assigns the bins: `bins` quantile bins
+(default 4), or — when the column holds fewer than 10 distinct whole
+numbers — one bin per value, so a 1..5 rating segments as its five
+levels whatever `bins` says.
 
 ### Why a fact table rather than pre-aggregated series
 
@@ -108,9 +142,10 @@ here can differ from the raw log by up to **1 second** across its two
 endpoints.
 
 This is deliberate: it keeps the delta buffers in `uint32`, halving the
-payload against `float64`, and it is orders of magnitude below the
-resolution of any metric in the catalog — durations are reported in days
-to one decimal, where a second is 1/8640th of the last displayed digit.
+payload against `float64`, and it is at or below the resolution of
+anything displayed — a duration of a day or more is shown in days to one
+decimal, where a second is 1/8640th of the last digit, and the finest
+unit a duration is ever shown in is the whole second.
 
 The timestamp *unit* is read from the dtype, never presumed:
 `pm4py.read_xes` yields `datetime64[ns]`, pandas 3 infers
@@ -125,6 +160,11 @@ kept in `dropped_events`. They cannot be kept: an unparseable timestamp
 has no position in a case's event order, and its `NaT` sentinel would
 reach the delta arithmetic and silently corrupt that case's start rather
 than fail.
+
+On an interval log, a *start* timestamp that does not parse, or that lies
+after its own event's completion, is marked missing rather than clamped
+to a zero-length service time that would drag every mean down. The event
+is kept; it simply has no service or waiting time.
 
 ---
 
@@ -201,9 +241,9 @@ reconcile — and the composer surfaces it on the affected metrics.
 
 | id | level | result | definition |
 |---|---|---|---|
-| `duration` | process | time | first to last event of the case. |
+| `duration` | process | time | first to last event of the case, by **completion** timestamp. |
 | `timeBetween` | process | time | first `from` to the first `to` **that follows it**. No value when `to` never follows `from`. |
-| `wip` | process | rate | cases open at each month boundary (a stock). |
+| `wip` | process | rate | cases open at each month boundary — started at or before it, last event after it (a stock). |
 | `arrivalRate` / `completionRate` | process | rate | cases starting / ending within each month (flows). |
 | `eventCount` | process | count | events in the case. |
 | `rework` | process | percent | 1 when any activity occurs more than once in the case. |
@@ -215,7 +255,7 @@ reconcile — and the composer surfaces it on the affected metrics.
 | `actService` | activity | time | start to completion. **Interval logs only.** |
 | `actWaiting` | activity | time | previous event's completion to this activity's start. **Interval logs only.** Negative values are kept — they mean real concurrency, not an error. |
 | `edgeFreq` | edge | count | directly-follows traversals of `from → to` within the case. |
-| `edgeTime` | edge | time | elapsed time across the `from → to` step. |
+| `edgeTime` | edge | time | elapsed time across the `from → to` step, completion to completion. |
 | `edgeShare` | edge | percent | share of cases taking `from → to` **among those reaching `from`**. |
 
 `actRepeats` and `actRework` both describe rework and differ in what they
@@ -223,6 +263,34 @@ count and over whom — see [`metrics.md`](metrics.md) §2, which also sets
 them against the model overlay's `repeat_frequency`. As a count,
 `actRepeats` displays as a whole number, so an average of 0.3 reads "0";
 `actRework` is the one to chart.
+
+Result types, which fix the unit and the aggregations offered:
+
+| result | per-case value | unit | aggregations |
+|---|---|---|---|
+| `time` | a duration in **days** | `d` | `avg` `median` `p90` `sum` `min` `max` |
+| `count` | a cardinality | `n` | `avg` `median` `p90` `sum` `min` `max` |
+| `percent` | a 0/1 indicator | `%` | `share` only — any other `agg` in a spec is overridden |
+| `rate` | none: a monthly series | `n` | `avg` `median` `p90` `max`, over the months |
+
+The three `rate` metrics are **series metrics**. They are not per-case
+values but one point per calendar month from the first case start to the
+last case end, computed over the cases surviving the filters. The
+widget's `value` aggregates those monthly points, and its segment axes
+are ignored — the month is the axis. A case whose last event is not a
+real ending is still "ended" at that event: the log cannot tell *still
+running* from *ended silently*.
+
+Where a definition here and one in [`metrics.md`](metrics.md) share a
+name, two differences are deliberate. `duration` runs from the case's
+first to its last *completion* on every log, whereas the family report's
+case duration starts at the earliest `start_timestamp` on an interval
+log (`metrics.md` §4) — so the report's figure is longer by the first
+event's lead-in. And the activity time metrics are case-weighted
+([§3](#case-weighted-vs-event-weighted)).
+
+A metric naming an activity the log does not have is not an error:
+counts and presence are 0, times are missing.
 
 Interval-only metrics stay **visible** in the composer on a
 single-timestamp log, marked unavailable with a reason, rather than
@@ -241,26 +309,35 @@ only data the fact table exposes. Full grammar and semantics are in the
 module docstring of
 [`formula.py`](../pm4py_ucm/algo/dashboards/formula.py); the short form:
 
-* functions: `duration()`, `contains(act)`, `count(act)`,
-  `time_between(a, b)`, `timestamp(act)`, `attr(name)`;
-* `+ - * /`, comparisons, `and` / `or` / `not`, parentheses;
+* functions: `duration()` (days), `contains(act)` (0/1), `count(act)`,
+  `time_between(a, b)` (days; null when `b` never follows `a`),
+  `timestamp(act)` (epoch seconds of the first `act`), `attr(name)`;
+* `+ - * /`, the comparisons `== != > >= < <=`, `and` / `or` / `not`,
+  parentheses;
 * a trailing `where <predicate>` that drops non-matching cases to null.
 
-**One value type.** Every expression evaluates, per case, to a number or
-null — there are no strings at runtime; strings are only the *names*
-inside a call. That single type is what keeps the grammar agreeing
-between the Python evaluator and the JS one, with no string/number
-coercion to get subtly wrong in two languages. `null` (a missing time, an
-absent attribute) propagates and is dropped by aggregation, exactly as
-everywhere else.
+In a widget spec a formula is `"metric": "custom"` with
+`"params": {"formula": "…"}`. A formula that does not parse evaluates to
+null for every case, so a widget carrying one renders `—` rather than
+taking the dashboard down; the composer is where it is validated.
 
-**Only numeric attributes.** `attr(name)` reads a *numeric* case
-attribute; a categorical one is filtered with the widget's Filter row.
-This keeps the whole grammar single-typed. Numeric here means the
-*values* are numbers, not the column's dtype — an amount the log
-serialises as text counts, and so is available to `attr()`. Identifier
-columns (`org:resource` and friends) never do, however numeric they
-look.
+**One value type.** Every expression evaluates, per case, to a number or
+null — there are no strings at runtime. That single type is what keeps
+the grammar agreeing between the Python evaluator and the JS one, with
+no string/number coercion to get subtly wrong in two languages. `null`
+(a missing time, an absent attribute) propagates and is dropped by
+aggregation, exactly as everywhere else.
+
+**Attributes.** `attr(name)` reads a *numeric* case attribute, for
+arithmetic and inequalities. Numeric here means the *values* are
+numbers, not the column's dtype — an amount the log serialises as text
+counts. Identifier columns (`org:resource` and friends) never do,
+however numeric they look. A categorical attribute is read through the
+one place a string may appear outside a call: as the other side of an
+equality, `attr("Channel") == "Web"` (or `!=`). The string is matched
+against the attribute's value dictionary and the comparison yields
+1 / 0 / null, so nothing string-valued exists at runtime; a bare string
+anywhere else is an error.
 
 **Result type** is inferred from the AST — a comparison, a logical, or a
 bare `contains()` is a 0/1 indicator → `percent`; anything mentioning a
@@ -299,13 +376,23 @@ defaults the two engines print different strings for the same value, and
 a KPI reading 5.2 in the app and 5.3 in the export is indistinguishable
 from a bug.
 
+What is printed (`text`), by unit: a percentage keeps one decimal; a
+count is a whole number with thousands separators; a duration — held in
+days — is shown in the largest unit that keeps it legible: days (one
+decimal, none from 100 d up), else hours, else minutes, else whole
+seconds. A group with no value prints `—`.
+
 ---
 
 ## 5. Segmentation
 
-Axes: `year`, `quarter`, `month`, `weekday`, `resource`, `variant`, and
-one per detected case attribute (`attr:<name>`).
+Axes: `year`, `quarter`, `month`, `weekday`, `resource` (when the log
+has a resource column), `variant`, and one per detected case attribute
+(`attr:<name>`). A spec's `segment` holds up to two, as `rows` and
+`cols`.
 
+* **Time axes read the case's start** — its first event. Labels are
+  `2011`, `2011-Q1`, `2011-01`, `Mon`.
 * **Weekday is Monday-first.** (Epoch day 0 was a Thursday = index 3.)
 * **`resource` is the case's first event's resource.** A case has many
   resources; an axis needs one. Whoever opened the case is the
@@ -316,10 +403,17 @@ one per detected case attribute (`attr:<name>`).
 * **Variants are ranked by frequency**, so `v1` is always the most common
   path — and means the same variant in both engines.
 * **Binned numeric attributes** use `[lo, hi)` bins with the last closed
-  on both ends — the family partitioner's convention, so a dashboard
-  segmented by an attribute agrees with a family grid partitioned on it.
+  on both ends — the family partitioner's convention. The two agree on
+  the edges when both use quantile bins with the same `bins`; they can
+  differ on *when* a column is kept as discrete levels (here: fewer than
+  10 distinct whole numbers; the partitioner: at most `bins` of them —
+  [§2](#case-attributes)).
+* **A case with no value on an axis is in no segment.** A missing
+  attribute, or a case with no resource, leaves the widget rather than
+  forming a bucket of its own.
 * **Empty segments are omitted, not zeroed.** A segment with no surviving
-  case is not a zero bar.
+  case is not a zero bar. In a two-axis table, a row or column with no
+  case is dropped and an empty cell inside the grid renders `—`.
 
 ### The Activity axis
 
@@ -379,9 +473,9 @@ the next section.
 ### Filtering by date
 
 The `date` filter — `{field: "date", value: [from, to]}`, ISO dates,
-either end nullable for an open range, the final period inclusive — has
-always been in the engine; the filter picker now offers a **Date range**
-option that produces it, its inputs seeded from the log's first and last
+either end nullable for an open range, the final period inclusive — is
+matched against the case **start**. The filter picker's **Date range**
+option produces it, its inputs seeded from the log's first and last
 case-start dates (`dateSpan` in the browser engine).
 
 ---
@@ -481,15 +575,21 @@ are announced:
   "top 24 of 164"; the target state still considers every segment. **Time
   axes are exempt** — their order carries the meaning, and reordering by
   value would destroy it.
-* **Pie** keeps the largest `PIE_CAP` (8) and folds the tail into one
-  *Other* slice, labelled with how many it swallowed. A pie stops being
-  readable long before a bar does.
+* **Pie** draws at most `PIE_CAP` (8) slices: past that it keeps the
+  largest seven and folds the tail into one *Other* slice, labelled with
+  how many it swallowed. A pie stops being readable long before a bar
+  does. Only positive values are drawn.
 
 ## 7. Targets
 
-A target is `{on, dir, value, warn, mode}`. `warn` is the threshold
-between *at risk* and *missed*, on the far side of `value`: a `<=` target
-with value 14 and warn 18 reads "meet 14, tolerate 18, miss beyond".
+A target is `{on, dir, value, warn, mode}`, with `dir` either `"<="`
+(less is better) or `">="`. `warn` is the threshold between *at risk*
+and *missed*, on the far side of `value`: a `<=` target with value 14
+and warn 18 reads "meet 14, tolerate 18, miss beyond". It defaults to
+`value`, which leaves no *at risk* band. `value` and `warn` are in the
+metric's unit — **days** for a time metric, percentage points for a
+`percent` one. A target with `on: false` scores nothing; a group with no
+value has no state.
 
 Two modes:
 
@@ -498,12 +598,18 @@ Two modes:
 * **`per_case`** — score every case, then report the **share that met** as
   the group's value: *are 90% of cases within 14 days?* The distribution
   across met/risk/missed feeds the tri-colour bar. A share needs its own
-  threshold to have a state at all, so it is scored against `shareGoal` /
-  `shareWarn`.
+  threshold to have a state at all, so it is scored (as a `>=` target)
+  against `shareGoal` / `shareWarn`, two further fields of the target;
+  without a `shareGoal` the share is reported but has no state.
 
 **Scoring is per segment, and a widget rolls up to its worst segment.** A
 heatmap of 40 segments with one breach is a breach; reporting its average
 state would hide exactly the cell the reader needs.
+
+The **scorecard** is one row per widget whose target is on — title, goal,
+actual, state and case count — computed under the same dashboard filters
+as the widgets. In `per_case` mode its goal is the share goal ("≥ 90% of
+cases"), not the per-case threshold.
 
 ---
 
@@ -526,17 +632,57 @@ these plus a dashboard-level filter list.
 }
 ```
 
-Dashboard filters stack **on top of** each widget's own filter, so a
-reader-side filter narrows every widget without editing any of them.
+| field | meaning |
+|---|---|
+| `id` | unique within the dashboard; reorder and edit key off it. |
+| `title` | the card's heading; defaults to the metric's label. |
+| `metric` | a catalog id ([§4](#4-metric-catalog)), or `custom` for a ƒ formula. |
+| `params` | the metric's parameters: `activity`, or `from` / `to`; `formula` for `custom`. |
+| `agg` | one of the aggregations the metric's result type offers; defaults to the metric's own. |
+| `filter` | a list of filters, below. |
+| `segment` | `{rows, cols}`, each an axis of [§5](#5-segmentation) or absent. |
+| `viz` | a shape of [§6](#6-visualisations-and-their-guards); defaults to `kpi`. |
+| `target` | [§7](#7-targets); optional. |
+| `size` | `{w, h}` grid span, set when the user resizes the card; overrides the shape's default ([Layout](#layout)). |
+| `statusColors` | tables only: colour cells by target state instead of by value. |
+| `why` | set on suggested widgets only ([`dashboard_suggestions.md`](dashboard_suggestions.md) §2.1); the engines ignore it. |
 
-Filter fields: `contains` (activity), `date` (case start, inclusive of
-the whole final period), `resource`, `attr:<name>`, and `segment` — the
-drill-down a table cell click produces.
+Dashboard filters stack **on top of** each widget's own filter, so a
+reader-side filter narrows every widget without editing any of them. All
+filters AND together. Each is `{field, op, value}`:
+
+| `field` | `op` | `value` |
+|---|---|---|
+| `contains` | `is`, `not` | an activity name — the case contains it (or not). |
+| `date` | `between` | `[from, to]` ISO dates against the case start; either may be null; the final period is included whole. |
+| `resource` | `is`, `in`, `not` | a resource or a list, against the case's first-event resource. |
+| `attr:<name>` (enumeration, boolean) | `is`, `in`, `not` | a value or a list. |
+| `attr:<name>` (numeric) | `is`, `not`, `>`, `>=`, `<`, `<=`, `between` | a number, or `[lo, hi]` (inclusive) for `between`. A case with no value never matches, `not` included. |
+| `segment` | `is`, `not` | `[axis, label]` — the drill-down a bar or table-cell click produces. |
+
+A filter on a resource or attribute the log does not have passes every
+case rather than none, so a definition loaded on another log degrades to
+"unfiltered"; the loader reports the unbound name
+([§9](#save-and-load-a-definition)).
 
 `compute_widget` returns **data, not styling**: values, states, labels
 and counts. The Streamlit view and the exported HTML render from the same
 structure, so a widget looks the same in both because they read one
-computation, not two.
+computation, not two. Every result carries `id`, `title`, `viz`, `unit`,
+`resultType`, `agg`, `nCases` (cases surviving the filters) and
+`sampled`, then by shape:
+
+* no axis — `value`, `text`, `state`, `sub` (the caption), plus
+  `distribution` in `per_case` mode and `hist` / `box` for those shapes;
+* one axis — `axis` and `series`: `[{label, value, text, state, nCases}]`,
+  with the unsegmented `value` / `text` alongside;
+* two axes — `rowsAxis`, `colsAxis`, `rows`, `cols` and `cells[r][c]` =
+  `{value, text, state, nCases}`;
+* a series metric — `series`: `[{label, value}]` per month, and the
+  aggregated `value`.
+
+`state` on a segmented widget is its worst segment's
+([§7](#7-targets)).
 
 ---
 
@@ -544,11 +690,31 @@ computation, not two.
 
 ### Where state lives
 
-In the browser. `components.html` is one-way — it cannot send state back
-to Python — and the export has no server at all, so widget specs persist
-to `localStorage`, namespaced per log so two logs never share a
-dashboard. `window.pmDashboard.exportSpecs()` reads them back out; that
-is the only channel out of the iframe.
+In the browser. An embedded HTML document is one-way — it cannot send
+state back to Python — and the export has no server at all, so widget
+specs persist to `localStorage`, namespaced per log (`storage_key`,
+default the log name) so two logs never share a dashboard.
+`window.pmDashboard.exportSpecs()` reads the current widgets back out.
+
+An editable page holds a **set of named dashboards**, not one: the header
+switches between them, adds, renames and deletes, and each keeps its own
+widgets and filters. The `specs` passed to `dashboard_html` only seed the
+first dashboard of a log that has none saved; after that the browser's
+set wins.
+
+The host has two ways in, both through the page config, because it
+cannot reach the widgets directly:
+
+* `pending_pin` — `{id, spec}`, a widget to add, as *Pin to dashboard*
+  on the Model view does. The config is re-sent on every rerun, so `id`
+  must be fresh per request; the page remembers the ids it has applied.
+* `suggestions` — dashboards to offer behind **✦ Suggest**
+  ([`dashboard_suggestions.md`](dashboard_suggestions.md) §2.4).
+
+The web app's saved projects read the dashboard set out of the browser,
+and write it back on resume, through a separate component —
+[`sessions.md` §11](sessions.md#11-dashboards--the-bridge). Nothing in
+this package depends on it.
 
 ### Read-only
 
@@ -569,13 +735,16 @@ The architectural one: the document already carries the engine, the
 renderer and the whole fact table with no external reference. A copy of
 it with the config swapped *is* the export. Nothing needs building.
 
-The practical one: `components.html` is one-way, so Python does not know
+The practical one: the embed is one-way, so Python does not know
 which widgets the user built — they live in this browser. An export
 produced server-side would confidently ship the **default** dashboard
 instead of theirs.
 
 The export carries the current widgets *and the current filters*, so a
-dashboard sent to answer a specific question opens on that question.
+dashboard sent to answer a specific question opens on that question. An
+*export all* writes every named dashboard into one read-only page whose
+header still switches between them (`dashboards` / `active` in the
+config).
 
 ### Save and load a definition
 
@@ -612,8 +781,8 @@ carried only when the definition came from that same log; otherwise they
 are dropped and noted.
 
 Save/Load lives in the island, next to Export, for the same reason Export
-does: `components.html` is one-way, so the widgets live in the browser and
-only the browser can serialise them.
+does: the widgets live in the browser and only the browser can serialise
+them.
 
 ### Light and dark
 
@@ -674,8 +843,11 @@ the invariant is "the document is not truncated".
 The single-dashboard export above is one shape; the **session report** is
 the other — a multi-section document with a left table of contents, a
 reader filter bar that recomputes everything, a scorecard landing, the
-dashboard(s), and a process-model section with both notations as inline
-SVG (zoom with the wheel, pan by dragging, offline). One artifact serves
+dashboard(s), a process-model section with both notations as inline
+SVG (zoom with the wheel, pan by dragging, offline) and, when a family
+has been mined, its statistics report
+([`model_families.md` §3](model_families.md#3-family-statistics-reports))
+in a frame of its own (`family_report`). One artifact serves
 both shapes: the page bootstrap boots a `Report` when `cfg.mode ===
 "report"` and a `Dashboard` otherwise.
 
@@ -724,10 +896,14 @@ the identical `scriptJson`.
 ### Layout
 
 CSS grid, 4 columns, 118px rows, `grid-auto-flow: dense`. KPI 1×1;
-bar/line/table 2×2; a table with more than five data columns and the
+every other shape 2×2; a table with more than five data columns and the
 model widget take the full width. Below 900px it folds to 2 columns.
 Wide content scrolls inside its own card — the page never scrolls
 sideways.
+
+On an editable page a card can be dragged by its grip to reorder, and
+resized from its corner, up to 4 × 4 cells; the span is stored on the
+spec (`size`), so it survives a save, an export and a definition file.
 
 ### Honesty in the UI
 
@@ -737,3 +913,39 @@ when the numbers are not the whole truth: a sampled fact table shows
 table cells carry `✓ / ! / ✕` as well as a colour, because colour alone
 is not a signal every reader can see. An empty segment renders `—`, never
 a zero.
+
+---
+
+## 10. Python API
+
+Everything is importable from `pm4py_ucm.algo.dashboards`; none of it is
+re-exported at the package root.
+
+```python
+import pm4py
+from pm4py_ucm.algo.dashboards import (
+    build_fact_table, compute_widget, scorecard, write_dashboard,
+)
+
+log = pm4py.read_xes("demo/ClaimsPaymentLog.xes")
+table = build_fact_table(log, log_name="ClaimsPaymentLog")
+
+spec = {"id": "w1", "metric": "duration", "agg": "median",
+        "segment": {"rows": "attr:Country"}, "viz": "bar",
+        "target": {"on": True, "dir": "<=", "value": 14, "warn": 18}}
+widget = compute_widget(spec, table)          # data, not styling (§8)
+rows = scorecard([spec], table)               # one row per targeted widget
+
+write_dashboard("claims.html", table, specs=[spec], read_only=True)
+```
+
+| | |
+|---|---|
+| `build_fact_table(log_df, *, log_name, bins, max_payload_bytes, sample_cases, behaviour, …_col)` | the fact table of [§2](#2-the-fact-table); `FactTable.to_payload()` is what ships. |
+| `CATALOG`, `BY_ID`, `catalog_json(interval_log=…)` | the metric catalog of [§4](#4-metric-catalog). |
+| `per_case_values`, `series_values`, `aggregate`, `apply_filters`, `segment_axes`, `segment_keys`, `target_state`, `worst_state`, `fmt` | the engine's building blocks. |
+| `compute_widget(spec, table, *, dashboard_filters=None)`, `scorecard(specs, table, *, dashboard_filters=None)` | one widget, and the targets table. |
+| `compile_formula(text)`, `parse_formula`, `result_type`, `FUNCTIONS`, `FormulaError` | the ƒ grammar. |
+| `predicate_case_ids(log_df, formula)` | the case ids for which a ƒ predicate is true, over the whole (never sampled) log — a log filter. Raises `FormulaError` on a bad formula. |
+| `dashboard_html(table, *, specs, filters, name, read_only, renders, storage_key, title, theme, …)`, `write_dashboard(path, table, **kwargs)` | the self-contained page of [§9](#9-the-view). |
+| `suggest_dashboards(table, *, max_widgets=10)` | [`dashboard_suggestions.md`](dashboard_suggestions.md). |

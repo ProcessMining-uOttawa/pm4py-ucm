@@ -7,14 +7,21 @@ resulting UCM both as a renderable PNG diagram and as a jUCMNav-compatible
 
 It requires ``pm4py`` to be installed::
 
-    pip install pm4py
+    pip install "pm4py-ucm[pm4py]"
 
 Usage::
 
     python examples/inductive_mining.py path/to/log.xes [output_dir]
+    python examples/inductive_mining.py demo/IssueTracker.xes   # from the repo root
 
-If no log path is supplied the script falls back to PM4Py's bundled
-``running-example`` log (when available).
+If no log path is supplied the script looks for the ``running-example`` log
+inside the PM4Py installation. That file is part of PM4Py's source tree, not
+of the package pip installs, so without a path the script normally stops
+with ``FileNotFoundError``.
+
+The script mines the tree itself and calls ``convert_to_ucm`` to show the two
+steps; ``pm4py_ucm.discover_ucm_inductive(log)`` does both, and also mines
+performers into components.
 """
 
 from __future__ import annotations

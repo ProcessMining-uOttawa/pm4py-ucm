@@ -1,25 +1,29 @@
 # pm4py-ucm web front-end
 
-A [Streamlit](https://streamlit.io) front-end for the `pm4py-ucm` package.
-Upload an event log (XES or CSV) and, from a left-rail workspace, mine and
-render **UCM models** (UCM or BPMN notation, PNG and navigable **SVG**),
-synthesize executable **scenarios**, mine attribute **model families**,
-**compare** family members, and build interactive **dashboards** —
-downloading `.jucm`, standard **BPMN 2.0**, CSV, SVG/PNG, and self-contained HTML at every step.
-A global **pre-mining log filter** (keep activities / trace-variants by
-frequency rank, exclude activities, restrict a date window) and **activity
-renaming** (relabel / merge activities before mining) apply to every view
-and its exports, and the filtered event log is itself downloadable as
-**XES + CSV**.
+A [Streamlit](https://streamlit.io) front-end for the `pm4py-ucm` package,
+deployed at <https://pm4py-ucm.streamlit.app/>. Load an event log (XES or
+CSV) and, from a left-rail workspace, mine and render **UCM models** (UCM or
+BPMN notation, as navigable SVG), synthesize and simulate executable
+**scenarios**, mine attribute **model families**, **compare** family
+members, and build interactive **dashboards** — downloading `.jucm`,
+standard **BPMN 2.0**, CSV, SVG/PNG and self-contained HTML along the way.
 
-Since v0.7.0 the deployed app is **V5** (the workspace shell + Dashboards,
-with a global pre-mining log filter and activity renaming), a strict
-superset of the earlier four-tab V3 and workspace V4 apps.
+The app is **V6**, `streamlit_app_v6.py`; `streamlit_app.py` is a shim that
+runs it. Everything before V6 is deprecated — see
+[Deprecated app versions](#deprecated-app-versions).
 
-Since v0.7.12 the deployed app is **V6** (`streamlit_app_v6.py`), a superset
-of V5 that adds a cost screen ahead of mining — see
-[The cost screen (V6)](#the-cost-screen-v6). `streamlit_app.py` shims it, so
-the public URL serves it.
+- [Run locally](#run-locally)
+- [The views](#the-views)
+- [Using the app](#using-the-app): [log](#1--pick-or-upload-a-log) ·
+  [CSV mapping](#2--csv-column-mapping-csv-uploads-only) ·
+  [cost screen](#3--the-cost-screen) · [sidebar](#4--sidebar) ·
+  [Model](#5--model) · [Scenarios](#6--scenarios) · [Family](#7--family) ·
+  [Compare](#8--compare) · [Dashboards](#9--dashboards) ·
+  [projects](#10--save-share--resume-a-project)
+- [Deploy to Streamlit Community Cloud](#deploy-to-streamlit-community-cloud)
+- [Robustness & security notes](#robustness--security-notes)
+- [Deprecated app versions](#deprecated-app-versions)
+- [Layout](#layout)
 
 ## Run locally
 
@@ -34,192 +38,88 @@ python -m venv .venv
 # source .venv/bin/activate       # macOS/Linux
 
 pip install -r web/requirements.txt
-streamlit run web/streamlit_app_v6.py     # V6 — the current app
-# Every older app is DEPRECATED. They still run — and say so on start-up —
-# so older results stay reproducible:
-# streamlit run web/streamlit_app_v5.py   # V5 — deprecated
-# streamlit run web/streamlit_app_v3.py   # V3 — deprecated
-# streamlit run web/streamlit_app_v2.py   # V2 — deprecated
+streamlit run web/streamlit_app_v6.py
 ```
 
 Streamlit opens `http://localhost:8501`.
 
-The web-specific deps (`streamlit`, `pm4py`, `scikit-learn`) live in
-`web/requirements.txt` so they stay out of the package's own dev workflow
-(`pip install -e ".[dev]"`). `scikit-learn` is also a runtime dependency of
-the package itself as of 0.7.11; it is needed by the data-driven scenario
-condition mining (the option greys out when it is missing).
+`web/requirements.txt` holds what the app needs beyond the package:
+`streamlit` (1.57 or later, below 2), `pm4py` (an optional extra of the
+package, so it is listed explicitly) and `-e .`, the package itself with its
+core dependencies. `-e .` resolves against pip's working directory — the
+repo root, both locally and on Streamlit Cloud — so a change to the library
+is picked up on the next rerun (locally) or deploy (on the Cloud).
 
-## The app and its views
+## The views
 
-**`streamlit_app_v6.py`** (**V6**) is served at
-https://pm4py-ucm.streamlit.app/ via the `streamlit_app.py` shim (that
-deployment's main file). A left rail switches between five views over the
-loaded log:
+A left rail switches between five views over the loaded log. The sidebar
+settings, the log filter and the activity renaming apply to all of them.
 
-- **Model** — mine a UCM, preview it in UCM or BPMN notation as a zoom /
-  pan **SVG** (click a stub to jump to its plug-in map), and download the
-  SVG, a raster PNG, the `.jucm`, or a standard **BPMN 2.0** file.
-  Decomposition is honoured across all maps. A global **log filter** (range sliders over the activity- and
-  variant-frequency ranks, an exclude list, and a date-range slider) and
-  **activity renaming** (relabel / merge activities before mining) apply to
-  every view and its exports; the filtered log is downloadable as XES + CSV.
+- **Model** — mine a UCM and preview it in BPMN or UCM notation as a zoom /
+  pan SVG (click a stub to jump to its plug-in map), with a performance
+  overlay and heat-map. Download the SVG, a PNG, the `.jucm`, a standard
+  BPMN 2.0 file, or the (filtered) event log.
 
   ![Model view](PM4Py-UCM-Model.png)
 
-- **Scenarios** — concurrency-aware variant clustering + one executable
-  jUCMNav `ScenarioDef` per variant. A single **Prepare downloads** button
-  builds the `.jucm` (carrying the `<scenarioGroups>`), `variants.csv`,
-  `case_variant_map.csv`, and (data-driven mode only) `condition_mining.csv`
-  on request. Both variant-driven and data-driven OR-fork encodings are
-  exposed.
+- **Scenarios** — concurrency-aware variant clustering and one executable
+  jUCMNav `ScenarioDef` per variant, with variant-driven or data-driven
+  OR-fork conditions.
 
   ![Scenarios view](PM4Py-UCM-Scenarios.png)
 
-  A **Simulation** section at the bottom then *runs* those scenarios the way
-  jUCMNav does — a token per enabled start point, an OR-fork taking the branch
-  whose guard holds, an AND-join waiting for every arm — and reports what
-  jUCMNav's Problems view would. It then colours the model with what the run
-  walked: **Coverage** of any subset of scenarios, split into elements and
-  paths, or **Compare A vs B** painting one scenario green, the other orange
-  and the shared part purple. Every element is hoverable, the choice is saved
-  with the project, and the same selection exports the event log reduced to
-  those variants.
+  A **Simulation** section then runs those scenarios the way jUCMNav does
+  and colours the model with what they walked: coverage of any subset, or
+  two scenarios compared.
 
   ![Scenario execution](PM4Py-UCM-Simulation.png)
 
-- **Family** — partition the log by 1–2 case attributes and mine one model
-  per combination. A single **Prepare downloads** button then builds the
-  per-cell zip / combined `.jucm` / dynamic-stub umbrella `.jucm` / grid PNG
-  / interactive HTML statistics report — download-only artifacts built only
-  when you ask, so mining a family just to browse the grid stays fast.
-  (The grid SVG is already vector-quality on screen.)
+- **Family** — partition the log by one or two case attributes and mine one
+  model per combination, shown as a grid.
 
   ![Family view](PM4Py-UCM-Family.png)
 
 - **Compare** — rank the family members on heat-mapped statistics tables
-  (including total case durations) and compare any two side by side:
-  models (SVG), per-activity/edge deltas, aligned OR-fork branch shares.
+  and compare any two side by side.
 
   ![Compare view](PM4Py-UCM-Compare.png)
 
-- **Dashboards** — build widgets from a metric catalog (KPIs, segmented
-  bars and tables), narrow them with filters, set targets and a
-  scorecard, write custom metrics in the **ƒ formula language**, and
-  export a self-contained interactive HTML dashboard (or a multi-section
-  session report). **✦ Suggest** proposes whole dashboards from the log
-  itself, each widget with its reason.
+- **Dashboards** — build widgets from a metric catalog, or let
+  **✦ Suggest** propose whole dashboards from the log, and export them as
+  self-contained interactive HTML.
 
   ![Dashboards view](PM4Py-UCM-Dashboard.png)
-
-### App versions — everything before V6 is deprecated
-
-V6 is V5 plus the cost screen below and the Scenarios view's Simulation
-section. **Every older app is deprecated**: kept runnable so older results
-stay reproducible, rendering a notice at the top when you start it, but
-receiving no new features. Concretely, they still *save* every session
-parameter — each keeps a gather covering the whole registry, so their Save
-button works — but only V6 *restores* the newer ones.
-
-| App | File | Status |
-|---|---|---|
-| **V6** | `streamlit_app_v6.py` | **Current**, and what `streamlit_app.py` shims for https://pm4py-ucm.streamlit.app/ |
-| V5 | `streamlit_app_v5.py` | Deprecated. Workspace shell + Dashboards; no cost screen, no Simulation |
-| V3 | `streamlit_app_v3.py` | Deprecated. The four-tab app, a strict subset of V5 |
-| V2 | `streamlit_app_v2.py` | Deprecated. Model + scenarios; was frozen for a paper, no longer |
-| V4 | — | Removed; a strict subset of V5, in git history |
-| V1 | — | Removed at v0.5.1 (model only) |
-
-`streamlit_app_v2.py` (model + scenarios) was **frozen** rather than merely
-deprecated for as long as a paper under review pointed at the second
-deployment, `pm4py-ucm-scenarios.streamlit.app`: byte-for-byte
-unchangeable, and the one app rendering no deprecation notice, because a
-banner would have changed what the reviewers saw. That paper has been
-accepted and its final version points at the main app, so the freeze is over
-and that deployment has been **deleted**. There is one deployment now,
-serving V6; V2 is deprecated on the same terms as the rest.
-
-## The cost screen (V6)
-
-On a log with a large alphabet or near-unique cases the miner can run for
-minutes, or not finish. V6 screens the log **before** mining and, when it
-looks expensive, stops to say so rather than spending the time silently.
-
-The verdict is a **reason, not an ETA** — the statistics that rank logs
-correctly cannot time them. The panel shows activities / cases / events /
-variants (as *kept / original* once a filter is on) and what tripped the
-screen. Reducing the log is the only remedy that keeps the model usable;
-faster miner settings return a flower model with every activity and no
-control flow, which leaves nothing to cluster or synthesize from.
-
-### The two one-click reductions
-
-The gate offers the two reductions that address the two conditions it
-screens for:
-
-* **Keep the N most frequent variants** — drops rare *behaviour*, keeping
-  every activity. Usually the bigger win, because the number of distinct
-  sequences drives the cost.
-* **Keep the N most frequent activities** — drops rare *activities*; they
-  disappear from the model and the alphabet shrinks.
-
-Both apply, in either order, and each re-checks the log afterwards so you
-can apply the second before mining. Each appears in the sidebar's **Log
-filters** with its own *Remove* button, survives a refresh, and travels in a
-saved project.
-
-Each reduction is recorded as **what it selected** — the variant one keeps
-the *cases* it picked on the log as it stood when you clicked it, the
-activity one names the *activities*. They are deliberately not stored as
-"top N by rank", because a rank is relative to a population and every other
-filter moves it: re-reading "the top 2,000 variants" after an activity
-reduction had collapsed the log to fewer than 2,000 selected all of them,
-silently restoring every case the reduction had dropped.
-
-### The replay gate
-
-The model itself is cheap once mined; the replay-based metrics (coverage,
-traversal counts) are a second pass that on a big log dominates everything.
-Unlike mining, that cost *can* be measured, so V6 probes rather than
-guesses. Most logs finish inside the probe and are never interrupted; when
-they do not, you are told the estimate and can compute the metrics, drop
-them, or defer. Time metrics such as sojourn are read straight from the log
-and are computed either way.
-
-Answering the prompt changes only the metrics — the mined model and the log
-filters stay exactly as they were.
 
 ## Using the app
 
 ### 1 · Pick or upload a log
 
-Two tabs at the top of the page:
+The **Log source & columns** panel at the top of the page has two tabs:
 
-- **Sample log** — pick one of the bundled XES logs and click **Load
-  sample**. This is the quickest way to try the tool when you don't
-  have an event log handy. Extending the list is just dropping more
-  `.xes` / `.xes.gz` / `.zip` files into [`web/samples/`](samples) —
-  the selector picks them up automatically on next deploy / restart.
-- **Upload your own** — the file uploader accepts:
-  - **`.xes`** / **`.xes.gz`** — standard XES files are mined directly.
+- **Sample log** — pick one of the bundled logs and click **Load sample**.
+  The list is whatever is in [`web/samples/`](samples): drop in a `.xes`,
+  `.xes.gz`, `.zip` or `.csv` file and it appears on the next start, named
+  after the file (underscores become spaces, extensions stripped).
+- **Upload your own** — the uploader accepts:
+  - **`.xes`** / **`.xes.gz`** — mined directly.
   - **`.zip`** — searched for the first `.xes` / `.xes.gz` entry inside.
-  - **`.csv`** — a column-mapping section appears after upload (see step 2).
-  - Upload cap is **1 GB when running locally** and **75 MB on the
-    public Community Cloud deployment**. The server layer allows 1 GB
-    everywhere (`.streamlit/config.toml`); the app enforces the tighter
-    75 MB when it detects it's running on Community Cloud (via the
-    `HOSTNAME` / `/mount/src` fingerprints). Self-hosted deployments
-    (Docker on your own VM, an on-prem server, …) get the local 1 GB
-    ceiling by default.
+  - **`.csv`** / **`.csv.gz`** — a column-mapping section appears after
+    upload (step 2).
 
-Once a log is chosen (from a sample or an upload) its bytes are cached
-for the rest of the session. Changing notation / decomposition /
-performer settings re-uses the same log, so you never have to re-pick
-or re-upload to try a different option.
+  The upload cap is **1 GB when running locally** and **75 MB on the public
+  Community Cloud deployment**. The server layer allows 1 GB everywhere
+  ([`.streamlit/config.toml`](../.streamlit/config.toml)); the app enforces
+  the tighter 75 MB when it detects Community Cloud (through the `HOSTNAME`
+  / `/mount/src` fingerprints). A self-hosted deployment gets the 1 GB
+  ceiling.
+
+Once a log is chosen its bytes are cached for the session, so changing any
+setting re-uses it; the panel collapses once mining can proceed. Above it,
+**Resume a saved project** loads a project file instead (step 10).
 
 ### 2 · CSV column mapping (CSV uploads only)
 
-When the uploaded file is CSV, five dropdowns appear under **CSV columns**:
+For a CSV, these controls appear under **CSV columns**:
 
 | Field | Required? | Notes |
 |---|---|---|
@@ -238,9 +138,8 @@ on a fresh upload, so the miner never runs against a wrongly-guessed mapping.
 A mapping whose timestamp column does not read as dates is refused on Apply,
 with the column named and its first values shown.
 
-The file itself may be comma-, semicolon-, tab- or pipe-delimited, in UTF-8
-(with or without BOM), UTF-16 or Windows-1252 — both are detected. A
-`.csv.gz` is accepted and inflated on upload.
+The file may be comma-, semicolon-, tab- or pipe-delimited, in UTF-8 (with
+or without BOM), UTF-16 or Windows-1252 — both are detected.
 
 Any column may fill any role — including one already named `concept:name`,
 `org:role`, etc. The role/resource columns are mapped to `org:role` /
@@ -253,19 +152,57 @@ Changing the dropdowns after the initial Apply shows a yellow banner and a
 re-apply button — but mining keeps using the last-applied mapping in the
 meantime, so other sidebar settings remain responsive.
 
-### 3 · Sidebar — Options
+### 3 · The cost screen
 
-#### Notation
+On a log with a large alphabet or near-unique cases the miner can run for
+minutes, or not finish. The app screens the log **before** mining and, when
+it looks expensive, stops to say so rather than spending the time silently.
+Most logs pass the screen and never see it.
 
-- **BPMN** (default) — Activity boxes for responsibilities, gateway diamonds
-  with `X` / `+` markers, BPMN-canonical start / end events. The notation most
-  readers already know, so it is what the app shows out of the box.
-- **UCM** — Z.151 / jUCMNav notation. Filled circle for the start
-  point, perpendicular bar for the end point, small black square + name for
-  each responsibility, synchronisation bars for AND-forks/joins, dots for
-  OR-forks/joins, diamond reserved for stubs.
+The verdict is a **reason, not an ETA** — the statistics that rank logs
+correctly cannot time them. The panel shows activities / cases / events /
+variants (as *kept / original* once a filter is on) and what tripped the
+screen. Reducing the log is the only remedy that keeps the model usable;
+faster miner settings return a flower model with every activity and no
+control flow, which leaves nothing to cluster or synthesize from.
 
-Switching notation re-renders the PNG but does **not** re-run the miner.
+**The two one-click reductions.** The gate offers the two reductions that
+address the two conditions it screens for, next to **Mine using my
+filters**:
+
+* **Keep the 2,000 most frequent variants** — drops rare *behaviour*,
+  keeping every activity. Usually the bigger win, because the number of
+  distinct sequences drives the cost.
+* **Keep the 50 most frequent activities** — drops rare *activities*; they
+  disappear from the model and the alphabet shrinks.
+
+Both apply, in either order, and each re-checks the log afterwards so you
+can apply the second before mining. Each appears in the sidebar's **Log
+filters** with its own *Remove* button, survives a refresh, and travels in a
+saved project.
+
+Each reduction is recorded as **what it selected** — the variant one keeps
+the *cases* it picked on the log as it stood when you clicked it, the
+activity one names the *activities* — not as "top N by rank". A rank is
+relative to a population that every other filter moves, so a later filter
+can never silently widen a reduction.
+
+**The replay gate.** The model itself is cheap once mined; the replay-based
+metrics (coverage, traversal counts) are a second pass that on a big log
+dominates everything. Unlike mining, that cost *can* be measured, so the app
+probes rather than guesses. Most logs finish inside the probe and are never
+interrupted; when they do not, you are told the estimate and can compute the
+metrics, drop them, or defer. On the cost screen itself, **Skip replay-based
+metrics for this log** makes that choice up front. Time metrics such as
+sojourn are read straight from the log and are computed either way.
+
+Answering the prompt changes only the metrics — the mined model and the log
+filters stay exactly as they were.
+
+### 4 · Sidebar
+
+The sidebar holds the settings that apply to every view, in this order, then
+the view switcher and the **Project** group (step 10).
 
 #### Inductive miner — Noise threshold
 
@@ -275,51 +212,18 @@ higher values filter out increasingly rare arcs and activities, producing
 smaller and more abstract models. **0.2 is the default and a sensible
 practical starting point**; useful range is roughly 0.1 – 0.4.
 
-#### Decomposition
+#### Rename activities
 
-- **off** (default) — single flat map.
-- **auto** — split into a root map plus plug-in maps, with the map size
-  **fitted to the mined tree's shape** (`suggest_decomposition`): the
-  `max_leaves_per_map` cap scales sub-linearly (≈ 1.5·√N in the tree's
-  activity-leaf count N) and the `min_leaves_to_decompose` floor scales with N,
-  so a small model stays flat while a large one splits into readable,
-  not-too-many maps — no magic numbers.
-- **Pre-set: Max=8/Min=4** and **Pre-set: Max=6/Min=3** — pin those fixed
-  dimensions instead of fitting them, for when you want a specific granularity.
-- **Custom** — set `max_leaves_per_map`, `min_leaves_to_decompose` and
-  `balance_ratio` by hand.
+**Rename activities…** opens a dialog to relabel or merge activities before
+the miner runs (give two activities the same new name to merge them). The
+map can be seeded from a CSV / JSON file and exported as JSON; nothing
+changes until **Apply**.
 
-All modes decompose on **every** operator kind. Switching to any non-off mode
-reveals an **Advanced decomposition** expander with the four toggles
-(`on_root_sequence`, `on_parallel`, `on_alternative`, `on_loop`) — all on by
-default — if you ever want to exclude one; under **Custom** the size inputs are
-editable there, and `auto` / the pre-sets show their values as a caption. Click
-**Apply changes** to remine.
-See the main `README.md`
-[Hierarchical decomposition](../README.md#hierarchical-decomposition)
-section for what each key does.
+#### Log filters
 
-#### Performers
-
-- **Resource attribute** — pick from `org:role` (default), `org:resource`,
-  `Other…` (a custom event-attribute name, or a comma-separated fallback
-  list like `org:role, org:resource, org:group`), or `(none)` to skip
-  performer mining entirely.
-- **Min support** — minimum fraction of events for an activity that must
-  agree on a performer before the binding is kept. `0.0` (default) accepts
-  the modal performer even when the resource pool is highly dispersed;
-  raise this if you want only majority-owned activities to be bound.
-  Disabled when performer mining is off.
-
-The sidebar settings above (notation, miner, decomposition, performers)
-apply to every view. Pick a view in the left rail:
-
-### 4 · Model
-
-**Log filters (optional).** Tick **Filter the event log** in the sidebar
-(under **Log filters**) to pre-filter the log before mining, using two-handled
-**range sliders** so you can keep the most frequent, the least frequent, or a
-middle band:
+Tick **Log filters** to pre-filter the log before mining. The range sliders
+have two handles, so you can keep the most frequent, the least frequent, or
+a middle band:
 
 - **Activities by frequency rank** — keep activities whose rank falls in the
   selected band (rank 1 = most frequent); plus an **Exclude activities** list.
@@ -331,34 +235,148 @@ middle band:
   `count("Act")`, `contains("Act")`, `time_between(a, b)`, and `and` / `or` /
   `not`. The detected attribute names are listed under the box; an invalid
   expression shows an inline error and is ignored until fixed.
-- **Variants by frequency rank** — keep trace variants in the selected band,
-  with a **top variants by case coverage %** box synced to the slider.
-- **Date range** — a slider over the log's own span (fewer clicks than two
-  calendars), with a **cases in the window** choice (*intersecting* or *fully
-  inside*).
+- **Date range** — a slider over the log's own span, with a **cases in the
+  window** choice (*intersecting* or *fully inside*).
 - **Cycle-time percentile (case duration)** — a two-handled band over each
   case's **end-to-end cycle time** (last − first event): `0` = fastest,
-  `100` = slowest. Keep the fastest cases (drag the left handle in), the slowest
-  (drag the right handle in), or a middle band — e.g. `0–10` keeps the fastest
-  10% of cases, `90–100` the slowest 10%. (Shown only when the log has a real
-  time span.)
+  `100` = slowest, so `0–10` keeps the fastest 10% of cases and `90–100` the
+  slowest 10%. (Shown only when the log has a real time span.)
+- **Variants by frequency rank** — keep trace variants in the selected band,
+  with a **top variants by case coverage %** box synced to the slider. It
+  comes last because it ranks the variants of the log the filters above
+  leave.
 
-Each is a standard pm4py log filter applied before inductive mining. The
-filter is **global** — every view (Model, Scenarios, Family, Compare,
-Dashboards) and every export works over the same filtered log — so changing a
-filter re-mines. The Model view's Activities, Cases, and Events metrics then
-read **selected / total**, and the filtered log is itself downloadable as
-**XES + CSV**. Alongside the filter, **activity renaming** is a real
-pre-mining transform: relabel or merge activities (edited in a modal dialog
-with an **Apply** button, seeded from a CSV / JSON map and exportable as JSON)
-before the miner runs, again applying to every view and export.
+Each is a standard pm4py log filter applied before inductive mining, after
+the renaming. Both transforms are **global** — every view and every export
+works over the same renamed, filtered log — so changing one re-mines. The
+Model view's Activities, Cases and Events metrics then read
+**selected / total**.
+
+#### Decomposition
+
+- **off** — single flat map.
+- **auto** (default) — split into a root map plus plug-in maps, with the map
+  size **fitted to the mined tree's shape** (`suggest_decomposition`): the
+  `max_leaves_per_map` cap scales sub-linearly (≈ 1.5·√N in the tree's
+  activity-leaf count N) and the `min_leaves_to_decompose` floor scales with N,
+  so a small model stays flat while a large one splits into readable,
+  not-too-many maps.
+- **Pre-set: Max=8/Min=4** and **Pre-set: Max=6/Min=3** — pin those fixed
+  dimensions instead of fitting them, for when you want a specific granularity.
+- **Custom** — set `max_leaves_per_map`, `min_leaves_to_decompose` and
+  `balance_ratio` by hand.
+
+All modes decompose on **every** operator kind. Any non-off mode reveals an
+**Advanced decomposition** expander with the four toggles
+(`on_root_sequence`, `on_parallel`, `on_alternative`, `on_loop`) — all on by
+default — if you ever want to exclude one; under **Custom** the size inputs are
+editable there, and `auto` / the pre-sets show their values as a caption. Click
+**Apply changes** to remine. See the main README's
+[Hierarchical decomposition](../README.md#hierarchical-decomposition)
+section for what each key does.
+
+#### Performers
+
+- **Resource attribute** — pick from `org:role` (default), `org:resource`,
+  `Other...` (a custom event-attribute name, or a comma-separated fallback
+  list like `org:role, org:resource, org:group`), or `(none)` to skip
+  performer mining entirely.
+- **Min support** — minimum fraction of events for an activity that must
+  agree on a performer before the binding is kept. `0.0` (default) accepts
+  the modal performer even when the resource pool is highly dispersed;
+  raise this if you want only majority-owned activities to be bound.
+  Disabled when performer mining is off.
+
+#### Performance overlay
+
+Annotates the model with up to two activity metrics and two edge metrics
+(traversal counts, frequency, coverage, service / waiting / sojourn times, an
+OR-fork branch's share …) — shown as a small gray sub-line. Every available
+metric is written to the `.jucm` as jUCMNav metadata, whichever two are
+shown. Because changing a metric re-annotates the model, the pickers stage
+behind an **Apply metric changes** button. The defaults are a time metric
+(service time on a log with start and end timestamps, sojourn time
+otherwise) and the traversal count on activities, and the traversal count
+and branch share on edges.
+
+*Which count?* `traversal_frequency` / `traversal_percentage` count how often
+the log **walks the model**, by replaying the log on the mined process tree.
+They are the ones that **add up**: an activity's count equals the count on
+its own edges, every branch of a parallel fork carries the fork's inflow,
+and a choice's branches sum to it. The older `frequency` counts events
+(activities) and *directly-follows pairs* (edges) — how often two activities
+were **adjacent in a trace** — which on a model with parallel or silently
+skipped branches is much smaller than the real flow. Both remain available;
+the diagram caption says which is in use, and a share is shown with the base
+it divides ("25 % of 258"). See [`docs/metrics.md` §9](../docs/metrics.md).
+
+*Too slow?* The traversal counts are the only ones that need the log
+replayed on the model, and on a log with thousands of distinct variants that
+replay is the longest step of a mine. A run cannot be interrupted once it
+starts, so the choice is made up front: untick **Replay the log for
+traversal counts** and the traversal metrics fall back to their event-based
+counterparts (`traversal_frequency` → `frequency`, `traversal_percentage` →
+`percentage`), which are cheap but do not conserve. The counts are never
+estimated from a half-finished replay. Your metric picks are untouched, so
+ticking the box again restores the conserving counts, and both the picks and
+the opt-out are saved with a project and with the exported Python script (as
+`OVERLAY_REPLAY`).
+
+**Heat-map emphasis** (on by default once a metric is shown) additionally
+colours and thickens activities and edges by the value of the **first**
+metric of each layer: a **time** metric drives a **red** ramp, any other a
+**blue** one, with lighter/thinner = lower and darker/thicker = higher. It
+applies across the **Model, Family and Compare** views. The **Heat-map
+scale** is three-way:
+
+- **Local (per map)** — each diagram on its own min/max, so every sub-map
+  shows its own hotspots.
+- **Per family member (across its maps)** (default) — every map of a model
+  on that model's min/max, so a value reads the same across its maps;
+  coincides with local when the model is not decomposed.
+- **Global (across family members)** — every cell of the Family / Compare
+  views on **one shared range**, so a colour is comparable across members;
+  in the Model view it is the whole model.
+
+In BPMN the activity box is tinted under a stronger, thickened contour; in
+UCM the responsibility marker itself colours and grows with the value. A
+path keeps one colour and thickness across its routing points (empty points)
+up to the next real node. It is a render-time overlay — the SVG and PNG
+match it, and the `.jucm` is unchanged. The heat-map's on/off and scale
+travel with a saved project.
+
+#### Notation
+
+- **BPMN** (default) — Activity boxes for responsibilities, gateway diamonds
+  with `X` / `+` markers, BPMN-canonical start / end events. The notation most
+  readers already know, so it is what the app shows out of the box.
+- **UCM** — Z.151 / jUCMNav notation. Filled circle for the start
+  point, perpendicular bar for the end point, small black square + name for
+  each responsibility, synchronisation bars for AND-forks/joins, dots for
+  OR-forks/joins, diamond reserved for stubs.
+
+Switching notation re-renders the diagram but does **not** re-run the miner.
+
+### 5 · Model
 
 Once mining completes, the **Model** view shows a metrics row (activities,
-cases and events — selected/total when filtered — plus maps and nodes) and
-the diagram as a **vector SVG** in a zoom / pan viewer — scroll to zoom, drag to pan, and for a
-decomposed model **click a stub** to jump to its plug-in map (a dynamic
-stub opens a picker of its preconditioned plug-ins), and click a plug-in
-map's **end point to jump back to its parent** — navigation runs both ways.
+cases, events and variants — selected/total when filtered — plus maps and
+nodes) and the diagram as a **vector SVG** in a zoom / pan viewer — scroll
+to zoom, drag to pan, and for a decomposed model **click a stub** to jump to
+its plug-in map (a dynamic stub opens a picker of its preconditioned
+plug-ins), and click a plug-in map's **end point to jump back to its
+parent**.
+
+*How much of the log does this describe?* Under the metrics row the view
+reports how many cases fit the model exactly — e.g. "4,990 of 5,600 cases
+(89 %)". A model mined with a **noise threshold** deliberately drops
+infrequent behaviour, so it explains only part of its log; the remaining cases
+are counted on their closest path through the model, so the numbers still
+cover everything (for an activity the model treats as mandatory that can read
+higher than the events actually observed). Below 70 % the note becomes a
+warning suggesting a lower noise threshold — `0.0` explains every case, at the
+cost of a busier model. See [`docs/metrics.md` §9](../docs/metrics.md).
+
 Downloads:
 
 - **Download SVG** — the vector render (crisp at any zoom, text
@@ -375,84 +393,26 @@ Downloads:
   the active heat-map rides along as colours. The mapping is in
   [`docs/bpmn_export.md`](../docs/bpmn_export.md).
 - **Pin to dashboard** — adds the live model as a widget in the Dashboards
-  view. The pinned widget is itself a zoom / pan viewer — scroll to zoom,
-  drag to pan, click a stub to jump to its sub-map — not a flat image.
+  view. The pinned widget is itself a zoom / pan viewer, not a flat image,
+  and follows a re-mine.
+- **Event-log export** — **⬇ Prepare log export** → **Download XES** /
+  **Download CSV**: the log the model was mined from, with the active
+  filters applied.
 
-**Performance overlay & heat-map.** The sidebar's **Performance overlay** group
-annotates the model with up to two activity metrics and two edge metrics
-(traversal counts, frequency, coverage, service / waiting / sojourn times, an
-OR-fork branch's share …) — shown as a small gray sub-line and written to the
-`.jucm` as jUCMNav metadata. Because changing a metric re-annotates the model,
-the pickers stage behind an **Apply metric changes** button.
+### 6 · Scenarios
 
-*Which count?* The defaults are `traversal_frequency` /
-`traversal_percentage`, which count how often the log **walks the model** —
-computed by replaying the log on the mined process tree. They are the ones
-that **add up**: an activity's count equals the count on its own incoming and
-outgoing edges, every branch of a parallel fork carries the fork's inflow, and
-a choice's branches sum to it. The older `frequency` counts events
-(activities) and *directly-follows pairs* (edges) — how often two activities
-were **adjacent in a trace**. That is a different measurement, and on a model
-with parallel branches or silently skipped ones it is much smaller than the
-real flow: the event that follows an activity is usually one from a sibling
-branch, and a silent skip produces no pair at all (which is how a branch can
-report a bare "100 %"). Both remain available; the diagram caption always says
-which is in use, and a share is shown with the base it divides ("25 % of 258").
-
-*How much of the log does this describe?* Under the metrics row the Model view
-reports how many cases fit the model exactly — e.g. "4,990 of 5,600 cases
-(89 %)". A model mined with a **noise threshold** deliberately drops
-infrequent behaviour, so it explains only part of its log; the remaining cases
-are counted on their closest path through the model, so the numbers still
-cover everything (for an activity the model treats as mandatory that can read
-higher than the events actually observed). Below 70 % the note becomes a
-warning suggesting a lower noise threshold — `0.0` explains every case, at the
-cost of a busier model. See [`docs/metrics.md` §9](../docs/metrics.md).
-
-*Too slow?* The traversal counts are the only ones that need the log replayed
-on the model, and on a log with thousands of distinct variants that replay is
-the longest step of a mine — minutes. Because a run cannot be interrupted once
-it starts, the choice is made up front: untick **Replay the log for traversal
-counts** and the traversal metrics fall back to their event-based counterparts
-(`traversal_frequency` → `frequency`, `traversal_percentage` → `percentage`),
-which are cheap but do not conserve. It is a straight trade of accuracy for
-time — the counts are never estimated from a half-finished replay, since that
-would bias them while still looking exact. Your metric picks are untouched, so
-ticking the box again restores the conserving counts, and **both the picks and
-the opt-out are saved with a project** and with the exported Python script
-(as `OVERLAY_REPLAY`, which you can flip back on in the script).
-
-Tick **Heat-map emphasis** to
-additionally colour and thicken activities and edges by the value of the
-**first** metric of each layer: a **time** metric drives a **red** ramp, any
-other a **blue** one, with lighter/thinner = lower and darker/thicker = higher.
-The heat-map applies across the **Model, Family and Compare** views. The
-**Heat-map scale** is three-way: **Local (per map)** (each diagram on its own min/max —
-every sub-map shows its own hotspots), **Per family member (across its maps)** (every map on the whole
-model's min/max, so a value reads the same everywhere; coincides with local when
-the model isn't decomposed), and **Global (across family members)** (every cell of the Family /
-Compare views on **one shared range**, so a colour is comparable across members
-— it falls back to whole model in the single-model Model view). In BPMN the
-activity box is tinted under a stronger,
-thickened contour; in UCM the responsibility marker itself colours and grows
-with the value. A path keeps one colour and thickness across its routing points
-(empty points) up to the next real node. It is a render-time overlay — the SVG
-and PNG match it, and the `.jucm` is unchanged. The heat-map's on/off and scale
-travel with a saved project (see below).
-
-### 5 · Scenarios
-
-Choose a **condition strategy** — *variant-driven* (lossless; every OR-fork
+Choose a **condition strategy** — *variant* (lossless; every OR-fork
 guarded by `variant_id == v_i`) or *data-driven* (a decision tree per
-outside-loop fork turns case attributes into a business-readable rule;
-needs `scikit-learn`) — and a scenario-group name. The view reports
-headline metrics (variant count, sequence variants, compression, fitness,
-and per-fork condition-mining accuracy in data-driven mode). A single
-**⬇ Prepare downloads** button then builds the `.jucm` (with the synthesized
-`<scenarioGroups>`), `variants.csv`, `case_variant_map.csv`, and
-(data-driven) `condition_mining.csv` — the `.jucm` is serialized only when
-you ask, since this view shows no model on screen. Works on flat and
-decomposed models alike.
+outside-loop fork turns case attributes into a business-readable rule) —
+a scenario-group name, the per-variant loop-iteration cap and, for
+data-driven mode, the decision-tree depth, then click **Synthesize
+scenarios**. The view reports headline metrics (variants, sequence
+variants, compression, fitness, scenarios, and per-fork condition-mining
+accuracy in data-driven mode). A single **⬇ Prepare downloads** button then
+builds the `.jucm` (with the synthesized `<scenarioGroups>`), `variants.csv`,
+`case_variant_map.csv`, and (data-driven) `condition_mining.csv` — the
+`.jucm` is serialized only when you ask. Works on flat and decomposed models
+alike.
 
 #### Simulation (bottom of the Scenarios view)
 
@@ -461,7 +421,8 @@ each one the way jUCMNav does — a token per enabled start point, an OR-fork
 picking the branch whose guard holds, an AND-fork spawning a token per arm,
 an AND-join waiting for every one — and reports the same problem kinds
 jUCMNav lists in its Problems view. A decomposed model is traversed into its
-plug-in maps, so a stub is descended rather than skipped.
+plug-in maps, so a stub is descended rather than skipped. The semantics are
+specified in [`docs/scenario_simulation.md`](../docs/scenario_simulation.md).
 
 Two highlight modes over the mined model:
 
@@ -486,13 +447,18 @@ scenarios walked it. The performance overlay's heat-map is suspended while a
 highlight is on — both colour the same elements, so only one can be read at
 a time — and the app says so rather than letting it appear to vanish.
 
-The mode and the selected scenarios are part of the session: a saved project
-resumes into the same highlight, and an exported script reproduces it (§9).
-Scenarios are remembered by **name**, so if you re-mine at a different noise
-threshold and a scenario is gone, the selection falls back to the defaults
-instead of quietly highlighting a different one.
+**Export the log for the selected variants** reduces the event log to the
+cases of the selected scenarios' variants (XES and CSV, with the global
+filter already applied). Cases that replayed as noise belong to no variant
+and drop out, which makes this a way to clean a log.
 
-### 6 · Family
+The mode and the selected scenarios are part of the session: a saved project
+resumes into the same highlight, and an exported script reproduces it (step
+10). Scenarios are remembered by **name**, so if you re-mine at a different
+noise threshold and a scenario is gone, the selection falls back to the
+defaults instead of quietly highlighting a different one.
+
+### 7 · Family
 
 A **💡 Suggested attributes** table ranks the case attributes by
 **discriminative power** — how much the process actually changes across each
@@ -502,58 +468,66 @@ fully **deterministic** (no LLM; `pm4py_ucm.rank_partition_attributes`); when
 nothing scores high it says so, rather than pretend.
 
 Pick **1–2 case attributes**; a **coverage heatmap** previews the cell
-sizes *before* mining, with per-value filters, a `min_cases` floor, and
-quantile `bins` for numeric attributes. Mine to get one model per
+sizes *before* mining, with per-value filters, a minimum number of cases per
+cell, a cap on values per attribute (the rest merge into *Other*), and
+quantile bins for numeric attributes. Mine to get one model per
 combination, shown as a **2-D SVG grid** (rows × columns). A single
 **⬇ Prepare downloads** button then builds the download-only artifacts —
 the per-cell `.zip`, the combined `.jucm` (shared definitions), the
 dynamic-stub **umbrella** `.jucm` (one plug-in per variation point, with
-executable strategies), the grid **PNG**, the self-contained
+executable strategies; optionally merging behaviourally identical
+plug-ins), the grid as **SVG** and **PNG**, the self-contained
 **interactive HTML statistics report**, and a **BPMN 2.0 `.zip`** (one
 `.bpmn` per cell plus the umbrella as `family_umbrella.bpmn`, on the
 family-wide heat-map scale when that scope is selected) — plus the
-umbrella's variation-point counts. They are built only when you ask, so mining a family just to browse
-the grid stays fast; the grid **SVG** is already on screen.
+umbrella's variation-point counts. They are built only when you ask, so
+mining a family just to browse the grid stays fast. See
+[`docs/model_families.md`](../docs/model_families.md).
 
-### 7 · Compare
+### 8 · Compare
 
 Rank the family members on a heat-mapped statistics table (per-cell cases,
 durations incl. **total**, events/case, variants, rework), then pick any
-two and see them **side by side**: SVG models, delta cards, per-activity
-and per-edge Δ tables, and aligned OR-fork branch shares.
+two and see them **side by side**: SVG models (each downloadable as SVG or
+PNG), delta cards, per-activity and per-edge Δ tables on a metric of your
+choice, and aligned OR-fork branch shares. The same interactive HTML report
+is downloadable from here.
 
-### 8 · Dashboards
+### 9 · Dashboards
 
 An embedded, self-contained dashboard island over the log's per-case
 **fact table** — and the *same artifact* the HTML export writes, so what
-you build on screen is exactly what you ship.
+you build on screen is exactly what you ship. It is computed in the browser,
+and the widgets you add are stored in the browser too, per log; they reach
+the server only when you save a project (step 10).
 
 **Start from a suggestion.** A log's first dashboard opens on an
-**Overview** chosen for that log, and **✦ Suggest** lists further dashboards
-the log supports — *Bottlenecks*, *Rework and flow*, *Segments* — each
-widget with the sentence and the number that justify it. **Add** creates a
-new named dashboard (or fills the current one if it is empty); nothing you
-built is replaced. Suggested KPIs carry a target prefilled with today's
-value but switched off: turn it on in the widget's editor once you have
-decided the goal. Each proposed dashboard follows its headline KPIs with
-the whole picture — sojourn for **every activity**, activity × month and
-activity × attribute heatmaps — and a *Behavioural variants* dashboard
-appears when the model's replay was run: it segments by the
-**concurrency-aware variants** of the Scenarios view (same `v1`, `v2`, …),
-in which two orders of the same parallel work are one variant. The rules
-are in
+**Overview** chosen for that log, and the green **✦ Suggest** button opens a
+gallery of further dashboards the log supports — *Bottlenecks*, *Rework and
+flow*, *Segments* — each widget with the sentence and the number that
+justify it. **Add** creates a new named dashboard (or fills the current one
+if it is empty); nothing you built is replaced. Suggested KPIs carry a
+target prefilled with today's value but switched off: turn it on in the
+widget's editor once you have decided the goal. Each proposed dashboard
+follows its headline KPIs with the whole picture — sojourn for **every
+activity**, activity × month and activity × attribute heatmaps — and a
+*Behavioural variants* dashboard appears when the model's replay was run: it
+segments by the **concurrency-aware variants** of the Scenarios view (same
+`v1`, `v2`, …), in which two orders of the same parallel work are one
+variant. The rules are in
 [`docs/dashboard_suggestions.md`](../docs/dashboard_suggestions.md).
 
 **Every activity at once.** For a per-activity metric (sojourn, service,
-waiting, frequency, presence, repeats) the segment pickers offer
-**Activity (every one)**: one bar per activity, or with a second axis a
-heatmap of activity × month, × attribute or × behavioural variant.
+waiting, frequency, presence, repeats, and the rework rate `actRework` — of
+the cases performing an activity, the share performing it more than once)
+the segment pickers offer **Activity (every one)**: one bar per activity, or with a second axis
+a heatmap of activity × month, × attribute or × behavioural variant.
 
 **Build a widget.** Pick a metric from the catalog (or write your own in
-the **ƒ formula language** — `duration() where attr("Claim_Value") > 500`,
-full grammar below), choose an **aggregation**, add per-widget or
-dashboard-level **filters** (including a **date range**), and **segment**
-by up to two axes. A live preview draws the real widget as you compose it.
+the [ƒ formula language](#the-ƒ-custom-formula-language)), choose an
+**aggregation**, add per-widget or dashboard-level **filters** (including a
+**date range**), and **segment** by up to two axes. A live preview draws the
+real widget as you compose it.
 
 **Choose a shape.** The Chart row offers thumbnails of the visualisations
 that say something true about what you picked:
@@ -563,6 +537,9 @@ that say something true about what you picked:
 | no axes | **KPI card**, **histogram** or **box plot** (the distribution) — plus a **gauge** when the widget has a target |
 | one axis | **bar**; a **line** on a time axis; a **pie / donut** when the aggregation is a `sum` |
 | two axes | a **heatmap table** |
+
+Bar charts, line charts and histograms carry a labelled value axis, and
+bars are drawn proportionally from zero.
 
 **Targets and the scorecard.** Set a target and watch the **scorecard**. A
 segmented target rolls up to one state — so its row **expands to the
@@ -600,7 +577,8 @@ When the catalog doesn't name what you want to measure, write it as a
 `where` clause, that the dashboard then aggregates (avg / median / share /
 …) exactly like any built-in metric. Choose **ƒ Custom formula…** in the
 widget composer's metric list; a live chip validates as you type and shows
-the inferred result type, and function chips insert the calls below.
+the inferred result type, and function chips insert the calls below. The
+same language is the sidebar's **Attribute filter (ƒ)**.
 
 **Functions** — each returns one number per case:
 
@@ -611,7 +589,7 @@ the inferred result type, and function chips insert the calls below.
 | `count("act")` | how many times *act* occurs in the case |
 | `time_between("a", "b")` | days from the first *a* to the first *b* after it; null if that never happens |
 | `timestamp("act")` | epoch seconds of the first *act*; null if absent |
-| `attr("name")` | a **numeric** case attribute; null if absent or non-numeric |
+| `attr("name")` | a **numeric** case attribute; null if absent or non-numeric. For a categorical one use the equality form `attr("name") == "value"` (or `!=`), which yields `1` / `0` |
 
 **Operators**, from lowest to highest precedence: the trailing `where` <
 `or` < `and` < `not` < comparisons (`==` `!=` `>` `>=` `<` `<=`) < `+` `-`
@@ -623,21 +601,6 @@ predicate holds for and sets the rest to null (which aggregation drops), so
 `duration() where contains("Appeal")` measures duration over appealed
 cases only.
 
-**Grammar** (EBNF):
-
-```ebnf
-formula    := orExpr [ "where" orExpr ]
-orExpr     := andExpr ( "or" andExpr )*
-andExpr    := notExpr ( "and" notExpr )*
-notExpr    := "not" notExpr | comparison
-comparison := additive ( ("=="|"!="|">"|">="|"<"|"<=") additive )?
-additive   := term ( ("+"|"-") term )*
-term       := unary ( ("*"|"/") unary )*
-unary      := "-" unary | primary
-primary    := number | call | "(" orExpr ")"
-call       := IDENT "(" [ arg ( "," arg )* ] ")"
-```
-
 **Examples**:
 
 | Formula | Measures |
@@ -648,16 +611,14 @@ call       := IDENT "(" [ arg ( "," arg )* ] ")"
 | `time_between("Register", "Pay") where attr("Claim_Value") > 1000` | register → pay days, high-value claims only |
 
 **One value type, and no `eval`.** Every expression evaluates, per case, to
-a **number or null** — there are no strings at runtime; a string only ever
-*names* an activity or attribute inside a call, fixed when the formula is
-written. The text is parsed to an explicit syntax tree and never handed to
-a language `eval`, so the only operations are the ones above, over the only
-data the fact table holds — nothing you type can reach the host. `null` (a
-missing time, an absent attribute) propagates through arithmetic and
-comparison and is dropped by aggregation. Categorical attributes aren't
-values here — filter them with the widget's **Filter** row; that is what
-keeps the grammar single-typed and identical between the Python evaluator
-and the in-browser one.
+a **number or null**. A string only ever *names* an activity or attribute
+inside a call, or the value in a categorical equality; it is never a runtime
+value, and a bare string anywhere else is an error. The text is parsed to an
+explicit syntax tree and never handed to a language `eval`, so the only
+operations are the ones above, over the only data the fact table holds —
+nothing you type can reach the host. `null` (a missing time, an absent
+attribute) propagates through arithmetic and comparison and is dropped by
+aggregation.
 
 **Result type** is inferred from the expression and picks the unit and the
 aggregations offered: a comparison, a logical, or a bare `contains()` is a
@@ -665,12 +626,12 @@ aggregations offered: a comparison, a logical, or a bare `contains()` is a
 time function → **time**; otherwise → **count** — exactly as a catalog
 metric's type does.
 
-The canonical specification is the module docstring of
-[`formula.py`](../pm4py_ucm/algo/dashboards/formula.py); see
+The canonical specification, with the full grammar, is the module docstring
+of [`formula.py`](../pm4py_ucm/algo/dashboards/formula.py); see
 [`docs/dashboards.md`](../docs/dashboards.md) for how it fits the rest of
 the engine.
 
-### 9 · Save, share & resume a project
+### 10 · Save, share & resume a project
 
 The whole session is a project you can put down and pick back up, or hand to
 a colleague. The sidebar's **Project** group offers two saves:
@@ -684,16 +645,17 @@ a colleague. The sidebar's **Project** group offers two saves:
   event log**, so it is self-contained and one-click to resume (it does ship
   the data).
 
-Resume either from **↻ Resume a saved project** in the log-source area: a
+Resume either from **Resume a saved project** at the top of the page: a
 bundle brings its own log; a settings file re-uses the loaded log or asks you
 to re-supply it (matched by hash, with a warning on a mismatch). Only *inputs*
 are stored — the model, scenarios, family, reports and dashboards **recompute**
 on load, so project files stay tiny and never go stale against a change in how
 a model is mined. Dashboards travel through a small versioned bridge that reads
-the browser-island widgets back on save and restores them on resume; the Family
-tab re-mines automatically the first time you open it after a load, and Compare
-follows. The design and its future-proofing (a single parameter registry, CI
-drift guards on both the save **and** restore sides, versioned schema) are
+the browser-island widgets back on save and restores them on resume (**↻
+Refresh dashboards from browser** re-reads them if you have just edited
+one); the Family view re-mines automatically the first time you open it
+after a load, and Compare follows. The design (a single parameter registry,
+CI drift guards on both the save **and** restore sides, versioned schema) is
 documented in [`docs/sessions.md`](../docs/sessions.md), and
 [`demo/sessions_tutorial.ipynb`](../demo/sessions_tutorial.ipynb) is a runnable
 walkthrough of the underlying `web/sessions` API.
@@ -701,23 +663,15 @@ walkthrough of the underlying `web/sessions` API.
 The **Project** group also has a single **⬇ Export Python (.py + .ipynb)**
 download — a zip with the current session emitted **both** as a runnable script
 and as a notebook, over the public `pm4py_ucm` API: log loading, the pre-mining
-rename + filters (including the cycle-time band), mining, decomposition,
-performers, the performance overlay and the model export, with check-boxes to add
-the **scenario-synthesis**, **model-family** and **dashboards** pipelines (all
-pre-selected). The script writes each image as both `.png` and vector `.svg`, all
-carrying the **performance heat-map**; the dashboards go into one self-contained
-interactive HTML file with a read-only switcher (a pinned-model widget embeds the
-mined model as SVG). The `.ipynb` is laid out as a **tutorial** — each stage
-defines its function, runs it, and shows the result inline (the loaded log, the
-case counts, the mined model and family grid as **SVG**, the variants table, the
-live dashboards). The scenario step pins the same noise-thresholded tree the app
-clusters on, so its variant count matches the Scenarios view, and it is
-followed by a **simulation** step that replays those scenarios and writes
-`simulation.svg` — the highlight the app was showing — plus a coverage or
-A/B summary CSV. Because a project
-stores only *inputs*, both are a faithful, deterministic replay (no LLM — a
-template emitter). It's the way to take a GUI exploration to an automatable,
-version-controllable pipeline; see [`docs/code_export.md`](../docs/code_export.md).
+rename + filters, mining, decomposition, performers, the performance overlay
+and the model export, with check-boxes to add the **scenario-synthesis**
+(followed by the simulation highlight the app was showing), **model-family**
+and **dashboards** pipelines (all pre-selected). The notebook is laid out as
+a tutorial — each stage defines its function, runs it, and shows the result
+inline. Because a project stores only *inputs*, both are a faithful,
+deterministic replay (no LLM — a template emitter). It's the way to take a
+GUI exploration to an automatable, version-controllable pipeline; what the
+script writes is described in [`docs/code_export.md`](../docs/code_export.md).
 
 ## Deploy to Streamlit Community Cloud
 
@@ -725,11 +679,10 @@ version-controllable pipeline; see [`docs/code_export.md`](../docs/code_export.m
 2. At <https://share.streamlit.io>, "New app" → pick the repo and branch.
 3. Set **Main file path** to `web/streamlit_app_v6.py`. Streamlit Cloud
    picks up `web/requirements.txt` automatically (it sits next to the
-   main file). The existing primary deployment points at
-   `web/streamlit_app.py` — a shim that runs V6 — so it keeps working
-   without a settings change. Pointing a deployment at one of the
-   deprecated apps still works, but it will render their deprecation
-   notice to every visitor.
+   main file). The existing deployment points at `web/streamlit_app.py` —
+   a shim that runs V6 — so it keeps working without a settings change.
+   Pointing a deployment at one of the deprecated apps still works, but it
+   will render their deprecation notice to every visitor.
 4. **`packages.txt` (apt packages) MUST be at the repo root** — Streamlit
    Cloud's apt-install phase only reads from the root, not from the main
    file's directory. The root `packages.txt` in this repo installs the
@@ -739,27 +692,13 @@ version-controllable pipeline; see [`docs/code_export.md`](../docs/code_export.m
 
 Updates are a `git push` to the tracked branch.
 
-## Adding more sample logs
-
-The **Sample log** tab is populated by scanning
-[`web/samples/`](samples) for `.xes`, `.xes.gz`, and `.zip` files.
-Drop a new file in there and it shows up on the next app start — no
-code change. Display names are derived from the file name (underscores
-become spaces, archive/compression suffixes stripped).
-
 ## Robustness & security notes
 
 The app is designed for a low-traffic public demo (Streamlit Community
 Cloud or similar). A few hardening points worth knowing:
 
-- Upload cap is **two-tier**. The Streamlit server layer
-  ([`.streamlit/config.toml`](../.streamlit/config.toml)) allows
-  **1 GB** everywhere, so the file uploader itself never blocks a
-  local run. The app then re-checks the payload size and rejects
-  anything above **75 MB** *only when it detects it is running on
-  Streamlit Community Cloud* (via the `HOSTNAME` / `/mount/src`
-  fingerprints). Result: 1 GB locally, 75 MB on the public demo,
-  self-hosted deployments default to the local ceiling.
+- The upload cap is two-tier — 1 GB locally, 75 MB on Community Cloud (see
+  [step 1](#1--pick-or-upload-a-log)).
 - The Pillow decompression-bomb guard is raised to **1 billion pixels**
   rather than disabled. Realistic mined UCMs are far below that.
 - CSV reading uses `low_memory=False` so columns with mid-file dtype
@@ -771,6 +710,8 @@ Cloud or similar). A few hardening points worth knowing:
 - Mining failures show a one-line error inline plus an expandable
   technical-details panel — no raw Python traceback is displayed by
   default to casual visitors.
+- A ƒ formula (dashboard metric or log filter) is parsed to a syntax tree
+  and never evaluated as code.
 - Large logs (e.g. 100k+ events) can take a couple of minutes in the
   inductive miner; a multi-phase status panel reports the current step
   so the page never looks hung. The mining function is wrapped in
@@ -782,6 +723,27 @@ PM4Py's XES parser — it relies on `lxml` under the hood; XXE / billion-
 laughs hardening upstream is the right place for those concerns rather
 than this Streamlit layer.
 
+## Deprecated app versions
+
+**Every app before V6 is deprecated**: kept runnable so older results stay
+reproducible, rendering a notice at the top when started, but receiving no
+new features. They still *save* every session parameter — each keeps a
+gather covering the whole registry, so their Save button works — but only
+V6 *restores* the newer ones.
+
+| App | File | Status |
+|---|---|---|
+| **V6** | `streamlit_app_v6.py` | **Current**; what `streamlit_app.py` runs |
+| V5 | `streamlit_app_v5.py` | Deprecated. Workspace shell + Dashboards; no cost screen, no Simulation |
+| V3 | `streamlit_app_v3.py` | Deprecated. The four-tab app, a strict subset of V5 |
+| V2 | `streamlit_app_v2.py` | Deprecated. Model + scenarios only |
+| V4, V1 | — | Removed; in git history |
+
+V2 was once frozen for a paper under review that pointed at a second
+deployment (`pm4py-ucm-scenarios`). The paper was accepted, that deployment
+was deleted, and V2 is deprecated on the same terms as the rest. The
+version-by-version history is in the [changelog](../CHANGELOG.md).
+
 ## Layout
 
 ```
@@ -789,22 +751,16 @@ packages.txt                   # apt: graphviz  (Streamlit Cloud reads this at r
 .streamlit/
   config.toml                  # upload-size cap, telemetry off
 web/
-  streamlit_app.py             # entry point (shims V6 — the deployed app)
-  streamlit_app_v5.py          # V5 — DEPRECATED (workspace shell + Dashboards)
-  streamlit_app_v6.py          # V6 — the current app (adds cost screen + Simulation)
+  streamlit_app.py             # entry point: a shim that runs V6
+  streamlit_app_v6.py          # V6 — the app
+  streamlit_app_v5.py          # V5 — DEPRECATED
+  streamlit_app_v3.py          # V3 — DEPRECATED
+  streamlit_app_v2.py          # V2 — DEPRECATED
   requirements.txt             # streamlit + pm4py + `-e .` (the package itself)
-  PM4Py-UCM-Model.png          # per-feature screenshots used in the READMEs
-  PM4Py-UCM-Scenarios.png
-  PM4Py-UCM-Family.png
-  PM4Py-UCM-Compare.png
-  PM4Py-UCM-Dashboard.png
+  sessions/                    # project save / resume and the Python export (docs/sessions.md)
+  dashboards_bridge/           # component that reads the dashboards back from the browser on save
+  assets/logo.png              # sidebar logo
+  samples/                     # bundled sample logs; auto-listed in the UI
+  PM4Py-UCM-*.png              # per-view screenshots used in the READMEs
   README.md                    # this file
-  samples/
-    *.zip / *.xes / *.xes.gz   # bundled sample logs; auto-listed in the UI
 ```
-
-`-e .` is a relative path resolved against pip's working directory, which is
-the repo root both locally (`pip install -r web/requirements.txt` run from
-the repo root) and on Streamlit Cloud. Either way it points at the
-`pm4py-ucm` project, so any change to the library is picked up on the next
-Streamlit rerun (locally) or next deploy (on the Cloud).
