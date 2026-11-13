@@ -1,7 +1,10 @@
 # Sessions & projects — save, share, resume
 
-**Status:** design (not yet implemented). This document is the spec; it is
-meant to be reviewed and to guide implementation in small, testable steps.
+**Status:** implemented (`web/sessions/`, the app's **Project** rail). This
+document is the spec the feature was built from, in small, testable steps;
+the registry, its drift guard and the maintenance checklist (§17) describe
+the code as it stands. Where a detail differs, the code and the
+[changelog](../CHANGELOG.md) are right.
 
 **Why this design leans hard on structure:** PM4Py-UCM's web app evolves
 quickly — new settings, views and widgets land often. A naïve "gather the

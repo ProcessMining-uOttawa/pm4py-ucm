@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **An index for `docs/`** ([`docs/README.md`](docs/README.md)): every
+  document by the question it answers, what kind it is (contract, design
+  note, measurements, proposal), whether it is built, and the test that
+  holds it to the code. The status lines of `sessions.md` and
+  `scenario_simulation.md` no longer say "not yet implemented" for features
+  that shipped in 0.7.1 and 0.8.0.
+
 ## [0.9.0] — 2026-11-13
 
 > **Upgrade notes.**

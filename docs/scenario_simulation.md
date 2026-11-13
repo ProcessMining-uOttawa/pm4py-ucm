@@ -4,8 +4,11 @@ Design note for **0.8.0**. Written 2026-08-25 against `main` at v0.7.12,
 before any code. It records what already exists, the gaps between that and
 the feature, the decisions taken, and the order the work should happen in.
 
-Nothing here is implemented yet. Where this note says "today", it describes
-v0.7.12.
+**Status: implemented in 0.8.0** (`pm4py_ucm.algo.scenario_traversal`,
+`pm4py_ucm.algo.scenario_coverage`, and the app's Scenarios view). The note
+is kept as written, as the record of the decisions: where it says "today",
+it describes v0.7.12, and where a detail differs from what shipped, the code
+and the [changelog](../CHANGELOG.md) are right.
 
 ## The feature
 
