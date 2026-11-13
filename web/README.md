@@ -23,7 +23,7 @@ the public URL serves it.
 
 ## Run locally
 
-Requires Python 3.9+ and the [Graphviz](https://graphviz.org/download/) `dot`
+Requires Python 3.10+ and the [Graphviz](https://graphviz.org/download/) `dot`
 binary on `PATH` (the layouter shells out to it).
 
 From the repo root:
