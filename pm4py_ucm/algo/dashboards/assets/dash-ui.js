@@ -72,6 +72,65 @@ function donutPath(cx, cy, rIn, rOut, a0, a1) {
          `L${x2} ${y2} A${rIn} ${rIn} 0 ${large} 0 ${x3} ${y3} Z`;
 }
 
+/**
+ * The value axis of a chart: a few round ticks from zero to just past the
+ * largest value, each with a short label.
+ *
+ * Without it a bar or a line shows only *shape* — which month is highest,
+ * not how high — and the reader has to hover every point to learn the
+ * scale. Three intervals are aimed for: enough to read a value off, few
+ * enough to fit a 2 × 2 card.
+ *
+ * `unit` is the widget's ("d" days, "%" percent, "n" count). A duration is
+ * labelled in the unit that keeps the ticks round — a chart peaking at 45
+ * minutes gets "0 m, 20 m, 40 m, 60 m", not fractions of a day — which is
+ * the same largest-legible-unit rule `fmtDays` applies to a single value.
+ *
+ * Returns `{ top, ticks: [{ value, pos, label }], chars }`: `top` is the
+ * value at the top of the plot (≥ max), `pos` a tick's height as a
+ * fraction of it, `chars` the longest label's length, for sizing a gutter.
+ */
+export function axisTicks(max, unit) {
+  let scale = 1, suffix = "";
+  if (unit === "d") {
+    if (max >= 1) suffix = " d";
+    else if (max * 24 >= 1) { scale = 24; suffix = " h"; }
+    else if (max * 1440 >= 1) { scale = 1440; suffix = " m"; }
+    else { scale = 86400; suffix = " s"; }
+  } else if (unit === "%") {
+    suffix = "%";
+  }
+  const m = max > 0 && Number.isFinite(max) ? max * scale : 1;
+  const raw = m / 3;
+  const pow = Math.pow(10, Math.floor(Math.log10(raw)));
+  let step = [1, 2, 2.5, 5, 10].map((k) => k * pow)
+    .find((s) => s >= raw * (1 - 1e-9));
+  // Cases, events and seconds come whole: no tick at 0.5 of a case.
+  const whole = unit === "n" || suffix === " s";
+  if (whole && step < 1) step = 1;
+  if (whole && !Number.isInteger(step)) step = Math.ceil(step);
+  const n = Math.max(1, Math.ceil(m / step - 1e-9));
+  const decimals = step >= 1 && Number.isInteger(step) ? 0
+    : Math.max(1, Math.ceil(-Math.log10(step) - 1e-9) + (step / pow === 2.5 ? 1 : 0));
+  const text = (v) => {
+    if (v >= 1e6) return `${+(v / 1e6).toFixed(1)}M`;
+    if (v >= 1e4) return `${+(v / 1e3).toFixed(1)}k`;
+    return v.toLocaleString("en-US", {
+      minimumFractionDigits: 0, maximumFractionDigits: decimals });
+  };
+  const ticks = [];
+  for (let i = 0; i <= n; i++) {
+    ticks.push({ value: (i * step) / scale, pos: i / n,
+                 label: text(i * step) + suffix });
+  }
+  return { top: (n * step) / scale, ticks,
+           chars: Math.max(...ticks.map((t) => t.label.length)) };
+}
+
+//: Width of one character of the 9px mono axis label, in SVG user units —
+//: sizes the left gutter of a chart to its longest tick label.
+const TICK_CHAR = 5.5;
+
 export const STATE_LABEL = { met: "MET", risk: "AT RISK", missed: "MISSED" };
 
 //: Most bars a categorical axis draws before the renderer keeps only the
@@ -164,6 +223,12 @@ export class Dashboard {
     // no switcher. An export carries the filters it was taken under, so it
     // opens on the question it was sent to answer.
     this._multi = !this.readOnly && !this.headless;
+    // Dashboards the host proposes for this log (suggest.py). Offered, never
+    // applied unasked — and only where a dashboard can be restructured.
+    this.suggestions = this._multi && Array.isArray(opts.suggestions)
+      ? opts.suggestions.filter((s) => s && Array.isArray(s.specs)
+          && s.specs.length)
+      : [];
     this._loadRegistry(opts);
     this._activate();
     this.notation = Object.keys(this.renders)[0] || "ucm";
@@ -531,6 +596,7 @@ export class Dashboard {
       document.getElementById("pm-data").textContent);
     cfg.specs = this.specs;
     cfg.readOnly = true;
+    cfg.suggestions = [];   // a reader cannot add a dashboard
     // Ship the reader the view as filtered, so an export sent to answer
     // a specific question opens on that question rather than on the
     // unfiltered log.
@@ -569,6 +635,7 @@ export class Dashboard {
     cfg.dashboards = JSON.parse(JSON.stringify(this._reg.dashboards));
     cfg.active = this.activeId;
     cfg.readOnly = true;
+    cfg.suggestions = [];
     delete cfg.specs;    // dashboards[] supersedes the single-dashboard config
     delete cfg.filters;
     doc.querySelector("#pm-data").textContent = scriptJson(cfg);
@@ -755,6 +822,102 @@ export class Dashboard {
     });
   }
 
+  // -- suggested dashboards ------------------------------------------
+
+  /**
+   * The gallery of dashboards proposed for this log.
+   *
+   * The list is computed by the host (suggest.py) and arrives in the
+   * config: the island only shows it. So there is nothing here to keep in
+   * parity — a suggestion is a list of ordinary widget specs, each carrying
+   * the sentence (`why`) that justifies it.
+   */
+  _openSuggestions() {
+    let close = () => {};
+    const card = (s) => h("div", { class: "pm-sugg__card" },
+      h("div", { class: "pm-sugg__head" },
+        h("span", { class: "pm-sugg__name" }, s.name),
+        h("span", { class: "pm-sugg__n" },
+          `${s.specs.length} widget${s.specs.length === 1 ? "" : "s"}`),
+        h("button", {
+          class: "pm-btn",
+          onclick: () => { close(); this._addSuggested(s); },
+        }, "Add")),
+      s.why ? h("div", { class: "pm-sugg__why" }, s.why) : null,
+      h("ul", { class: "pm-sugg__list" }, ...s.specs.map((w) =>
+        h("li", {},
+          h("strong", {}, w.title || w.metric),
+          w.why ? h("span", { class: "pm-sugg__reason" }, ` — ${w.why}`)
+            : null))));
+
+    const body = h("div", { class: "pm-sugg" },
+      h("p", { class: "pm-sugg__intro" },
+        "Proposed from the log itself, not from its domain: every widget "
+        + "below is there because of a number in this log, shown beside it. "
+        + (this.specs.length
+          ? "Add creates a new dashboard and leaves yours untouched."
+          : "Add fills this empty dashboard.")
+        + " Targets come prefilled with today’s value but switched off — "
+        + "turn one on in a widget’s editor once you have set its goal."),
+      ...this.suggestions.map(card));
+
+    close = modal({
+      theme: this._theme(),
+      title: "Suggested dashboards",
+      sub: `→ ${this.table.logName}`,
+      body,
+      cancel: "Close",
+    });
+  }
+
+  /**
+   * Add a suggested dashboard: into the current one when it is empty (the
+   * user made a blank dashboard and asked what to put in it), otherwise as
+   * a new named dashboard. An existing dashboard's widgets are never
+   * replaced or merged into.
+   */
+  _addSuggested(s) {
+    const stamp = Date.now().toString(36);
+    const specs = s.specs.map((w, i) => {
+      const c = JSON.parse(JSON.stringify(w));
+      c.id = `w${stamp}${i}`;   // re-minted: reorder and edit key off the id
+      return c;
+    });
+    const taken = new Set(this._reg.dashboards
+      .filter((d) => d.id !== this.activeId || this.specs.length)
+      .map((d) => d.name));
+    let name = s.name || "Dashboard";
+    for (let i = 2; taken.has(name); i++) name = `${s.name} (${i})`;
+
+    if (!this.specs.length) {
+      this.name = name;
+      this.specs = specs;
+      this.filters = (s.filters || []).slice();
+    } else {
+      this._save();              // persist the one we are leaving
+      const id = this._uid();
+      this._reg.dashboards.push(
+        { id, name, specs, filters: (s.filters || []).slice() });
+      this._reg.active = id;
+      this._activate();
+    }
+    this._save();
+    this.render();
+    toast(`Added “${name}” — ${specs.length} widgets`, this._theme());
+  }
+
+  /**
+   * What a segment's short label stands for, as a tooltip line — the
+   * partial-order expression behind a behavioural variant's "v3". Empty
+   * for axes whose labels explain themselves.
+   */
+  _segNote(axis, label) {
+    if (!axis || !axis.startsWith("attr:")) return "";
+    const a = E.attributeOf(this.table, axis.slice(5));
+    const d = a && a.descriptions && a.descriptions[label];
+    return d ? `\n${d}` : "";
+  }
+
   // -- computation ---------------------------------------------------
 
   _compute(spec) {
@@ -882,6 +1045,15 @@ export class Dashboard {
              + "this log lacks are reported and shown as “—”.",
         onclick: () => this._pickDefinition(),
       }, "⬆ Load"));
+      if (this.suggestions.length) {
+        kids.push(h("button", {
+          class: "pm-btn pm-btn--suggest",
+          title: "Dashboards proposed from this log itself — its "
+               + "bottlenecks, rework, decision points and the attributes "
+               + "that split its cases — each widget with its reason.",
+          onclick: () => this._openSuggestions(),
+        }, "✦ Suggest"));
+      }
       kids.push(h("button", {
         class: "pm-btn", onclick: () => this._openComposer(),
       }, "+ Add widget"));
@@ -917,7 +1089,12 @@ export class Dashboard {
       return h("div", { class: "pm-grid" },
         h("div", { class: "pm-empty" },
           this.readOnly ? "This dashboard has no widgets."
-            : "No widgets yet — use “+ Add widget” to build one."));
+            : "No widgets yet — use “+ Add widget” to build one.",
+          this.suggestions.length ? h("div", { class: "pm-empty__act" },
+            h("button", {
+              class: "pm-btn pm-btn--suggest",
+              onclick: () => this._openSuggestions(),
+            }, "✦ Suggest dashboards for this log")) : null));
     }
     return h("div", { class: "pm-grid" },
       ...computed.map((w, i) => this._widget(w, this.specs[i], i)));
@@ -1081,10 +1258,13 @@ export class Dashboard {
   }
 
   _histSvg(hh, unit) {
-    const W = 300, H = 132, padL = 6, padR = 6, padT = 6, padB = 20;
-    const plotW = W - padL - padR, plotH = H - padT - padB;
     const bins = hh.bins;
-    const maxC = Math.max(1, ...bins.map((b) => b.count));
+    // The value axis counts cases per bin.
+    const ax = axisTicks(Math.max(1, ...bins.map((b) => b.count)), "n");
+    const W = 300, H = 132, padL = 8 + ax.chars * TICK_CHAR, padR = 6,
+      padT = 9, padB = 20;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const maxC = ax.top;
     const bw = plotW / bins.length;
     const bars = bins.map((b, i) => {
       const barH = (b.count / maxC) * plotH;
@@ -1102,6 +1282,7 @@ export class Dashboard {
       viewBox: `0 0 ${W} ${H}`, class: "pm-chart pm-hist",
       role: "img", "aria-label": `Histogram of ${hh.n} cases`,
     },
+      ...this._svgValueAxis(ax, padL, padT, plotW, plotH),
       svgEl("line", { x1: padL, y1: padT + plotH, x2: padL + plotW,
         y2: padT + plotH, class: "pm-chart__axis" }),
       ...bars,
@@ -1174,23 +1355,49 @@ export class Dashboard {
   _lineBody(w) {
     const pts = w.series || [];
     if (!pts.length) return [h("div", { class: "pm-kpi__sub" }, "No data.")];
+    // The first and last labels are drawn inside the SVG, under the plot
+    // they belong to; a row of HTML below could not line up with a plot
+    // that starts after the value-axis gutter.
     return [
       h("div", { class: "pm-w__chart" }, this._lineSvg(pts, w)),
-      h("div", { class: "pm-axis" },
-        h("span", {}, pts[0].label),
-        pts.length > 2 && h("span", { class: "pm-axis__mid" },
-          `${pts.length} × ${axisLabel(w.axis) || "points"} · hover for values`),
-        pts.length > 1 && h("span", {}, pts[pts.length - 1].label)),
+      h("div", { class: "pm-axis pm-axis--note" },
+        h("span", { class: "pm-axis__mid" },
+          `${pts.length} × ${axisLabel(w.axis) || "points"} · hover for exact values`)),
     ];
   }
 
+  /**
+   * Gridlines and tick labels of a value axis, for an SVG chart whose plot
+   * area starts at (`padL`, `padT`) — shared by the line and the histogram
+   * so the two cannot drift. The zero tick has a label but no gridline:
+   * the chart's own baseline is already there.
+   */
+  _svgValueAxis(ax, padL, padT, plotW, plotH) {
+    const out = [];
+    for (const t of ax.ticks) {
+      const y = padT + plotH - t.pos * plotH;
+      if (t.pos > 0) {
+        out.push(svgEl("line", { x1: padL, y1: y, x2: padL + plotW, y2: y,
+          class: "pm-chart__grid" }));
+      }
+      out.push(svgEl("text", { x: padL - 4, y: y + 3, "text-anchor": "end",
+        class: "pm-chart__lab" }, t.label));
+    }
+    return out;
+  }
+
   _lineSvg(pts, w) {
-    const W = 300, H = 120, padL = 6, padR = 6, padT = 8, padB = 6;
+    const ax = axisTicks(
+      Math.max(0, ...pts.map((p) => p.value).filter((v) => v != null)),
+      w.unit);
+    const W = 300, H = 132, padL = 8 + ax.chars * TICK_CHAR, padR = 8,
+      padT = 9, padB = 18;
     const plotW = W - padL - padR, plotH = H - padT - padB;
-    const max = Math.max(1, ...pts.map((p) => p.value).filter((v) => v != null));
+    const max = ax.top;
     const x = (i) => (pts.length < 2 ? padL + plotW / 2
       : padL + (i / (pts.length - 1)) * plotW);
-    const y = (v) => padT + plotH - ((v == null ? 0 : v) / max) * plotH;
+    const y = (v) => padT + plotH
+      - (Math.max(0, v == null ? 0 : v) / max) * plotH;
     const dots = pts.map((p, i) => svgEl("circle", {
       cx: x(i), cy: y(p.value), r: 2.5, class: "pm-line__dot",
     }, svgEl("title", {}, `${p.label}: ${p.text || E.fmt(p.value, w.unit)}` +
@@ -1200,13 +1407,19 @@ export class Dashboard {
       viewBox: `0 0 ${W} ${H}`, class: "pm-chart pm-line",
       role: "img", "aria-label": `Line chart of ${pts.length} points`,
     },
+      ...this._svgValueAxis(ax, padL, padT, plotW, plotH),
       svgEl("line", { x1: padL, y1: padT + plotH, x2: padL + plotW,
         y2: padT + plotH, class: "pm-chart__axis" }),
       svgEl("polyline", {
         points: pts.map((p, i) => `${x(i)},${y(p.value)}`).join(" "),
         class: "pm-line__path",
       }),
-      ...dots);
+      ...dots,
+      svgEl("text", { x: padL, y: H - 5, class: "pm-chart__lab" },
+        pts[0].label),
+      pts.length > 1 && svgEl("text", { x: padL + plotW, y: H - 5,
+        "text-anchor": "end", class: "pm-chart__lab" },
+        pts[pts.length - 1].label));
   }
 
   /** A KPI against its target, as a dial. */
@@ -1317,7 +1530,8 @@ export class Dashboard {
           class: "pm-pie__slice", fill: hue(i),
         }, svgEl("title", {}, `${p.label}: `
           + `${p.text || E.fmt(p.value, w.unit)} `
-          + `(${(100 * p.value / total).toFixed(1)}%)`)));
+          + `(${(100 * p.value / total).toFixed(1)}%)`
+          + this._segNote(w.axis, p.label))));
         a0 = a1;
       });
     }
@@ -1358,27 +1572,46 @@ export class Dashboard {
     }
 
     const vals = pts.map((p) => p.value).filter((v) => v != null);
-    const max = Math.max(1, ...vals);
-    const bars = h("div", { class: "pm-bars" }, ...pts.map((p) => {
-      const u = p.value == null ? 0 : p.value / max;
+    // Heights are proportional from zero to the axis top, so a bar can be
+    // read against the ticks. (They used to start from an 8% floor and
+    // stretch to the largest value — or to 1 when every value was below
+    // it, which flattened any chart of sub-day durations.) Colour still
+    // runs to the largest *value*, so the tallest bar is the darkest.
+    const dataMax = Math.max(0, ...vals);
+    const ax = axisTicks(dataMax, w.unit);
+    const gutter = `${ax.chars + 1}ch`;
+    const bars = h("div", { class: "pm-bars" },
+      ...ax.ticks.filter((t) => t.pos > 0).map((t) => h("b", {
+        class: "pm-gridline", style: `bottom:${t.pos * 100}%`,
+      })),
+      ...pts.map((p) => {
+      const v = p.value == null ? 0 : Math.max(0, p.value);
+      const u = dataMax > 0 ? v / dataMax : 0;
       const bg = p.state ? `var(--${p.state}-fg)` : E.heat(u, this.dark).bg;
       return h("i", {
-        style: `height:${Math.round(8 + u * 92)}%;background:${bg}`,
+        style: `height:${((v / ax.top) * 100).toFixed(2)}%;background:${bg}`
+          + (p.value == null ? ";min-height:0" : ""),
         title: `${p.label}: ${p.text || E.fmt(p.value, w.unit)}` +
-               (p.nCases != null ? ` (${p.nCases.toLocaleString("en-US")} cases)` : ""),
+               (p.nCases != null ? ` (${p.nCases.toLocaleString("en-US")} cases)` : "") +
+               this._segNote(w.axis, p.label),
       });
     }));
     const mid = dropped
       ? `top ${pts.length} of ${all.length} ${axisLabel(w.axis)} by value`
-      : `${pts.length} × ${axisLabel(w.axis) || "points"} · hover for values`;
-    const axis = h("div", { class: "pm-axis" },
+      : `${pts.length} × ${axisLabel(w.axis) || "points"} · hover for exact values`;
+    // Indented by the value-axis gutter, so the first and last labels sit
+    // under the first and last bars.
+    const axis = h("div", { class: "pm-axis", style: `padding-left:${gutter}` },
       h("span", {}, pts[0].label),
       pts.length > 2 && h("span", { class: "pm-axis__mid", title: dropped
         ? `${all.length} segments in total; the ${dropped} smallest are `
           + `not drawn. The widget's target state still considers all of them.`
         : "" }, mid),
       pts.length > 1 && h("span", {}, pts[pts.length - 1].label));
-    return [bars, axis];
+    const yaxis = h("div", { class: "pm-yaxis", style: `width:${gutter}` },
+      ...ax.ticks.map((t) => h("span", {
+        style: `bottom:${t.pos * 100}%` }, t.label)));
+    return [h("div", { class: "pm-plot" }, yaxis, bars), axis];
   }
 
   _tableBody(w, spec) {
@@ -1394,14 +1627,14 @@ export class Dashboard {
     w.cols.forEach((c) => grid.append(
       h("div", {
         class: "pm-table__cell pm-table__cell--head",
-        title: `Filter to ${c}`,
+        title: `Filter to ${c}` + this._segNote(w.colsAxis, c),
         onclick: () => this._drill(w.colsAxis, c),
       }, c)));
 
     w.rows.forEach((r, ri) => {
       grid.append(h("div", {
         class: "pm-table__cell pm-table__cell--row",
-        title: `Filter to ${r}`,
+        title: `Filter to ${r}` + this._segNote(w.rowsAxis, r),
         onclick: () => this._drill(w.rowsAxis, r),
       }, r));
       w.cells[ri].forEach((cell, ci) => {
@@ -2028,8 +2261,16 @@ export class Dashboard {
     const rowsSel = h("select", { class: "pm-select" });
     const colsSel = h("select", { class: "pm-select" });
     const axes = E.segmentAxes(this.table);
+    // The Activity axis is the one that does not partition the cases: it
+    // runs the metric once per activity. So it exists only for metrics
+    // measured per activity, and is disabled (not hidden — the user should
+    // see it is there) for the rest; see syncViz.
+    const activityOpts = [];
     for (const sel of [rowsSel, colsSel]) {
       sel.append(h("option", { value: "" }, "(none)"));
+      const o = h("option", { value: E.ACTIVITY_AXIS }, "Activity (every one)");
+      activityOpts.push(o);
+      sel.append(o);
       for (const a of axes) sel.append(h("option", { value: a.id }, a.label));
     }
     const vizNote = h("span", { class: "pm-row__hint" });
@@ -2125,6 +2366,25 @@ export class Dashboard {
     };
 
     const syncViz = () => {
+      const perActivity = !isCustom() && (metric().params || [])
+        .some((p) => p.name === "activity");
+      for (const o of activityOpts) {
+        o.disabled = !perActivity;
+        o.title = perActivity ? ""
+          : "Only for metrics measured per activity (sojourn, rework, frequency, …)";
+      }
+      for (const sel of [rowsSel, colsSel]) {
+        if (!perActivity && sel.value === E.ACTIVITY_AXIS) sel.value = "";
+      }
+      if (rowsSel.value === E.ACTIVITY_AXIS
+          && colsSel.value === E.ACTIVITY_AXIS) colsSel.value = "";
+      // With the axis on, the widget covers every activity and the single
+      // activity picked under Params no longer applies.
+      const everyActivity = rowsSel.value === E.ACTIVITY_AXIS
+        || colsSel.value === E.ACTIVITY_AXIS;
+      paramsBox.style.opacity = everyActivity ? "0.45" : "";
+      paramsBox.title = everyActivity
+        ? "Not used: the Activity axis covers every activity." : "";
       spec.segment = { rows: rowsSel.value || undefined,
                        cols: colsSel.value || undefined };
       const n = (rowsSel.value ? 1 : 0) + (colsSel.value ? 1 : 0);
@@ -2308,15 +2568,21 @@ export class Dashboard {
     // the composer opens showing exactly what is on the card.
     metricSel.value = spec.metric;
     if (spec.metric === "custom") fxArea.value = (spec.params || {}).formula || "";
+    // Taken BEFORE validateFormula(), which rewrites spec.params to hold
+    // the formula: read after it, an edited widget's own activities were
+    // already gone and the pickers fell back to the log's defaults.
+    const savedParams = isEdit ? spec.params : undefined;
     validateFormula();
-    rebuildParams(isEdit ? spec.params : undefined);
+    rebuildParams(savedParams);
     rebuildAggs(spec.agg);
     rowsSel.value = spec.segment.rows || "";
     colsSel.value = spec.segment.cols || "";
-    // Restore the unsegmented shape when editing a hist/box widget; a
-    // segmented one has no chart choice (the axes decide), so default kpi.
-    chartPick.select((spec.viz === "hist" || spec.viz === "box")
-      ? spec.viz : "kpi");
+    // Restore the widget's own shape when editing. syncViz() then keeps it
+    // only if it is still one the guards offer (a line on a time axis, a
+    // gauge with its target on), and falls back to the first offered
+    // shape otherwise — so a saved line stays a line instead of silently
+    // becoming bars.
+    chartPick.select(isEdit ? spec.viz : "kpi");
     dirSel.value = spec.target.dir;
     valInput.value = spec.target.value;
     warnInput.value = spec.target.warn;
@@ -2357,6 +2623,11 @@ function defaultTitle(spec, metric) {
   const p = spec.params || {};
   const parts = [];
   if (metric.aggs.length > 1 && spec.agg !== "share") parts.push(spec.agg);
+  const seg = spec.segment || {};
+  if (seg.rows === E.ACTIVITY_AXIS || seg.cols === E.ACTIVITY_AXIS) {
+    // Every activity, so naming the one under Params would mislead.
+    return parts.concat(`${metric.label.toLowerCase()} by activity`).join(" ");
+  }
   if (p.from && p.to) parts.push(`${p.from} → ${p.to}`);
   else if (p.activity) parts.push(p.activity);
   else parts.push(metric.label.toLowerCase());
@@ -2374,7 +2645,7 @@ function isDarkColor(color) {
 }
 
 export function axisLabel(axis) {
-  if (!axis) return "";
+  if (!axis || axis === "none") return "";
   if (axis.startsWith("attr:")) return axis.slice(5).replace(/^case:/, "");
   return axis[0].toUpperCase() + axis.slice(1);
 }

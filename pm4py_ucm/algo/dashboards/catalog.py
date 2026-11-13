@@ -206,6 +206,16 @@ CATALOG: Tuple[MetricSpec, ...] = (
              "once, and for cases that skip it entirely.",
     ),
     MetricSpec(
+        id="actRework", level="activity", label="Activity rework rate",
+        result_type="percent",
+        params=[Param("activity", "activity", "activity")],
+        default_agg="share",
+        help="Share of the cases performing the activity that perform it "
+             "more than once. Cases that skip it are not in the "
+             "denominator, so a rare activity that is always redone reads "
+             "100%, not its share of the whole log.",
+    ),
+    MetricSpec(
         id="actSojourn", level="activity", label="Sojourn time",
         result_type="time",
         params=[Param("activity", "activity", "activity")],

@@ -91,6 +91,7 @@ AREAS: dict[str, list[str]] = {
     ],
     "Dashboards": [
         "test_dashboards.py",
+        "test_dashboard_suggestions.py",
     ],
     "Sessions (save / share / resume)": [
         "test_sessions.py",

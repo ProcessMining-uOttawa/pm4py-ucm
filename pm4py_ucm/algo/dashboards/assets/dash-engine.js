@@ -41,6 +41,9 @@ const STATE_ORDER = ["missed", "risk", "met"];
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 export const TIME_AXES = ["year", "quarter", "month", "weekday"];
 export const SERIES_METRICS = ["wip", "arrivalRate", "completionRate"];
+//: The one axis that does not partition cases: it varies an activity-level
+//: metric's `activity` parameter over every activity (see byActivity).
+export const ACTIVITY_AXIS = "activity";
 const UNIT_BY_TYPE = { time: "d", percent: "%", count: "n", rate: "n" };
 
 const ARRAY_OF = {
@@ -222,6 +225,19 @@ export function perCaseValues(t, metric, params) {
           seen.add(t.act[j]);
         }
         out[i] = dup;
+      }
+      return out;
+    }
+    case "actRework": {
+      // Among the cases performing the activity, was it performed more
+      // than once? A case that skips it is missing, not zero.
+      const code = actCode(t, p.activity);
+      for (let i = 0; i < n; i++) {
+        let c = 0;
+        if (code >= 0) {
+          for (let j = t.off[i]; j < t.off[i + 1]; j++) if (t.act[j] === code) c++;
+        }
+        out[i] = c === 0 ? NaN : (c > 1 ? 1 : 0);
       }
       return out;
     }
@@ -671,6 +687,12 @@ function oneFilter(t, f) {
   }
 
   if (field === "segment") {
+    if (value[0] === ACTIVITY_AXIS) {
+      // Drilling into an activity's bar or row: the cases that contain it.
+      const first = firstOccurrence(t, actCode(t, value[1]));
+      for (let i = 0; i < n; i++) mask[i] = first[i] >= 0 ? 1 : 0;
+      return negate(mask, op);
+    }
     const { codes, labels } = segmentKeys(t, value[0]);
     const k = labels.indexOf(value[1]);
     if (k < 0) return mask;
@@ -1407,13 +1429,18 @@ export function computeWidget(spec, t, catalog, dashboardFilters) {
     return out;
   }
 
-  const raw = perCaseValues(t, spec.metric, spec.params);
-  const values = new Float64Array(t.nCases);
-  for (let i = 0; i < t.nCases; i++) values[i] = mask[i] ? raw[i] : NaN;
-
   const rowsAx = (spec.segment && spec.segment.rows) || "none";
   const colsAx = (spec.segment && spec.segment.cols) || "none";
   const target = spec.target;
+
+  if (rowsAx === ACTIVITY_AXIS || colsAx === ACTIVITY_AXIS) {
+    return Object.assign(out, byActivity(
+      t, spec, catalog, mask, rowsAx, colsAx, aggKind, unit, target));
+  }
+
+  const raw = perCaseValues(t, spec.metric, spec.params);
+  const values = new Float64Array(t.nCases);
+  for (let i = 0; i < t.nCases; i++) values[i] = mask[i] ? raw[i] : NaN;
 
   if (rowsAx === "none" && colsAx === "none") {
     Object.assign(out, kpi(values, aggKind, unit, target, nCases));
@@ -1547,6 +1574,94 @@ function grid(t, values, rowsAx, colsAx, aggKind, unit, target) {
     cols: cUsed.map((k) => C.labels[k]),
     cells, state: worstState(states),
     value: overall, text: fmt(overall, unit),
+  };
+}
+
+/**
+ * A widget whose axis is the log's activities — mirror of
+ * engine._by_activity. Every other axis partitions the cases; this one
+ * varies the metric's own `activity` parameter, so one widget covers every
+ * activity. Returns exactly the shape seriesBy / grid return.
+ */
+function byActivity(t, spec, catalog, mask, rowsAx, colsAx, aggKind, unit, target) {
+  const metric = catalog[spec.metric];
+  if (!metric || !(metric.params || []).some((p) => p.name === "activity")) {
+    throw new Error(
+      "The Activity axis needs a metric measured per activity " +
+      "(sojourn, service or waiting time, frequency, presence, repeats, " +
+      "rework).");
+  }
+  if (rowsAx === colsAx) {
+    throw new Error("Activity cannot be both the row and column axis.");
+  }
+
+  const n = t.nCases;
+  const perActivity = [];
+  for (const name of t.activities) {
+    const raw = perCaseValues(
+      t, spec.metric, Object.assign({}, spec.params, { activity: name }));
+    const v = new Float64Array(n);
+    let any = false;
+    for (let i = 0; i < n; i++) {
+      v[i] = mask[i] ? raw[i] : NaN;
+      if (Number.isFinite(v[i])) any = true;
+    }
+    if (any) perActivity.push([name, v]);
+  }
+
+  const other = rowsAx === ACTIVITY_AXIS ? colsAx : rowsAx;
+  if (other === "none") {
+    const series = [], states = [];
+    for (const [name, v] of perActivity) {
+      const sel = [];
+      for (let i = 0; i < n; i++) if (Number.isFinite(v[i])) sel.push(v[i]);
+      const [value, state] = score(sel, aggKind, target);
+      series.push({ label: name, value, text: fmt(value, unit), state,
+                    nCases: sel.length });
+      states.push(state);
+    }
+    return { axis: ACTIVITY_AXIS, series, state: worstState(states),
+             value: null, text: fmt(null, unit) };
+  }
+
+  const { codes, labels } = segmentKeys(t, other);
+  const live = new Uint8Array(labels.length);
+  for (const [, v] of perActivity) {
+    for (let i = 0; i < n; i++) {
+      if (codes[i] >= 0 && Number.isFinite(v[i])) live[codes[i]] = 1;
+    }
+  }
+  const used = [];
+  for (let k = 0; k < labels.length; k++) if (live[k]) used.push(k);
+  const pos = new Map(used.map((k, i) => [k, i]));
+
+  // cells[a][k]: activity a, segment k of the other axis.
+  let cells = [];
+  const states = [];
+  for (const [, v] of perActivity) {
+    const buckets = used.map(() => []);
+    for (let i = 0; i < n; i++) {
+      if (!Number.isFinite(v[i])) continue;
+      const c = pos.get(codes[i]);
+      if (c !== undefined) buckets[c].push(v[i]);
+    }
+    cells.push(buckets.map((sel) => {
+      if (!sel.length) return { value: null, text: "—", state: null, nCases: 0 };
+      const [value, state] = score(sel, aggKind, target);
+      states.push(state);
+      return { value, text: fmt(value, unit), state, nCases: sel.length };
+    }));
+  }
+
+  let rows = perActivity.map(([name]) => name);
+  let cols = used.map((k) => labels[k]);
+  if (rowsAx !== ACTIVITY_AXIS) {   // activities across, segments down
+    cells = cols.map((_, c) => cells.map((row) => row[c]));
+    [rows, cols] = [cols, rows];
+  }
+  return {
+    rowsAxis: rowsAx, colsAxis: colsAx, rows, cols, cells,
+    state: worstState(states), value: null, text: fmt(null, unit),
   };
 }
 

@@ -62,6 +62,25 @@ Computed per distinct activity name.
 | `sojourn_mean/median/min/max/total/std/p90/p95_time` | **sojourn time** = `completion − previous event's completion` in the same case, aggregated over the activity's events. Defined on **any** timestamped log. |
 | `traversal_frequency` | replay-based: how many times the *model* walks this activity — see [§9](#9-traversal-metrics-replay-on-the-model). Differs from `frequency` wherever the model over- or under-generalises. |
 
+**Rework: three related numbers.** `repeat_frequency` above counts repeat
+*executions* of an activity, so one case that redoes it five times adds
+five. The dashboards measure rework per *case* instead
+([`dashboards.md`](dashboards.md) §4), and the three are not
+interchangeable:
+
+| | Counts | Denominator |
+|---|---|---|
+| `repeat_frequency` (model overlay) | repeat executions | — (a count) |
+| `actRepeats` (dashboard) | repeat executions per case, averaged | all cases; 0 for a case that skips the activity |
+| `actRework` (dashboard) | cases that run the activity more than once | **cases that run it at all** |
+
+So `actRework` answers "when this activity is performed, how often is it
+redone?" and is comparable between a common activity and a rare one, while
+`repeat_frequency / case_coverage` is the mean number of repeats among the
+cases performing it — a different quantity whenever a case repeats more
+than once. The process-level `rework` of [§4](#4-process-metrics-per-family-cell--sub-log)
+is the share of cases in which *any* activity repeats.
+
 `std` is the **sample** standard deviation (`ddof = 1`) and is omitted
 when the metric has fewer than two samples; `p90` / `p95` are the 90th /
 95th percentiles by **linear interpolation** (numpy/pandas default).
@@ -208,6 +227,15 @@ via the concurrency-aware clustering
 | `n_variants`            | number of **concurrency-aware** behavioural variants — traces differing only in the interleaving order inside a parallel block share a variant. |
 | `n_sequence_variants`   | number of distinct activity **sequences** (the naive trace-variant count). Always `≥ n_variants`. |
 | `fitness`               | fraction of cases in `[0, 1]` that replayed cleanly on the tree. `1 − fitness` is the noise share. |
+
+**On dashboards.** The same clustering can be handed to
+`build_fact_table(behaviour=…)`, which makes each case's behavioural
+variant a segment axis and a filter ([`dashboards.md`](dashboards.md) §5).
+The ids and their order are the clustering's own, so `v3` on a dashboard
+is `v3` in the variants report; a case counted in `1 − fitness` has no
+variant and is *missing* on that axis, not a segment of its own. This is
+distinct from the dashboards' built-in `variant` axis, which ranks the
+`n_sequence_variants` activity sequences.
 
 **Choice metrics** (`FamilyChoice`) align OR-fork branch counts *across
 cells*. The per-cell trees are anti-unified into the family skeleton

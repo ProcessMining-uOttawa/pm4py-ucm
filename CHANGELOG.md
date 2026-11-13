@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Dashboard suggestions.** `suggest_dashboards(table)` (in
+  `pm4py_ucm.algo.dashboards`) proposes whole dashboards from the log
+  itself: an **Overview**, and — when the log supports them —
+  **Bottlenecks** (the activities holding the most elapsed time, the
+  slowest transitions, waiting vs service on an interval log), **Rework and
+  flow** (repeated activities, outcomes, branch probabilities at decision
+  points) and **Segments** (the case attributes the partition advisor
+  scores highest, resources, variants). Every widget carries a `why`: the
+  sentence, with the number from this log, that justifies it. Deterministic,
+  no LLM. Design and rules in `docs/dashboard_suggestions.md`, which also
+  specifies the two proposed follow-ups (definitions written by an external
+  LLM from an exported brief; dashboards from a GRL goal model).
+- **Web app: ✦ Suggest.** The Dashboards view opens a log's first dashboard
+  on the proposed Overview instead of a fixed six-widget starter, and a
+  green **✦ Suggest** button (also shown on an empty dashboard) lists the
+  proposals with their reasons; **Add** creates a new named dashboard, or
+  fills the current one when it is empty. Existing dashboards are never
+  replaced. Suggested KPIs come with a target prefilled at today's value
+  and switched **off**.
+- `dashboard_html(..., suggestions=…)` carries the proposals to the page;
+  read-only exports and the session report drop them.
+- **Dashboards: an Activity axis.** A widget on a per-activity metric
+  (sojourn, service, waiting, frequency, presence, repeats) can now take
+  **Activity (every one)** as a row or column axis: one bar per activity,
+  or — with a second axis — an activity × month / attribute heatmap.
+  Clicking a bar or row filters to the cases containing that activity.
+  Implemented in both engines and pinned by the parity suite. The
+  suggestions use it so each dashboard shows the whole picture after its
+  headline KPIs: the process footprint, sojourn by activity, and
+  activity × period / attribute heatmaps.
+- **Dashboards: a per-activity rework metric.** `actRework` (*Activity
+  rework rate*) is the share of the cases performing an activity that
+  perform it more than once; cases that skip the activity are not in the
+  denominator. With the Activity axis it gives *rework by activity* and an
+  activity × month heatmap, both now part of the suggested *Rework and
+  flow* dashboard.
+- **Dashboards: behavioural variants.** `build_fact_table(...,
+  behaviour=clustering)` adds each case's concurrency-aware variant as the
+  case attribute `behavioural variant`, so dashboards can segment and
+  filter by behaviour instead of by raw activity sequence (ClaimsPaymentLog:
+  164 sequences, 18 behavioural variants). Ids match the scenario reports;
+  tooltips show each variant's partial-order expression. The app supplies
+  it from the replay the Model view already ran, **✦ Suggest** proposes a
+  *Behavioural variants* dashboard when it is present, and an exported
+  script rebuilds it when a dashboard uses it.
+
+- **Dashboards: value axes.** Bar charts, line charts and histograms now
+  show a value axis with round ticks and gridlines, so a chart can be read
+  without hovering each point. Durations are labelled in the unit that
+  keeps the ticks round (`0 m … 60 m` rather than fractions of a day). A
+  line chart's first and last labels moved inside the plot, where they line
+  up with it.
+
 ### Changed
 
 - **Python 3.9 is no longer supported; 3.13 and 3.14 are.**
@@ -30,6 +85,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Bar charts of sub-day durations were flat.** Bar heights were scaled to
+  the largest value *or 1*, whichever was greater, so a chart whose values
+  were all below one day (or below 1 of anything) drew every bar near its
+  minimum height. Bars are now proportional from zero to the axis top.
+- **Editing a dashboard widget reset its activities.** Reopening any widget
+  whose metric takes parameters (time between two activities, sojourn,
+  branch probability, …) showed the log's default activities instead of the
+  widget's own, and saving wrote those defaults back. The composer read the
+  saved parameters after its formula validator had already overwritten
+  them.
+- **Editing a line, pie or gauge widget turned it into the first shape
+  offered** (a line became bars). Only histogram and box plot were restored
+  on edit; every saved shape is now, subject to the same guards as before.
 - **The PyPI project page showed no screenshots.** `README.md` doubles as the
   long description, and PyPI has no repository behind it, so its relative
   image paths and links were broken there. Images now point at

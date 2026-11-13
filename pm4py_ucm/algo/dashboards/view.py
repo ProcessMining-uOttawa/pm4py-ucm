@@ -199,6 +199,7 @@ def dashboard_html(
     family_report: Optional[str] = None,
     dashboards: Optional[Sequence[Dict[str, Any]]] = None,
     active: Optional[str] = None,
+    suggestions: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> str:
     """Build the self-contained dashboard document.
 
@@ -248,6 +249,14 @@ def dashboard_html(
         rerun, ``id`` must be **fresh per request** — the island
         remembers the ids it has applied, and a reused one would either
         be ignored or breed a duplicate widget on every interaction.
+    suggestions
+        Dashboards to *offer* — the output of
+        :func:`~.suggest.suggest_dashboards`. The page lists them behind
+        its Suggest button and adds one as a new named dashboard on
+        request; it never computes a suggestion itself, so there is no
+        second implementation to keep in step. Ignored when ``read_only``:
+        a reader cannot restructure the dashboard, so the list would be
+        dead weight in an export.
 
     Returns
     -------
@@ -275,6 +284,7 @@ def dashboard_html(
         "storageKey": storage_key or table.log_name,
         "theme": theme,
         "pendingPin": pending_pin,
+        "suggestions": [] if read_only else list(suggestions or []),
         # Both notations as inline SVG for the session report's model
         # section — the one thing the browser cannot render itself, so the
         # backend embeds it here for the client-built report to lift.

@@ -8,6 +8,10 @@ the metric catalog
 and the computation engine
 ([`algo/dashboards/engine.py`](../pm4py_ucm/algo/dashboards/engine.py)).
 
+Dashboards *proposed* from the log — which widgets, and why — are specified
+separately in [`dashboard_suggestions.md`](dashboard_suggestions.md); they are
+ordinary widget specs and add nothing to this contract.
+
 Like [`metrics.md`](metrics.md), it is a *contract*: every rule below is
 pinned by a test in
 [`tests/test_dashboards.py`](../tests/test_dashboards.py) with
@@ -150,6 +154,10 @@ The distinction is per metric, and it matters:
 
 * `actPresence` — absence **is** the answer, so a case that skips the
   activity scores 0 and stays in the denominator;
+* `actRework` — a case that skips the activity has nothing to redo, so
+  it is missing: the rate is *among the cases performing the activity*,
+  and a rare activity that is always redone reads 100% rather than its
+  share of the log;
 * `actSojourn` — a case that skips the activity has no sojourn time for
   it, so it is missing;
 * `edgeShare` — cases that never reach the source activity are not in the
@@ -202,12 +210,19 @@ reconcile — and the composer surfaces it on the affected metrics.
 | `actFreq` | activity | count | occurrences of the activity within the case. |
 | `actPresence` | activity | percent | 1 when the case contains the activity. |
 | `actRepeats` | activity | count | occurrences beyond the first; 0 when it runs once *and* when it never runs. |
+| `actRework` | activity | percent | 1 when the case runs the activity more than once, **among cases that run it at all**. |
 | `actSojourn` | activity | time | time since the case's previous event (waiting + service). |
 | `actService` | activity | time | start to completion. **Interval logs only.** |
 | `actWaiting` | activity | time | previous event's completion to this activity's start. **Interval logs only.** Negative values are kept — they mean real concurrency, not an error. |
 | `edgeFreq` | edge | count | directly-follows traversals of `from → to` within the case. |
 | `edgeTime` | edge | time | elapsed time across the `from → to` step. |
 | `edgeShare` | edge | percent | share of cases taking `from → to` **among those reaching `from`**. |
+
+`actRepeats` and `actRework` both describe rework and differ in what they
+count and over whom — see [`metrics.md`](metrics.md) §2, which also sets
+them against the model overlay's `repeat_frequency`. As a count,
+`actRepeats` displays as a whole number, so an average of 0.3 reads "0";
+`actRework` is the one to chart.
 
 Interval-only metrics stay **visible** in the composer on a
 single-timestamp log, marked unavailable with a reason, rather than
@@ -306,6 +321,58 @@ one per detected case attribute (`attr:<name>`).
 * **Empty segments are omitted, not zeroed.** A segment with no surviving
   case is not a zero bar.
 
+### The Activity axis
+
+`activity` is the one axis that does **not** partition the cases. It varies
+an activity-level metric's own `activity` parameter over every activity in
+the log, so one widget shows *sojourn by activity* instead of the sojourn of
+the one activity its spec names — and, with a second (case) axis, an
+activity × month or activity × attribute heatmap.
+
+* It is valid only for metrics measured per activity (`actFreq`,
+  `actPresence`, `actRepeats`, `actRework`, `actSojourn`, `actService`,
+  `actWaiting`);
+  the composer disables it for the rest, and the engines raise otherwise.
+  The `activity` in `params` is ignored.
+* The result has the shape of any segmented widget (`series`, or
+  `rows`/`cols`/`cells`), so every renderer, the bar cap, CSV and axis swap
+  work unchanged. There is no overall `value`: the activities do not share
+  one.
+* An activity with no value in any surviving case is omitted, like any
+  empty segment — so a time metric drops activities that never occur under
+  the filter, while `actPresence` keeps them at 0%, which is the answer.
+* Clicking a bar or a row drills down to **the cases containing that
+  activity** (a `segment` filter on `activity` is the `contains` filter).
+* It is not listed by `segment_axes`, which the filter picker enumerates:
+  activities are filtered with *contains*, not as a segment.
+
+Cost: the metric runs once per activity, so a widget on this axis costs
+as many passes over the events as the log has activities.
+
+### Behavioural variants
+
+`build_fact_table(log_df, behaviour=clustering)` adds each case's
+**behavioural variant** — its concurrency-aware variant, from
+[`variants/clustering.py`](../pm4py_ucm/algo/discovery/variants/clustering.py)
+— as a case attribute named `behavioural variant` (`BEHAVIOUR_ATTRIBUTE`).
+From there it is an ordinary enumeration: the axis
+`attr:behavioural variant`, a filter field, and readable by the ƒ grammar,
+in both engines, with no engine code of its own.
+
+* Values keep the clustering's ids and order (`v1` is the most frequent),
+  so a variant here is the variant of that name in the scenario reports.
+  They are **not** the `v1`, `v2`… of the built-in `variant` axis, which
+  ranks activity sequences.
+* A case that did not replay on the model belongs to no variant and is
+  *missing* — it leaves the denominator, as everywhere else.
+* The attribute carries `descriptions` (`{id: partial-order expression}`),
+  which the UI appends to bar, pie and table-header tooltips. The engines
+  never read it.
+* The variants are relative to the tree the clustering replayed on. A
+  dashboard that uses them means something only alongside that model: the
+  app keys the fact table on the miner's noise threshold for this reason,
+  and an exported script rebuilds the clustering at the same threshold.
+
 Segmentation arity is the first thing that decides the visualisation — see
 the next section.
 
@@ -368,6 +435,29 @@ aggregation, the axis kind and whether a target is set — none of which is
 a property of the metric. So they live in the composer (`syncViz`), and
 there is deliberately no per-metric or per-result-type viz list to drift
 out of step with them.
+
+### The value axis
+
+Bars, lines and histograms draw a **value axis**: a few round ticks from
+zero to just past the largest value, with faint gridlines. Without it a
+chart shows only shape — which month is highest, not how high — and every
+number costs a hover.
+
+* Ticks are chosen for roundness (steps of 1, 2, 2.5 or 5 × a power of
+  ten), about three intervals to a chart.
+* A duration is labelled in the unit that keeps its ticks round — a chart
+  peaking at 45 minutes reads `0 m … 60 m`, not fractions of a day — the
+  same largest-legible-unit rule a single value follows.
+* Counts tick in whole numbers; a share that reaches 100% gets no headroom
+  beyond it.
+* The axis always starts at **zero**, and a bar's height is its value over
+  the axis top. So bars are comparable by length, and a chart of sub-day
+  durations no longer flattens against a scale of one day.
+
+It is rendering only: `axisTicks` lives in `dash-ui.js`, reads the figures
+the engine already returns, and adds nothing to the contract. Pie, gauge
+and box plot already state their values (slices, the dial's scale,
+min / median / max) and are unchanged.
 
 ### What the extra-data shapes return
 

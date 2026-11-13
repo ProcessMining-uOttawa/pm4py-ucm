@@ -95,6 +95,14 @@ DEFAULT_MAX_PAYLOAD_BYTES = 24_000_000
 #: Cases retained when the byte budget forces sampling.
 DEFAULT_SAMPLE_CASES = 40_000
 
+#: Name (and label) of the case attribute that carries each case's
+#: **behavioural variant** — its concurrency-aware variant, where every
+#: interleaving of parallel activities counts as the same behaviour. Added
+#: by :func:`build_fact_table` when it is handed a variant clustering; from
+#: then on it is an ordinary enumeration attribute, so it segments and
+#: filters in both engines with no code of its own.
+BEHAVIOUR_ATTRIBUTE = "behavioural variant"
+
 #: Seed for the sampling RNG — a given log always yields the same sample,
 #: so an export is reproducible and two readers see identical numbers.
 SAMPLE_SEED = 42
@@ -145,6 +153,10 @@ class CaseAttribute:
     #: Buffer key in :attr:`FactTable.buffers` holding this attribute's
     #: per-case column.
     buffer: str = ""
+    #: Optional ``{value: explanation}`` shown beside a value in tooltips —
+    #: the partial-order expression behind a behavioural variant's short
+    #: id, for instance. Display only; the engines never read it.
+    descriptions: Dict[str, str] = field(default_factory=dict)
 
     def to_json(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {
@@ -157,6 +169,8 @@ class CaseAttribute:
             out["values"] = self.values
         if self.bins:
             out["bins"] = [b.to_json() for b in self.bins]
+        if self.descriptions:
+            out["descriptions"] = dict(self.descriptions)
         return out
 
 
@@ -480,6 +494,45 @@ def _build_attributes(log_df, case_ids, case_id_col: str,
     return attrs, buffers
 
 
+def _behaviour_attribute(behaviour, case_ids, taken: Sequence[str]
+                         ) -> Tuple[Optional[CaseAttribute], Any]:
+    """The behavioural-variant attribute for ``case_ids``, and its buffer.
+
+    ``behaviour`` is a
+    :class:`~pm4py_ucm.algo.discovery.variants.clustering.ClusteringResult`
+    (anything with ``.variants`` carrying ``variant_id``, ``case_ids`` and
+    ``partial_order_expression``). Values keep the clustering's own ids and
+    order — ``v1`` is the most frequent — so a variant here is the variant
+    of the same name in the scenario reports. A case that did not replay on
+    the model belongs to no variant and is *missing*, never lumped into a
+    bucket of its own: it leaves every segment's denominator.
+
+    Returns ``(None, None)`` when no case maps to a variant, or the log
+    already has an attribute of this name.
+    """
+    variants = list(getattr(behaviour, "variants", None) or [])
+    if not variants or BEHAVIOUR_ATTRIBUTE in taken:
+        return None, None
+    of_case: Dict[str, str] = {}
+    for v in variants:
+        for cid in v.case_ids:
+            of_case[str(cid)] = v.variant_id
+    per_case = [of_case.get(str(cid)) for cid in case_ids]
+    present = set(x for x in per_case if x is not None)
+    if not present:
+        return None, None
+    # Only variants with a case in this table (a sampled table may miss the
+    # rare ones), in the clustering's frequency order.
+    kept = [v for v in variants if v.variant_id in present]
+    values = [v.variant_id for v in kept]
+    attr = CaseAttribute(
+        name=BEHAVIOUR_ATTRIBUTE, label=BEHAVIOUR_ATTRIBUTE,
+        type="enumeration", values=values, buffer="behaviour",
+        descriptions={v.variant_id: v.partial_order_expression
+                      for v in kept if v.partial_order_expression})
+    return attr, _code_column(per_case, values)
+
+
 def build_fact_table(
     log_df,
     *,
@@ -492,6 +545,7 @@ def build_fact_table(
     bins: int = 4,
     max_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES,
     sample_cases: int = DEFAULT_SAMPLE_CASES,
+    behaviour=None,
 ) -> FactTable:
     """Build the client-side fact table for ``log_df``.
 
@@ -507,6 +561,17 @@ def build_fact_table(
         exceed it, a deterministic sample of ``sample_cases`` cases is
         built instead and :attr:`FactTable.sampled_from` records the true
         population. Set to ``0`` to disable the budget entirely.
+    behaviour
+        Optional concurrency-aware variant clustering of this same log —
+        the result of
+        :func:`pm4py_ucm.algo.discovery.variants.clustering.cluster` (or
+        ``synthesize_scenarios``' clustering). When given, each case's
+        **behavioural variant** becomes a case attribute named
+        :data:`BEHAVIOUR_ATTRIBUTE`, usable as a segment axis and a filter
+        like any other. Unlike the built-in ``variant`` axis, which
+        distinguishes every activity *sequence*, it folds the interleavings
+        of parallel activities into one variant — relative to the process
+        tree the clustering replayed on.
 
     Returns
     -------
@@ -593,6 +658,14 @@ def build_fact_table(
     attrs, attr_buffers = _build_attributes(
         log_df, pd.Index(case_ids), case_id_col, bins)
     buffers.update(attr_buffers)
+
+    if behaviour is not None:
+        b_attr, b_buffer = _behaviour_attribute(
+            behaviour, case_ids,
+            [a.name for a in attrs] + [a.label for a in attrs])
+        if b_attr is not None:
+            attrs.append(b_attr)
+            buffers[b_attr.buffer] = b_buffer
 
     return FactTable(
         log_name=log_name,

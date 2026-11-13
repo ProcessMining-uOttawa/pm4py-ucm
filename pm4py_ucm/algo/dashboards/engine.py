@@ -244,6 +244,19 @@ def per_case_values(table: FactTable, metric: str,
     if metric == "rework":
         return _rework(table)
 
+    if metric == "actRework":
+        # Among the cases performing the activity, was it performed more
+        # than once? A case that skips it has nothing to redo: missing,
+        # not a zero that would dilute the rate (as with edgeShare).
+        code = _act_code(table, p.get("activity", ""))
+        out = np.full(n, np.nan)
+        if code < 0:
+            return out
+        owner = _case_of_event(table)[table.act_codes == code]
+        freq = np.bincount(owner, minlength=n)
+        out[freq > 0] = (freq[freq > 0] > 1).astype(np.float64)
+        return out
+
     if metric in ("actFreq", "actPresence", "actRepeats"):
         code = _act_code(table, p.get("activity", ""))
         if code < 0:
@@ -729,6 +742,12 @@ TIME_AXES = ("year", "quarter", "month", "weekday")
 
 _WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
+#: The one axis that does not partition cases: it varies an activity-level
+#: metric's ``activity`` parameter over every activity in the log (see
+#: :func:`_by_activity`). Offered by the composer only for those metrics,
+#: so it is not listed by :func:`segment_axes`.
+ACTIVITY_AXIS = "activity"
+
 
 def segment_axes(table: FactTable) -> List[Dict[str, str]]:
     """Segmentation axes this log actually supports, for the composer."""
@@ -895,6 +914,11 @@ def _one_filter(table: FactTable, f: Dict[str, Any]):
 
     if field == "segment":
         axis, label = value[0], value[1]
+        if axis == ACTIVITY_AXIS:
+            # Drilling into an activity's bar or row: the cases behind it
+            # are the ones that contain the activity.
+            has = _first_occurrence(table, _act_code(table, label)) >= 0
+            return ~has if op == "not" else has
         codes, labels = segment_keys(table, axis)
         if label not in labels:
             return np.zeros(n, dtype=bool)
@@ -1133,12 +1157,16 @@ def compute_widget(spec: Dict[str, Any], table: FactTable, *,
         out["state"] = target_state(value, spec.get("target"))
         return out
 
-    values = per_case_values(table, metric_id, spec.get("params"))
-    values = np.where(mask, values, np.nan)
-
     rows_ax = (spec.get("segment") or {}).get("rows") or "none"
     cols_ax = (spec.get("segment") or {}).get("cols") or "none"
     target = spec.get("target")
+
+    if ACTIVITY_AXIS in (rows_ax, cols_ax):
+        return {**out, **_by_activity(table, spec, mask, rows_ax, cols_ax,
+                                      agg_kind, unit, target)}
+
+    values = per_case_values(table, metric_id, spec.get("params"))
+    values = np.where(mask, values, np.nan)
 
     if rows_ax == "none" and cols_ax == "none":
         res = {**out, **_kpi(values, agg_kind, unit, target, n_cases)}
@@ -1285,6 +1313,91 @@ def _grid(table, values, rows_ax, cols_ax, agg_kind, unit,
         "state": worst_state(states),
         "value": aggregate(values, agg_kind),
         "text": fmt(aggregate(values, agg_kind), unit),
+    }
+
+
+def _by_activity(table, spec, mask, rows_ax, cols_ax, agg_kind, unit,
+                 target) -> Dict[str, Any]:
+    """A widget whose axis is the log's **activities**.
+
+    Every other axis partitions the *cases*; this one varies the metric's
+    own ``activity`` parameter, so one widget covers every activity instead
+    of the one its spec names — "sojourn by activity", or, with a second
+    axis, an activity × month heatmap. It therefore needs a metric that is
+    measured per activity, and the ``activity`` in ``spec["params"]`` (if
+    any) is ignored.
+
+    The output has exactly the shape :func:`_series_by` / :func:`_grid`
+    return, so nothing downstream tells the difference. An activity with no
+    value in any surviving case is omitted, like any empty segment; there
+    is no single overall value (the activities do not share one), so
+    ``value`` is ``None``.
+    """
+    import numpy as np
+
+    metric_id = spec.get("metric", "")
+    metric = BY_ID.get(metric_id)
+    if metric is None or not any(p.name == "activity" for p in metric.params):
+        raise ValueError(
+            "The Activity axis needs a metric measured per activity "
+            "(sojourn, service or waiting time, frequency, presence, "
+            "repeats, rework)."
+        )
+    if rows_ax == cols_ax:
+        raise ValueError("Activity cannot be both the row and column axis.")
+
+    params = dict(spec.get("params") or {})
+    per_activity = []
+    for name in table.activities:
+        v = per_case_values(table, metric_id, {**params, "activity": name})
+        v = np.where(mask, v, np.nan)
+        if np.any(np.isfinite(v)):
+            per_activity.append((name, v))
+
+    other = cols_ax if rows_ax == ACTIVITY_AXIS else rows_ax
+    if other == "none":
+        series, states = [], []
+        for name, v in per_activity:
+            value, state, _ = _score(v, agg_kind, target)
+            series.append({"label": name, "value": value,
+                           "text": fmt(value, unit), "state": state,
+                           "nCases": int(np.count_nonzero(np.isfinite(v)))})
+            states.append(state)
+        return {"axis": ACTIVITY_AXIS, "series": series,
+                "state": worst_state(states), "value": None,
+                "text": fmt(None, unit)}
+
+    codes, labels = segment_keys(table, other)
+    used = [k for k in range(len(labels))
+            if any(np.any(np.isfinite(v) & (codes == k))
+                   for _, v in per_activity)]
+    # cells[a][k]: activity a, segment k of the other axis.
+    cells, states = [], []
+    for _, v in per_activity:
+        row = []
+        for k in used:
+            sel = np.where(codes == k, v, np.nan)
+            n = int(np.count_nonzero(np.isfinite(sel)))
+            if n == 0:
+                row.append({"value": None, "text": "—", "state": None,
+                            "nCases": 0})
+                continue
+            value, state, _ = _score(sel, agg_kind, target)
+            row.append({"value": value, "text": fmt(value, unit),
+                        "state": state, "nCases": n})
+            states.append(state)
+        cells.append(row)
+
+    acts = [name for name, _ in per_activity]
+    segs = [labels[k] for k in used]
+    if rows_ax != ACTIVITY_AXIS:  # activities across, segments down
+        cells = [list(col) for col in zip(*cells)] if cells else []
+        acts, segs = segs, acts
+    return {
+        "rowsAxis": rows_ax, "colsAxis": cols_ax,
+        "rows": acts, "cols": segs, "cells": cells,
+        "state": worst_state(states), "value": None,
+        "text": fmt(None, unit),
     }
 
 

@@ -7,7 +7,7 @@ Contents:
 | `pm4py_ucm_tutorial.ipynb`              | **Main tutorial notebook** — guided tour of the full model-discovery feature surface against a realistic claims-payment log, including the standard BPMN 2.0 export. Recommended starting point for the discovery / rendering / decomposition side of the package. |
 | `scenario_synthesis_tutorial.ipynb`     | **Scenario-synthesis tutorial** — the scenario layer end to end: concurrency-aware variants, the `LoopEntryGuard`, both OR-fork condition encodings (variant-driven and **data-driven / decision-mining**, with the per-fork accuracy report), decomposed UCMs, and a capstone running both encodings on `ClaimsPaymentLog`. |
 | `model_families_tutorial.ipynb`         | **Model-families + performance-overlays tutorial** — partitions `ClaimsPaymentLog` by case attributes, mines one model per combination, renders the stack/matrix grid, exports per-cell / combined / dynamic-stub-umbrella `.jucm` files, overlays frequencies and times on activities and edges, and compares members via the family statistics + interactive HTML report. |
-| `dashboards_tutorial.ipynb`             | **Dashboards tutorial** — builds the per-case fact table, computes widgets (KPIs, segmented breakdowns, tables) from the metric catalog, adds filters / targets / a scorecard, writes custom metrics in the **ƒ formula language**, and exports a self-contained interactive HTML dashboard (plus an embedded mined model). |
+| `dashboards_tutorial.ipynb`             | **Dashboards tutorial** — builds the per-case fact table, computes widgets (KPIs, segmented breakdowns, tables) from the metric catalog, adds filters / targets / a scorecard, writes custom metrics in the **ƒ formula language**, charts every activity at once (the **Activity axis**), segments by **behavioural variants**, lets the log **suggest** whole dashboards, and exports a self-contained interactive HTML dashboard (plus an embedded mined model). |
 | `IssueTracker.zip`                      | Small, readable event log (~100 K events / 11 K cases, 9 distinct activities, 5 roles). Drives sections 0-5 of the main notebook. |
 | `ClaimsPaymentLog.zip`                  | Heavier, denser event log (~90 K events, more activities and actor types). Drives the second half of the main notebook, the scenario capstone, and the families / dashboards tutorials. |
 | `mine_and_export.py`                    | Minimal command-line script that mines a UCM, exports a `.jucm`, and renders a PNG. |
@@ -106,16 +106,25 @@ reference.
 4. the **ƒ custom-formula language** (`compile_formula`) — per-case
    expressions with a `where` clause, for metrics the catalog does not
    name;
-5. assembling a dashboard and **exporting** it as one self-contained
+5. the **Activity axis** — one widget covering every activity, as bars or
+   as an activity × month heatmap — and the per-activity **rework rate**;
+6. **behavioural variants** — the concurrency-aware clustering as a
+   segment axis and filter (`build_fact_table(behaviour=…)`), and the
+   heatmap showing what each variant consists of;
+7. **suggested dashboards** (`suggest_dashboards`) — whole dashboards
+   proposed from the log itself, each widget with its reason;
+8. assembling a dashboard and **exporting** it as one self-contained
    interactive HTML file (`write_dashboard`) — the same artifact the web
    app's Dashboards view shows;
-6. related exports — embedding a mined model as inline SVG, and the
+9. related exports — embedding a mined model as inline SVG, and the
    multi-section session report.
 
 Outputs land in `output/dashboards/`. See
 [`docs/dashboards.md`](../docs/dashboards.md) for the semantic contract
 (every metric's exact definition, the ƒ grammar, and the engine's
-rounding / weighting decisions). Everything is also point-and-click in the
+rounding / weighting decisions) and
+[`docs/dashboard_suggestions.md`](../docs/dashboard_suggestions.md) for
+the rules behind the suggestions. Everything is also point-and-click in the
 deployed web app (`web/streamlit_app_v6.py`, **Dashboards** view).
 
 ## Mine-and-export script
