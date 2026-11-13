@@ -2,8 +2,8 @@
 project stores (``docs/sessions.md`` §4–§6).
 
 Streamlit-free and value-oriented: the app gathers the current settings into a
-``{id: value}`` mapping and calls :func:`collect`; a later step (Load/resume)
-will call :func:`apply` to seed them back. Keeping the *list of ids* here — not
+``{id: value}`` mapping and calls :func:`collect`; on load the app seeds them
+back itself (``_apply_project_config``). Keeping the *list of ids* here — not
 inlined in the app — is what stops persistence rotting as the app grows:
 adding a setting is one :data:`REGISTRY` entry, and :func:`collect` refuses a
 mapping that doesn't match the registry (an unknown id, or a missing one), so

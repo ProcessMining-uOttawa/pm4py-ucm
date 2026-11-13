@@ -36,6 +36,11 @@
 |  | [`test_quick_reductions.py`](test_quick_reductions.py) | V6's one-click reductions record what they selected, and hold. | 12 |
 |  | [`test_replay_budget.py`](test_replay_budget.py) | Tests for telling a truncated replay apart from a trace that cannot fit. | 7 |
 | | _Cost screening & log reduction subtotal_ | | **31** |
+| **Log import & filtering** | [`test_csv_timestamp_mapping.py`](test_csv_timestamp_mapping.py) | The CSV import must hand pm4py a real datetime timestamp column. | 8 |
+|  | [`test_upload_edge_cases.py`](test_upload_edge_cases.py) | Upload edge cases the readers used to crash or silently misread. | 23 |
+|  | [`test_variant_log_filter.py`](test_variant_log_filter.py) | Selecting an event log down to chosen behavioural variants. | 11 |
+|  | [`test_xes_gz_upload.py`](test_xes_gz_upload.py) | An uploaded ``.xes.gz`` (bare, or inside a zip) must reach pm4py inflated. | 6 |
+| | _Log import & filtering subtotal_ | | **48** |
 | **BPMN 2.0 export** | [`test_bpmn_export.py`](test_bpmn_export.py) | Tests for the BPMN 2.0 exporter (``docs/bpmn_export.md``). | 60 |
 | **Layout** | [`test_graphviz_layout.py`](test_graphviz_layout.py) | Tests for the graphviz-based layouter. | 8 |
 |  | [`test_layout.py`](test_layout.py) | Tests for the compact left-to-right auto-layouter. | 15 |
@@ -53,12 +58,8 @@
 |  | [`test_sessions_registry.py`](test_sessions_registry.py) | Tests for the Session Parameter Registry (``web/sessions/registry.py``). | 17 |
 | | _Sessions (save / share / resume) subtotal_ | | **66** |
 | **Progress / infrastructure** | [`test_progress.py`](test_progress.py) | Tests for the progress-reporting layer and the vectorized DataFrame resource miner. | 15 |
-| **Other** | [`test_csv_timestamp_mapping.py`](test_csv_timestamp_mapping.py) | The CSV import must hand pm4py a real datetime timestamp column. | 8 |
 |  | [`test_release_consistency.py`](test_release_consistency.py) | Drift guards for the things a release has to keep true. | 9 |
-|  | [`test_upload_edge_cases.py`](test_upload_edge_cases.py) | Upload edge cases the readers used to crash or silently misread. | 23 |
-|  | [`test_variant_log_filter.py`](test_variant_log_filter.py) | Selecting an event log down to chosen behavioural variants. | 11 |
-|  | [`test_xes_gz_upload.py`](test_xes_gz_upload.py) | An uploaded ``.xes.gz`` (bare, or inside a zip) must reach pm4py inflated. | 6 |
-| | _Other subtotal_ | | **57** |
+| | _Progress / infrastructure subtotal_ | | **24** |
 | | **Total** | | **1476** |
 
 See the repository [`README.md`](../README.md#testing) for how to run the suite, and [`docs/metrics.md`](../docs/metrics.md) for the metric definitions the validation tests enforce.

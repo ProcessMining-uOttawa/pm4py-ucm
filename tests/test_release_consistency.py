@@ -18,8 +18,8 @@ not actually promise them:
 
 * *"every registry parameter is documented in docs/sessions.md"* — §5 of that
   document is explicitly an **Example entries** list, not a catalogue, and it
-  ends by pointing at the registry test as the real guard. Twelve parameters
-  are absent by design.
+  ends by pointing at the registry test as the real guard. Parameters are
+  absent from it by design.
 * *"notebooks pin the current version"* — the tutorial's ``0.3.1`` is a
   historical *"As of pm4py-ucm 0.3.1"* note, which is correct and should stay.
 * *"screenshots are regenerated"* — they are captured by hand, deliberately.
@@ -42,6 +42,7 @@ _DOCS = [
     _ROOT / "README.md",
     _ROOT / "CHANGELOG.md",
     _ROOT / "HANDOFF.md",
+    _ROOT / "CONTRIBUTING.md",
     _WEB / "README.md",
     _ROOT / "demo" / "README.md",
     _ROOT / "tests" / "README.md",

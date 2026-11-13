@@ -1,17 +1,11 @@
 # BPMN 2.0 export
 
-> **Status: all five stages implemented** in
-> `pm4py_ucm/objects/ucm/exporter/variants/bpmn.py`, exposed as
-> `pm4py_ucm.write_bpmn` / `convert_to_bpmn_xml`, tested by
-> `tests/test_bpmn_export.py` (XSD conformance against the vendored OMG
-> schema, pm4py round trip, lane tiling, layout transfer, stubs, metrics).
-> Verified by eye in bpmn-js: flat, decomposed and dynamic-stub models import
-> without warnings, and so do heat-mapped and canonical-size exports of the
-> demo claims log, as do inline-stub, data-object and orthogonally routed
-> exports; the V6 Model and Family views offer the downloads. Nothing of the
-> plan is left; §13 lists what a later iteration could add. The three structural decisions were settled by
-> Daniel Amyot on 2026-11-10; §10 lists them and what implementation decided
-> since.
+**Status:** design note, built (0.8.5;
+`pm4py_ucm/objects/ucm/exporter/variants/bpmn.py`, exposed as
+`pm4py_ucm.write_bpmn` / `convert_to_bpmn_xml` / `write_bpmn_family`, and as
+downloads in the app's Model and Family views). It describes the exporter as
+it stands and the decisions behind it; `tests/test_bpmn_export.py` holds it
+to the OMG schema. §13 lists what a later iteration could add.
 
 ## 1. The feature
 
@@ -22,20 +16,20 @@ BPMN-style preview already shows it.
 
 Scope, in order of importance:
 
-1. Everything the generators produce today must map without loss of control
+1. Everything the generators produce maps without loss of control
    flow: `StartPoint`, `EndPoint`, `RespRef`, `OrFork`, `OrJoin`, `AndFork`,
    `AndJoin`, `EmptyPoint`, static `Stub` (hierarchical decomposition) and
    dynamic `Stub` (family assembly). These are the only `PathNode` kinds any
    converter in `pm4py_ucm/objects/ucm/conversion/` or
    `pm4py_ucm/algo/discovery/` instantiates.
-2. Components must survive as **lanes**, with the swim-lane geometry intact.
-3. Performance overlays must survive, machine-readably and, optionally, visibly.
-4. Model families must have a defensible rendering.
+2. Components survive as **lanes**, with the swim-lane geometry intact.
+3. Performance overlays survive, machine-readably and, optionally, visibly.
+4. Model families have a defensible rendering.
 5. Elements that only arrive through the `.jucm` importer (`WaitingPlace`,
    `Timer`, `FailurePoint`, `Anything`, `Connect`, `DirectionArrow`) get a
    best-effort mapping and are never a reason to refuse an export.
 
-Out of scope for this design: importing BPMN into a UCM (pm4py already reads
+Out of scope: importing BPMN into a UCM (pm4py already reads
 BPMN; a `convert_to_ucm(bpmn)` is a separate feature), executable semantics
 (`isExecutable="false"` always), message flows, and any GRL content.
 
@@ -48,9 +42,9 @@ that object model has no lanes, no nested lane sets, no call activities, no
 It would lose §4 (lanes), most of §3 (conditions, stubs) and all of §7
 (annotations).
 
-We write the XML ourselves, with the small element writer the `.jucm` exporter
-already uses (`pm4py_ucm/objects/ucm/exporter/variants/jucm.py`). pm4py's
-reader then becomes a **round-trip test**, not the implementation.
+The exporter writes the XML itself, with a small hand-rolled element writer
+like the `.jucm` exporter's, so the output is deterministic for a given
+model. pm4py's reader is then a **round-trip test**, not the implementation.
 
 Namespaces emitted:
 
@@ -61,7 +55,12 @@ Namespaces emitted:
 | `dc`, `di` | OMG DD `DC` / `DI` | bounds, waypoints |
 | `color` | `http://www.omg.org/spec/BPMN/non-normative/color/1.0` | BPMN in Color (heat-map) |
 | `bioc` | `http://bpmn.io/schema/bpmn/biocolor/1.0` | bpmn.io's older colour twin |
-| `ucm` | `http://pm4py-ucm.org/schema/bpmn/1.0` (to confirm) | extension elements: ids, kinds, metrics |
+| `ucm` | `urn:pm4py-ucm:bpmn:1.0` | extension elements: kinds, conditions, metrics (a URN, so the package claims no web domain) |
+
+What BPMN has no slot for travels in `extensionElements` as one
+`<ucm:ucm …/>` element carrying attributes (written `ucm:<attribute>` below),
+plus one `<ucm:metric name= value=>` per performance metric (§7) and one
+`<ucm:metadata name= value=>` per other metadata entry.
 
 ## 3. Element mapping
 
@@ -69,37 +68,36 @@ Namespaces emitted:
 
 | UCM | BPMN |
 |---|---|
-| `UCM` | `definitions` (`name`, `exporter="pm4py-ucm"`, `exporterVersion`) + one `collaboration` with one `participant` (the pool, named after the UCM) referencing the root `process`. |
+| `UCM` | `definitions` (`name`, `exporter="pm4py-ucm"`, `exporterVersion`) + one `collaboration` holding one `participant` per `process`; the root's is named after the UCM, the others after their map. |
 | root `UCMmap` | `process` with `isExecutable="false"`. `UCM.description` / `author` → `documentation`. |
-| every other `UCMmap` | its own `process`, and its own `bpmndi:BPMNDiagram`. Multi-diagram files are standard BPMN 2.0; bpmn.io and Camunda Modeler offer a diagram switcher. |
+| every other `UCMmap` | its own `process`, and its own `bpmndi:BPMNDiagram`. Multi-diagram files are standard BPMN 2.0. With `stubs="inline"` only root maps are processes (§3.3). |
 
-The whole mined model is **one** control flow, so there is exactly one pool.
-See §4 for why components are never pools.
+Each map is **one** control flow, so each diagram shows exactly one pool: its
+process's participant. See §4 for why components are never pools.
 
 ### 3.2 Path nodes
 
 | UCM | BPMN | Notes |
 |---|---|---|
-| `StartPoint` | `startEvent` | `pre_condition` → `documentation` and `ucm:precondition` extension. Not a `conditionalEventDefinition`: that changes execution semantics and most viewers draw it differently. |
-| `EndPoint` | `endEvent` | `post_condition` likewise. |
-| `RespRef` | `task` | BPMN has no definition/reference split. Every `RespRef` is its own task named after its `Responsibility`; `ucm:responsibility="<def id>"` keeps shared responsibilities traceable. `Responsibility.expression` → `documentation`. Always a plain `task`: typing by component kind (`userTask`, `serviceTask`) was considered and **rejected**, since a mined model carries no evidence for it. The kind stays visible on the lane (§4). |
-| `OrFork` | `exclusiveGateway` (`gatewayDirection="Diverging"`) | Arc `Condition` → `sequenceFlow/conditionExpression` of type `tFormalExpression`, `language` = jUCMNav's expression language, text = `Condition.expression`; `Condition.label` → the flow's `name`. A branch whose expression is the complement of all others (the synthesizer's "else") becomes the gateway's `default` flow instead of a condition. |
+| `StartPoint` | `startEvent` | `pre_condition` → `ucm:precondition` (and `ucm:precondition-label`). Not a `conditionalEventDefinition`: that changes execution semantics and most viewers draw it differently. Any node's `description` becomes its `documentation`. |
+| `EndPoint` | `endEvent` | `post_condition` likewise (`ucm:postcondition`). |
+| `RespRef` | `task` | BPMN has no definition/reference split. Every `RespRef` is its own task named after its `Responsibility`; `ucm:responsibility` (the definition's name) keeps shared responsibilities traceable, and `ucm:performer` names the mined performer. `Responsibility.expression` → `documentation`. Always a plain `task`: typing by component kind (`userTask`, `serviceTask`) was considered and **rejected**, since a mined model carries no evidence for it. The kind stays visible on the lane (§4). |
+| `OrFork` | `exclusiveGateway` (`gatewayDirection="Diverging"`) | Arc `Condition` → `sequenceFlow/conditionExpression` of type `tFormalExpression`, text = `Condition.expression`; `Condition.label` → the flow's `name`. An expression of `true` counts as no guard (decision 9). The single unguarded branch among otherwise guarded ones becomes the gateway's `default` flow. Generated gateway names (`OrFork`, `LoopJoin`, …) are dropped (decision 8). |
 | `OrJoin` | `exclusiveGateway` (`Converging`) | Loop back-edges need nothing special; BPMN sequence flows may form cycles. |
 | `AndFork` / `AndJoin` | `parallelGateway` | Direct. |
-| `EmptyPoint` | removed | The incoming and outgoing connections are merged into one `sequenceFlow`; the point's `(x, y)` becomes a waypoint, so routing bends survive (§5). An empty point carrying a condition or a non-empty name keeps its text as the merged flow's `name`. |
+| `EmptyPoint` | removed | The incoming and outgoing connections are merged into one `sequenceFlow`; the point's `(x, y)` becomes a waypoint, so routing bends survive (§5). A routing point that merges or splits paths (anything but one in, one out) cannot be removed and becomes an unnamed `exclusiveGateway` (`gatewayDirection="Mixed"`, `ucm:kind`). |
 | `Connect`, `DirectionArrow` | removed | Same treatment as `EmptyPoint`. |
-| `NodeConnection` | `sequenceFlow` | `threshold` → `ucm:threshold` extension only. `Condition.delta_x/delta_y` → the edge's `bpmndi:BPMNLabel` bounds. |
+| `NodeConnection` | `sequenceFlow` | `threshold` → `ucm:threshold` extension only. `Condition.delta_x/delta_y` offset the edge's `bpmndi:BPMNLabel`. |
 | `WaitingPlace` | `intermediateCatchEvent` with `conditionalEventDefinition` | Import-only. |
-| `Timer` | `intermediateCatchEvent` with `timerEventDefinition` | Import-only. A timeout path (a second outgoing connection) becomes an `eventBasedGateway` in front of two catch events (timer, conditional). |
+| `Timer` | `intermediateCatchEvent` with `timerEventDefinition` | Import-only. A timeout path (a second outgoing connection) simply leaves the event as a second flow; the `eventBasedGateway` construction the design proposed was not built. |
 | `FailurePoint` | `intermediateThrowEvent` with `errorEventDefinition` | Import-only. |
-| `Anything` | `task` named `anything`, `ucm:kind="anything"` | Import-only. |
+| `Anything` (and any other kind) | `task` with `ucm:kind` = the UCM type name | Import-only. |
 
 **Inclusive choice.** `from_process_tree` maps both `×` and `∨` to `OrFork`
-and records nothing about which. If the converter tags the fork
-(`metadata name="_op" value="OR"` or a new attribute), the exporter emits
-`inclusiveGateway` for the fork and its matching join; otherwise exclusive.
-This is the only place the UCM side would need a change for BPMN's sake, and
-it is optional.
+and records nothing about which, so every mined choice is exported as
+exclusive. The exporter does honour a tag: an `OrFork` / `OrJoin` carrying
+`metadata name="_op" value="OR"` becomes an `inclusiveGateway`. No converter
+sets it yet (decision 4, §13).
 
 ### 3.3 Stubs
 
@@ -109,7 +107,7 @@ it is optional.
 | any `Stub` (`stubs="inline"`) | **collapsed** `subProcess` whose body is the plug-in map, with its own `BPMNDiagram` | Only root maps become processes; a plug-in bound to several stubs is written once per stub (distinct ids). The sub-process owns the plug-in's `laneSet`, and bpmn-js draws those lanes on the sub-process's plane. A dynamic stub's inclusive choice leads to one nested sub-process per plug-in. The point of the mode: no `callActivity`, so pm4py's reader reads the file. |
 | dynamic `Stub`, N `PluginBinding`s | `subProcess` named after the stub containing `gateway → N callActivity → gateway` | Each `PluginBinding.precondition` → the `conditionExpression` on its branch. The sub-process is drawn **collapsed** in the parent (one box at the stub's coordinates, §5) with its own diagram, so the parent keeps the UCM's shape. |
 | gateway kind for dynamic stubs | always `inclusiveGateway`, diverging and converging | This is the Z.151 semantics: a dynamic stub selects **every** plug-in whose precondition holds, possibly several, and the paths rejoin when all selected plug-ins have completed. An inclusive join is exactly that. No syntactic "are the preconditions exclusive" detection: when the family's preconditions happen to be exclusive the inclusive gateway behaves identically, and guessing would mis-state the model whenever the guess is wrong. |
-| stub with several entries or exits | lossy | A call activity has one implicit entry, so several incoming flows merge. Each binding's start/end event in the called process is named after the stub entry/exit, and `ucm:binding` extension elements record the full binding table. No generator produces this shape today. |
+| stub with several entries or exits | lossy | A call activity has one implicit entry, so several incoming flows merge, and the binding table is not recorded. No generator produces this shape. |
 | a plug-in map bound to several stubs | one `process`, several `callActivity` | Free with `stubs="call"`; `stubs="inline"` duplicates it. |
 
 ### 3.4 Scenario layer
@@ -135,9 +133,13 @@ as pools would therefore misstate the model, so:
 - A lane lists its bound nodes as `flowNodeRef`s (`PathNode.cont_ref`).
 - `ComponentElement.kind` → `ucm:kind` on the lane and, with
   `lane_names="with_kind"`, a suffix in the lane name (`Clerk «Actor»`).
-- Nodes bound to no component go into an implicit lane named `(unassigned)`,
-  because flow nodes floating outside every lane of a laned pool render oddly.
-  Option `lanes="none"` drops lanes altogether.
+- Nodes bound to no component (start and end points, forks, joins) go **by
+  geometry** into the lane whose band holds them, or the nearest one
+  (decision 7). Gateways and events sitting in a participant's lane is
+  ordinary BPMN; a separate "(unassigned)" band would have to move the nodes.
+- A lane with child lanes cannot reference flow nodes itself, so a parent
+  component's directly-bound nodes get a child lane named after it.
+- Option `lanes="none"` drops lanes altogether.
 - Each plug-in map's `cont_refs` produce that process's own `laneSet`. The same
   `ComponentElement` referenced from several maps therefore appears as a lane
   with the same name in several processes, which is exactly what UCM maps do.
@@ -149,19 +151,17 @@ met:
 - The bundled Sugiyama layouter (`layout/layouter.py`) allocates each
   top-level component a **disjoint Y-band** by construction. Its output is
   lane-compatible as is: lane bounds = the component's Y-range stretched to
-  the pool's full width. Gaps between bands (where unbound nodes sit) become
-  the `(unassigned)` lane or are absorbed by the neighbouring lane when no
-  unbound node is there.
+  the pool's full width, with neighbouring lanes meeting at the midpoint of
+  the gap between their bands and the outermost reaching the pool border.
 - The graphviz layouter (`layout/graphviz_layouter.py`) draws components as
   **clusters**, i.e. bounding boxes, which may sit side by side at the same
   height. Two sibling components at the same Y cannot be lanes.
 
-Decision: the BPMN exporter **always runs the bundled swim-lane layouter**
-when it has to lay out, and when it is given a model with coordinates (e.g.
-imported from jUCMNav, or laid out by graphviz) it checks the lane condition
-and, if violated, re-stacks the offending components vertically with a
-**lane-fitting pass** that keeps X and only shifts Y per component band. The
-pass is reported in the result so the user knows the picture moved.
+So the exporter runs the bundled swim-lane layouter when no node is positioned
+yet, and **reuses** the coordinates of a positioned model (imported from
+jUCMNav, or laid out by graphviz) when its lanes can tile. A map whose
+sibling components overlap vertically is **re-laid out** with the swim-lane
+layouter, and a `UserWarning` says the picture moved (decision 5).
 
 ## 5. Preserving the layout
 
@@ -182,7 +182,7 @@ preview, which is the expectation to set.
 | start / end / intermediate event | 30 × 30 centred |
 | call activity / collapsed sub-process | as task, with `isExpanded="false"` |
 | lane | see §4; `isHorizontal="true"` |
-| pool | bounding box of all lanes plus a 30 px label strip on the left |
+| pool | bounding box of the nodes and component rectangles plus 40 px padding and a 30 px label strip on the left |
 
 `sizes="canonical"` switches to the standard 100 × 80 task / 50 × 50 gateway /
 36 × 36 event boxes and **scales the whole layout uniformly** by the smallest
@@ -199,7 +199,7 @@ slanted segment into an elbow first (horizontal-then-vertical on a forward
 segment, vertical-then-horizontal on a backward one), which is what keeps a
 loop back-edge from cutting through the loop body's last task box; the
 default `"straight"` keeps the UCM's own lines. Condition labels get a `BPMNLabel`
-positioned by `Condition.delta_x/delta_y` relative to the first waypoint.
+placed beside the first waypoint and shifted by `Condition.delta_x/delta_y`.
 
 Plug-in diagrams use the plug-in map's own coordinates. The collapsed
 call-activity box in the parent sits at the stub's `(x, y)`.
@@ -216,27 +216,27 @@ unreadable in most modellers until laid out. So BPMNDI is always written.
 BPMN has no standard place for mining metrics. Two layers, both on by default,
 each independently switchable:
 
-**Machine layer** (`metrics="extension"`, always safe). Every `_perf` metric
-that `pm4py_ucm/algo/performance.py` attached becomes a child of the node's
-or flow's `extensionElements`:
+**Machine layer** (`metrics="extension"`, always safe). Every `perf_*`
+metadata entry that `pm4py_ucm/algo/performance.py` attached becomes a child
+of the node's or flow's `extensionElements`, with the value as the metadata
+holds it:
 
 ```xml
 <bpmn:extensionElements>
   <ucm:metric name="traversal_frequency" value="258"/>
-  <ucm:metric name="mean_time" value="3.21" unit="d"/>
 </bpmn:extensionElements>
 ```
 
 This mirrors what the `.jucm` exporter does with `<metadata>` and what the
-jUCMNav properties view shows. Tools ignore it; pm4py preserves it; nothing
-is lost. (Note the `.jucm` exporter cannot put metadata on connections because
+jUCMNav properties view shows. Tools ignore it; nothing is lost. (Note the `.jucm` exporter cannot put metadata on connections because
 jUCMNav's metamodel lacks it; BPMN's `sequenceFlow` has `extensionElements`,
 so edge metrics are **more** complete in BPMN than in `.jucm`.)
 
 **Visible layer** (`annotate="edges"` default; `"none"`, `"all"`):
 
 - **Heat-map colours** (`heatmap_node=` / `heatmap_edge=` metric keys,
-  `heatmap_global=`; the PNG renderer's parameter names). The node fill and
+  `heatmap_global=`; the PNG renderer's parameter names; `node_span=` /
+  `edge_span=` give an explicit range, e.g. a family-wide one). The node fill and
   edge stroke colours, computed by the classic renderer's own helpers (value
   parsing, segment attribution, normalisation, blue ramp for counts and red
   for times), go on the `BPMNShape`/`BPMNEdge` as `color:background-color` /
@@ -258,19 +258,21 @@ process model.
 
 BPMN has no variability mechanism. Two outputs, mirroring the UCM side:
 
-- **`write_bpmn_family(family, path)`** writes the **assembled** family
-  (`families/assembly.py`) as one `.bpmn`: the shared skeleton is the root
-  process and each variation point is the dynamic-stub mapping of §3.3, a
-  data-based inclusive choice on the partition attribute over one called
-  process per cell (inclusive per §3.3; with one attribute per variation
-  point exactly one branch fires, so the picture reads as a plain variant
-  switch). This is a genuinely idiomatic BPMN rendering of a family
-  (a single model with `${region == "EU"}`-style gateways is how BPMN
-  practitioners model variants), and it is lossless with respect to the
-  assembled UCM.
-- When `path` ends in `.zip`, the archive additionally holds one `.bpmn` per
-  `FamilyCell`, named by `ModelFamily.file_stem`, for analysts who want each
-  cell standalone, exactly as `write_ucm_family` does for `.jucm`.
+- **`write_bpmn_family(family, path, assembled=None)`** writes one `.bpmn`
+  per `FamilyCell`, named by `ModelFamily.file_stem`, exactly as
+  `write_ucm_family` does for `.jucm` — into one archive when `path` ends in
+  `.zip`, otherwise into that directory.
+- Given `assembled=` (the result of `assemble_ucm_family`), it adds
+  `family_umbrella.bpmn`: the shared skeleton is the root process and each
+  variation point is the dynamic-stub mapping of §3.3, a data-based inclusive
+  choice on the partition attribute over one called process per cell
+  (inclusive per §3.3; with one attribute per variation point exactly one
+  branch fires, so the picture reads as a plain variant switch). This is an
+  idiomatic BPMN rendering of a family (a single model with
+  `${region == "EU"}`-style gateways is how BPMN practitioners model
+  variants), and it is lossless with respect to the assembled UCM.
+- `family_scale=True` with a heat-map metric colours every file on one
+  family-wide range, so a colour means the same thing in every member.
 - The family **statistics report** and the **Compare** view stay HTML. They
   have no BPMN counterpart and inventing one adds nothing.
 
@@ -284,25 +286,34 @@ Library (`pm4py_ucm/api.py`, implemented in
 
 ```python
 pm4py_ucm.write_bpmn(
-    ucm, path, *,
+    ucm, file_path,
     stubs="call",            # | "inline"
     lanes="components",      # | "none"
     lane_names="plain",      # | "with_kind"
     sizes="layout",          # | "canonical"
     metrics="extension",     # | "none"
     annotate="edges",        # | "none" | "all"
-    overlay=None,            # metric key for heat-map colours, as the visualizer takes it
+    heatmap_node=None,       # metric key colouring the task boxes
+    heatmap_edge=None,       # metric key colouring the sequence flows
+    heatmap_global=False,    # normalise on the whole model, not per map
+    node_span=None,          # explicit (lo, hi) range; overrides heatmap_global
+    edge_span=None,
     data="none",             # | "objects"
-    layout=None,             # reuse coordinates if present, else swim-lane layouter
-    validate=True,           # validate_ucm() first, as every other exporter does
-) -> str
+    routing="straight",      # | "orthogonal"
+    layout=True,             # run the swim-lane layouter if nothing is positioned
+    validate=True,           # check_ucm() first, as every other exporter does
+    encoding="UTF-8",
+) -> str                     # the path
 
+pm4py_ucm.convert_to_bpmn_xml(ucm, **same) -> str   # the XML as a string
 pm4py_ucm.write_bpmn_family(family, path, assembled=None,
                             family_scale=False, **same) -> str
-pm4py_ucm.convert_to_bpmn_xml(ucm, **same) -> str   # the XML as a string, for the app's download button
 ```
 
-Web app (V6 only, per `HANDOFF.md`): a **Prepare BPMN… / Download BPMN**
+Everything after `file_path` is keyword-only, and an unknown choice raises
+`ValueError`.
+
+Web app (V6): a **Prepare BPMN… / Download BPMN**
 pair next to the `.jucm` download in the Model view, honouring the view's
 current overlay and heat-map selection (built on request and cached per
 model + heat-map, like the PNG), and a **BPMN 2.0 (.zip)** in the Family
@@ -322,25 +333,26 @@ activity a dead end there. The library keeps `stubs="call"` (decision 1).
 graphviz, and graphviz clusters are not lane-compatible (§4), so an app
 export never carries the on-screen coordinates; it carries the swim-lane
 layouter's. A library user who lays out with the bundled layouter (the
-default when no coordinates are set) gets the 1:1 transfer of §5. The session registry
-does not change: the export is derived, not a stored parameter. The exported
-Python script (`web/sessions/codegen.py`) gains one `write_bpmn(...)` line
-when the user downloaded a BPMN during the session is **not** proposed; keep
-codegen tied to stored parameters.
+default when no coordinates are set) gets the 1:1 transfer of §5.
 
-Validation gates, all in `tests/`:
+The session registry does not change: the export is derived, not a stored
+parameter, and the exported Python script does not write a `.bpmn`.
 
-1. **XSD**: validate against the OMG `BPMN20.xsd` family (vendored under
-   `tests/data/bpmn-xsd/`, ~300 KB).
-2. **Round trip**: `pm4py.read_bpmn` reads every exported fixture and the
-   recovered node and flow multiset equals the expected one (tasks, gateways by
-   type, events, flows).
+Tests (`tests/test_bpmn_export.py`):
+
+1. **XSD**: every export validates against the OMG `BPMN20.xsd` family
+   (vendored under `tests/data/bpmn-xsd/`; needs `lxml`).
+2. **Round trip**: `pm4py.read_bpmn` reads the stub-free and inline exports
+   and recovers the expected tasks, gateways by type, events and flows.
 3. **Lane tiling**: every lane's Y-range is disjoint from its siblings and the
    union covers the pool.
-4. **Golden files** for the running example, a decomposed model, an imported
-   `.jucm` with timers, and a family, byte-compared like the `.jucm` goldens.
-5. **Manual**: open in bpmn.io's demo modeller in the browser pane and
-   screenshot; Camunda Modeler if available.
+4. **Structure and geometry**: layout transfer, stubs in both modes, metrics,
+   heat-map colours, data objects, routing. There are no byte-compared golden
+   files; the tests pin structure and geometry instead.
+
+Flat, decomposed, dynamic-stub, heat-mapped, canonical-size, inline-stub,
+data-object and orthogonally routed exports were also opened in bpmn-js,
+where they import without warnings.
 
 ## 10. Decisions
 
@@ -358,7 +370,7 @@ Still open:
 |---|---|---|---|
 | 4 | tag `∨` forks in the converter so BPMN can emit inclusive gateways | yes, as metadata | Tiny change to `from_process_tree`; otherwise every OR becomes XOR. The exporter already honours `_op = OR` metadata. |
 
-Decided during implementation (Stage 1):
+Decided during implementation:
 
 | # | decision | choice | why |
 |---|---|---|---|
@@ -368,50 +380,35 @@ Decided during implementation (Stage 1):
 | 8 | generated gateway names | **dropped** (`OrFork`, `LoopJoin`, … as the converters name them) | They say nothing a gateway glyph does not; user-given names stay. |
 | 9 | condition labels on unguarded branches | **dropped**, like the `.jucm` default | The converter labels choice arcs `branch0`/`branch1` with expression `true`; only a real guard yields a `conditionExpression` and a visible label, and a lone unguarded branch among guarded ones becomes the gateway's `default`. |
 
-## 11. Risks
+## 11. Limitations
 
 - **Overlapping shapes** with `sizes="layout"` on very dense layouts: label
-  boxes are wider than the UCM glyphs they replace. Mitigation: the
-  `X_GAP`/`Y_GAP` the swim-lane layouter already applies were tuned for the
-  same label footprints, so mined models are fine; imported tight layouts get a
-  warning suggesting `sizes="canonical"`.
+  boxes are wider than the UCM glyphs they replace. The swim-lane layouter's
+  gaps were tuned for the same label footprints, so mined models are fine; a
+  tight imported layout is better exported with `sizes="canonical"`.
 - **Tool differences**: nested lanes and multi-diagram files are standard but
   Bizagi and some validators are picky about `childLaneSet` and about a
-  `participant` whose `processRef` has lanes. Golden files are checked in
-  bpmn.io and `pm4py.read_bpmn` first; others as found.
+  `participant` whose `processRef` has lanes. The exports are checked in
+  bpmn-js and `pm4py.read_bpmn`; others as found.
 - **pm4py's reader** ignores lanes, conditions and extensions, so the
-  round-trip test can only cover control flow. It also does not know
+  round-trip test covers control flow only. It also does not know
   `callActivity` (2.7.x crashes on a flow into one), so `pm4py.read_bpmn`
-  only reads **stub-free** exports; models with stubs are checked
-  structurally and in bpmn-js instead. `stubs="inline"` (Stage 5) would be
-  the pm4py-friendly alternative.
+  reads stub-free exports and `stubs="inline"` ones; `stubs="call"` models
+  with stubs are checked structurally and in bpmn-js instead.
+- **bpmn.io** drills into a collapsed sub-process but cannot follow a call
+  activity or switch diagrams, which is why the app exports `stubs="inline"`
+  (§9).
 - **Loop back-edges** drawn with the UCM's straight segments may cross the
   loop body's last task box, since a BPMN task is wider than a UCM cross.
   `routing="orthogonal"` avoids that; the default stays faithful to the UCM
   lines.
-- **Scope creep** into a BPMN importer. Not this feature.
 
-## 12. Plan
+## 12. How it was built
 
-1. **Stage 1, core writer** — **done**: §3.1, §3.2 for every node kind, §4,
-   §5 (`sizes="layout"`), §7 machine layer and the `annotate` edge/all
-   layers, XSD + round-trip + lane + layout tests. `write_bpmn` and
-   `convert_to_bpmn_xml` in the API. (No byte-golden yet: the format may
-   still move in Stage 3; the tests pin structure and geometry instead.)
-2. **Stage 2, stubs** — **done**: §3.3 with `stubs="call"`, multi-diagram
-   files, dynamic stubs as collapsed sub-processes with inclusive gateways
-   and their own diagram.
-3. **Stage 3, visible annotations and sizes** — **done**: §7 heat-map
-   colours (`heatmap_node` / `heatmap_edge` / `heatmap_global`),
-   `sizes="canonical"`. The orthogonal-routing option for loop back-edges
-   was not built; it stays a candidate.
-4. **Stage 4, app** — **done**: Prepare/Download BPMN in the Model view,
-   BPMN 2.0 (.zip) in the Family view, both verified in the running app on
-   the demo claims log.
-5. **Stage 5, long tail** — **done**: `stubs="inline"` (nested collapsed
-   sub-processes, pm4py-readable), `data="objects"`, `routing="orthogonal"`.
-   Done earlier: import-only elements (Stage 1), `write_bpmn_family` (with
-   Stage 4), README section and CHANGELOG.
+Five stages, all in 0.8.5: the core writer (containers, path nodes, lanes,
+layout, the metric layers); stubs; heat-map colours and canonical sizes; the
+app downloads and `write_bpmn_family`; then `stubs="inline"`,
+`data="objects"` and `routing="orthogonal"`.
 
 ## 13. Possible later work
 
@@ -419,5 +416,6 @@ Not planned, noted so they are not forgotten: a BPMN **importer**
 (`convert_to_ucm(bpmn)`; pm4py already parses BPMN), exposing `stubs`,
 `sizes` and `routing` as choices in the web app's download (today the app
 fixes `stubs="inline"` and takes the other defaults), tagging `∨` forks in
-the tree converter (decision 4), and
-a Camunda Modeler / Signavio pass over the goldens beyond bpmn-js.
+the tree converter (decision 4), the `eventBasedGateway` rendering of a
+timer's timeout path and a record of multi-entry stub bindings (§3), and a
+Camunda Modeler / Signavio pass over the exports beyond bpmn-js.

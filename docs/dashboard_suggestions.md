@@ -1,5 +1,8 @@
 # Dashboard suggestions — design
 
+How whole dashboards are proposed for a log: the rules that are built,
+and two designs that are not.
+
 > **Status.** Tier 1 (§2) is **implemented**:
 > [`algo/dashboards/suggest.py`](../pm4py_ucm/algo/dashboards/suggest.py),
 > pinned by [`tests/test_dashboard_suggestions.py`](../tests/test_dashboard_suggestions.py).
@@ -7,11 +10,10 @@
 
 ## 1. Problem and principle
 
-The Dashboards view is underused because a useful dashboard costs many
-composer round-trips: pick a metric, pick its activities, pick an axis, pick
-a chart, repeat. Until now the view opened on a fixed six-widget starter that
-names no activity and no attribute, so it looked the same on every log, and a
-dashboard created with **+** opened empty.
+A useful dashboard costs many composer round-trips: pick a metric, pick
+its activities, pick an axis, pick a chart, repeat. A fixed starter cannot
+help, because it can name no activity and no attribute, and so looks the
+same on every log.
 
 A dashboard is already a plain JSON list of widget specs
 ([`dashboards.md`](dashboards.md) §8). So proposing one means *emitting
@@ -45,7 +47,7 @@ for d in suggest_dashboards(table):
 ```
 
 `suggest_dashboards(table, *, max_widgets=10)` returns a list of dashboards,
-most general first:
+most general first (an empty list for a log with no cases):
 
 ```json
 {"key": "bottlenecks", "name": "Bottlenecks",
@@ -60,7 +62,9 @@ table yields suggestions consistent with the sampled numbers on screen.
 
 `why` is the one field a suggested spec adds to the spec format. It is the
 sentence that justifies the widget, with the number that triggered it. The
-engines ignore it; the UI shows it in the gallery.
+engines ignore it; the UI shows it in the gallery. Spec ids are
+`s-<key>-<i>`, and a heatmap carries a `size` that makes it full-width and
+tall enough for its rows.
 
 ### 2.2 What is proposed, and when
 
@@ -84,9 +88,9 @@ from. The wide charts use the **Activity axis** ([`dashboards.md`](dashboards.md
 | duration by weekday (bar) | no usable period (a short log) |
 | share of cases by activity (bar, every activity) | always — the process's footprint |
 
-The *period* axis is the coarsest of `month` / `quarter` / `year` that still
-has between 3 and 24 segments, preferring the finest: a two-month log gets no
-trend line at all rather than a two-point one.
+The *period* axis is the finest of `month` / `quarter` / `year` that has
+between 3 and 24 segments: a two-month log gets no trend line at all rather
+than a two-point one, and a five-year log is trended by quarter.
 
 **Bottlenecks** — when some activity holds time.
 
@@ -102,7 +106,7 @@ case-weighted `actSojourn`, and each `why` says which is which.
 | avg waiting vs service of the top activity (KPI ×2) | interval log |
 | avg sojourn by activity (bar, every activity) | always |
 | avg sojourn, activity × *period* (heatmap) | a period exists, ≤ 40 activities |
-| avg time across the slowest transitions (KPI, up to 2) | taken by ≥ 5% of cases, and not leading into an activity listed above (that would restate its sojourn) |
+| avg time across the slowest transitions (KPI, up to 2) | taken by ≥ 5% of cases, a mean above zero, and not leading into an activity listed above (that would restate its sojourn) |
 | top activity's sojourn by *period* (line) | a period exists, > 40 activities (no heatmap) |
 | top activity's sojourn by the best attribute (bar) | a *strong* attribute exists (below) |
 
@@ -116,7 +120,7 @@ case-weighted `actSojourn`, and each `why` says which is which.
 | rework rate, activity × *period* (heatmap) | ≥ 5% of cases rework, a period exists, ≤ 40 activities |
 | rework rate, activity × best attribute (heatmap) | as above but no period, and a strong attribute exists |
 | share of cases reaching each end activity (KPI, up to 3) | ≥ 2 end activities each closing ≥ 5% of cases |
-| branch probability at the main decision points (KPI, up to 4) | below |
+| branch probability at the main decision points (KPI, up to 4: the two most-reached points, their two largest branches) | below |
 | rework by *period* (line) | ≥ 5% of cases rework, a period exists, > 40 activities (no heatmap) |
 
 The per-activity widgets use the catalog's `actRework` — the share of the
@@ -131,7 +135,8 @@ the bar and the heatmap).
 
 A **decision point** is an activity that ≥ 10% of cases reach and that has at
 least two directly-following activities each taken by ≥ 10% of the cases
-reaching it. It is read from the log's directly-follows relation, not from
+reaching it. A step from an activity to itself is rework, not a branch. The
+point is read from the log's directly-follows relation, not from
 the mined model, because that is exactly what `edgeShare` measures: the
 widget and the rule that proposed it then cannot disagree.
 
@@ -144,7 +149,8 @@ appears to "choose" between them. Two exclusions remove that:
   parallel split, and neither is a branch.
 
 `a` and `b` interleave when both `a → b` and `b → a` occur but in *different*
-cases (fewer than half the cases taking one also take the other). That is
+cases (fewer than half the cases taking the return step also take the
+forward one). That is
 what separates concurrency from a loop, which also runs both ways — but in
 the same cases, since the case that returns is one that went.
 
@@ -158,9 +164,15 @@ binding the performance overlay already has.
 Case attributes are scored exactly as the partition advisor scores them
 ([`advisor.py`](../pm4py_ucm/algo/discovery/families/advisor.py)): control-flow
 divergence (normalised mutual information with the variant) and duration
-effect size (η²), combined 0.6 / 0.4, on the fact table's own segment keys.
+effect size (η²), combined 0.6 / 0.4 — see
+[`model_families.md`](model_families.md#choosing-the-attributes) — but on
+the fact table's own segment keys, so what is scored is exactly the axis a
+widget would draw.
 An attribute is **chartable** when it has 2–24 segments, covers ≥ 50% of
-cases and is not nearly constant, and **strong** when it also scores ≥ 0.05.
+cases and is not nearly constant (no segment holds more than 95% of them),
+and **strong** when it also scores ≥ 0.05. The behavioural-variant
+attribute and a case-constant `org:resource` are left out: each has an axis
+of its own below.
 
 | Widget | Condition |
 |---|---|
@@ -184,20 +196,23 @@ orders of the same parallel work are two variants: ClaimsPaymentLog has 164.
 pm4py-ucm's concurrency-aware clustering
 ([`variants/clustering.py`](../pm4py_ucm/algo/discovery/variants/clustering.py))
 replays each case on the mined tree and groups cases by the *choices* they
-made, folding the interleavings — the same log has 18 such variants. Handing
+made, folding the interleavings — the same log has 24 such variants on a
+model mined without noise filtering, and 18 at a noise threshold of 0.2,
+where 89% of its cases replay. Handing
 that clustering to `build_fact_table(behaviour=…)` makes it a segment axis
 ([`dashboards.md`](dashboards.md) §5), and then:
 
 | Widget | Condition |
 |---|---|
-| cases by behavioural variant (pie) | ≥ 2 variants |
-| median duration by behavioural variant (bar) | ≥ 2 variants |
+| cases by behavioural variant (pie) | always |
+| median duration by behavioural variant (bar) | always |
 | rework rate by behavioural variant (bar) | ≥ 5% of cases rework |
 | share of cases, activity × behavioural variant (heatmap) | ≤ 40 activities |
 | cases, behavioural variant × *period* (table) | a period exists |
 | cases, behavioural variant × best attribute (table) | a strong attribute exists |
 
-The activity × variant heatmap is the one that says what each variant *is*:
+The dashboard as a whole needs at least two variants with a case in the
+table. The activity × variant heatmap is the one that says what each variant *is*:
 a cell is 100% or 0% (a variant contains an activity or does not), and a
 column's tooltip gives its partial-order expression. The tables are narrowed
 to the 8 most frequent variants by a **filter on the widget** — visible on
@@ -211,22 +226,24 @@ The dashboard's reason states how far the sequences fold and, when not every
 case replays on the model, what share does: a case that fits no variant has
 no value on this axis and is in none of these widgets.
 
-A dashboard with fewer than three widgets is not proposed, and a chart is
-kept only if it draws (two bars, three points on a line, a 2 × 2 table) — an
-axis chosen from the log's shape can still be nearly empty for one widget's
-metric. `max_widgets` truncates each dashboard in the order above.
+A dashboard other than the Overview is not proposed with fewer than three
+widgets, and a chart is kept only if it draws (two bars or slices, three
+points on a line, a 2 × 2 table) — an axis chosen from the log's shape can
+still be nearly empty for one widget's metric. `max_widgets` truncates each
+dashboard in the order above.
 
 ### 2.3 Targets: prefilled, switched off
 
-A suggested KPI on a "less is better" metric (durations, sojourn, transition
-time, rework, repeats) carries a target that is **off**:
+A suggested KPI on a "less is better" metric (case duration, sojourn,
+transition time, the rework rates) carries a target that is **off**:
 
 ```json
 {"on": false, "dir": "<=", "value": 12.4, "warn": 14.9, "mode": "aggregate"}
 ```
 
-`value` is the widget's current value — a baseline — and `warn` is 20% beyond
-it. A target is a statement of intent, and the data cannot supply intent: a
+`value` is the widget's current value — a baseline, to three significant
+figures — and `warn` is 20% beyond it; a KPI whose value is zero gets none.
+A target is a statement of intent, and the data cannot supply intent: a
 target derived from the distribution marks a fixed share of cases *at risk*
 by construction. So the suggestion saves the typing, and the analyst turns the
 target on (and usually moves it) in the composer. Nothing suggested appears in
@@ -241,8 +258,8 @@ island never computes a suggestion, so there is no second implementation to
 keep in parity.
 
 * **Seed.** The app passes the Overview's specs as the seed of a log's first
-  dashboard, replacing the fixed starter. A dashboard set already saved in the
-  browser, or restored from a project, wins as before.
+  dashboard. A dashboard set already saved in the browser, or restored from
+  a project, wins.
 * **Gallery.** A **✦ Suggest** button in the header, and in the empty state of
   a new dashboard, opens the list: each dashboard with its reason and its
   widgets with theirs, and **Add**. Add fills the current dashboard when it

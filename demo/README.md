@@ -1,38 +1,45 @@
 # pm4py-ucm demos
 
-Contents:
+Five tutorial notebooks, two sample logs and a command-line script. The
+notebooks are committed with their outputs, so they can be read on GitHub
+without running anything; to run one, start Jupyter from this directory
+(the main tutorial reads the logs by relative path) with `pm4py` installed
+and the Graphviz `dot` binary on `PATH`.
 
 | File                                    | What it is                                                       |
 |-----------------------------------------|------------------------------------------------------------------|
-| `pm4py_ucm_tutorial.ipynb`              | **Main tutorial notebook** — guided tour of the full model-discovery feature surface against a realistic claims-payment log, including the standard BPMN 2.0 export. Recommended starting point for the discovery / rendering / decomposition side of the package. |
+| `pm4py_ucm_tutorial.ipynb`              | **Main tutorial notebook** — guided tour of model discovery on both sample logs: log filtering and renaming, rendering, performers, decomposition, `.jucm` and standard BPMN 2.0 export. The recommended starting point. |
 | `scenario_synthesis_tutorial.ipynb`     | **Scenario-synthesis tutorial** — the scenario layer end to end: concurrency-aware variants, the `LoopEntryGuard`, both OR-fork condition encodings (variant-driven and **data-driven / decision-mining**, with the per-fork accuracy report), decomposed UCMs, and a capstone running both encodings on `ClaimsPaymentLog`. |
-| `model_families_tutorial.ipynb`         | **Model-families + performance-overlays tutorial** — partitions `ClaimsPaymentLog` by case attributes, mines one model per combination, renders the stack/matrix grid, exports per-cell / combined / dynamic-stub-umbrella `.jucm` files, overlays frequencies and times on activities and edges, and compares members via the family statistics + interactive HTML report. |
+| `model_families_tutorial.ipynb`         | **Model-families + performance-overlays tutorial** — partitions `ClaimsPaymentLog` by case attributes, mines one model per combination, renders the stack/matrix grid, exports per-cell / combined / dynamic-stub-umbrella `.jucm` files, overlays frequencies and times on activities and edges (with the heat-map), and compares members via the family statistics + interactive HTML report. |
 | `dashboards_tutorial.ipynb`             | **Dashboards tutorial** — builds the per-case fact table, computes widgets (KPIs, segmented breakdowns, tables) from the metric catalog, adds filters / targets / a scorecard, writes custom metrics in the **ƒ formula language**, charts every activity at once (the **Activity axis**), segments by **behavioural variants**, lets the log **suggest** whole dashboards, and exports a self-contained interactive HTML dashboard (plus an embedded mined model). |
-| `IssueTracker.zip`                      | Small, readable event log (~100 K events / 11 K cases, 9 distinct activities, 5 roles). Drives sections 0-5 of the main notebook. |
-| `ClaimsPaymentLog.zip`                  | Heavier, denser event log (~90 K events, more activities and actor types). Drives the second half of the main notebook, the scenario capstone, and the families / dashboards tutorials. |
-| `mine_and_export.py`                    | Minimal command-line script that mines a UCM, exports a `.jucm`, and renders a PNG. |
+| `sessions_tutorial.ipynb`               | **Sessions tutorial** — the web app's save / share / resume project files, driven from Python through the `web/sessions` API: the parameter registry, the settings file, the bundle, and loading either back. |
+| `IssueTracker.zip`                      | Synthetic issue-tracking log with a simple, readable process (100,008 events / 11,284 cases, 9 activities, 5 roles, 10 resources). Drives sections 1-5 of the main notebook. |
+| `ClaimsPaymentLog.zip`                  | Synthetic insurance claims-payment log with a denser process (78,126 events / 5,600 cases, 25 activities, 10 roles, 58 resources). Drives the main notebook from section 6, the scenario capstone, and the families / dashboards / sessions tutorials. |
+| `mine_and_export.py`                    | Minimal command-line script that mines a UCM, exports a `.jucm`, and renders a PNG (optionally a `.bpmn`). |
 
 ## Main tutorial notebook
 
 Open `pm4py_ucm_tutorial.ipynb` in JupyterLab, VS Code, or any
-notebook-aware editor. It covers, with runnable cells:
+notebook-aware editor. Its sections:
 
-1. Discovering a UCM from an event log and rendering it as **PNG or
-   navigable SVG** (click a stub to reach its plug-in map); exporting
-   `.jucm` / `.png` / `.svg`.
-2. Switching to the BPMN-flavoured rendering.
-3. Mining performers giving priority to roles vs individual
+1. Loading the event log, **filtering** it before mining (variants,
+   activities, a time window) and **renaming / merging** activities — what
+   the web app's log filters and rename dialog do.
+2. Discovering a first UCM, rendering it as PNG and writing the `.jucm`.
+3. Switching to the BPMN-flavoured rendering.
+4. Mining performers giving priority to roles vs individual
    resources, with both visualisations.
-4. Providing manual performer mappings — and watching the
+5. Providing manual performer mappings — and watching the
    deterministic colour hashing follow the new team names.
-5. Hierarchical decomposition: the three boundary rules
-   (`on_root_sequence`, `on_parallel`, `on_loop`) in isolation,
-   plus the combined `"auto"` preset. All in BPMN style.
-6. Round-tripping a model through `.jucm` (open in jUCMNav, read
-   it back here).
-7. Programmatic construction — both directly against the `UCM`
+6. Hierarchical decomposition: the four boundary rules
+   (`on_root_sequence`, `on_parallel`, `on_alternative`, `on_loop`) in
+   isolation, the combined `"auto"` preset, filtering to a single map, and
+   rendering as **navigable SVG** (click a stub to reach its plug-in map).
+7. Round-tripping a model through `.jucm` (open in jUCMNav, read
+   it back here), and exporting it to standard **BPMN 2.0**.
+8. Programmatic construction — both directly against the `UCM`
    object model and from a hand-built process tree.
-8. Smaller helpers worth knowing: `discover_resources`,
+9. Smaller helpers worth knowing: `discover_resources`,
    `discover_components`, and the underlying process tree.
 
 Each section writes its outputs to a local `output/` directory so
@@ -50,7 +57,7 @@ real log:
 2. Your first `discover_scenarios` call and what it populates
    (variables, initializations, arc conditions).
 3. Loop counters and the `LoopEntryGuard` — why 0-iteration scenarios
-   need special treatment.
+   need special treatment — and sizing a loop so every branch can be shown.
 4. The two OR-fork condition encodings — **variant-driven** (lossless)
    and **data-driven / decision-mining** — including how the decision
    tree selects features and how to read the per-fork accuracy report.
@@ -66,13 +73,14 @@ real log:
    diagram as SVG.
 
 Requires `pm4py` (for reading XES). The data-driven sections and the
-capstone use `scikit-learn`, which since 0.7.11 installs with the package
-rather than being an undeclared import.
+capstone use `scikit-learn`, which installs with the package. Outputs land
+in `tutorial_output/`. The simulator's semantics are specified in
+[`docs/scenario_simulation.md`](../docs/scenario_simulation.md).
 
 ## Model-families notebook
 
-**`model_families_tutorial.ipynb`** covers the v0.4.0 feature surface
-end-to-end on `ClaimsPaymentLog`:
+**`model_families_tutorial.ipynb`** covers model families and performance
+overlays on `ClaimsPaymentLog`:
 
 1. Detecting the case-constant attributes usable as partition axes.
 2. Previewing the partition (a coverage table) *before* mining.
@@ -84,10 +92,14 @@ end-to-end on `ClaimsPaymentLog`:
    stubs at the points of divergence, attribute-guarded plug-ins,
    resource variation as variation, and executable **path scenarios**
    (one per combination × behavioural variant).
-6. **Performance overlays** — frequencies and times on activities and
-   edges, both rendered and exported as jUCMNav metadata, plus
-   programmatic use of the same statistics (busiest activities,
-   slowest hand-offs).
+6. Partitioning on **two attributes**, binning a numeric one, and
+   filtering values.
+7. **Performance overlays** — frequencies and times on activities and
+   edges, both rendered and exported as jUCMNav metadata, the **heat-map**
+   (colour and thickness by value), plus programmatic use of the same
+   statistics (busiest activities, slowest hand-offs).
+8. **Family statistics** — the per-member table, pairwise comparison of
+   two members, and the self-contained interactive HTML report.
 
 Outputs land in `output/families/`; every `.jucm` opens in jUCMNav.
 See [`docs/model_families.md`](../docs/model_families.md) for the full
@@ -102,7 +114,8 @@ reference.
    snapshot every widget reads;
 2. the **metric catalog** and computing individual **widgets**
    (`compute_widget`) — KPIs, one-axis bars, two-axis tables;
-3. **filters**, **targets**, and the **scorecard**;
+3. **filters**, segmentation, the chart shapes, **targets**, and the
+   **scorecard**;
 4. the **ƒ custom-formula language** (`compile_formula`) — per-case
    expressions with a `where` clause, for metrics the catalog does not
    name;
@@ -127,11 +140,27 @@ rounding / weighting decisions) and
 the rules behind the suggestions. Everything is also point-and-click in the
 deployed web app (`web/streamlit_app_v6.py`, **Dashboards** view).
 
+## Sessions notebook
+
+**`sessions_tutorial.ipynb`** shows what a saved web-app project is, using
+the `web/sessions` package directly (it lives in the repository, not in the
+installed `pm4py_ucm` package):
+
+1. the **parameter registry** — every persistable setting declared once;
+2. a **project document** and the **settings file** (configuration only, no
+   event data);
+3. how **dashboards** travel in a project;
+4. the **project bundle** — configuration plus the event log in one zip;
+5. **resuming** — `load()` round-trips either file;
+6. forward compatibility — unknown keys are preserved.
+
+See [`docs/sessions.md`](../docs/sessions.md) for the design, and
+[`web/README.md`](../web/README.md#10--save-share--resume-a-project) for
+the same feature in the app.
+
 ## Mine-and-export script
 
-End-to-end command-line example.
-
-## Running
+`mine_and_export.py` is an end-to-end command-line example.
 
 Without any optional dependencies (uses a hand-crafted process tree):
 
@@ -156,9 +185,7 @@ Outputs `out.jucm` and `out.png` by default; override with `--out base`.
 Add `--bpmn` to also write `out.bpmn`, a standard BPMN 2.0 file (opens in
 bpmn.io or Camunda Modeler; plug-in maps nest as collapsed sub-processes).
 
-## What `--decompose` does
-
-Turns on `decomposition="auto"`, which splits the discovered UCM into:
+`--decompose` turns on `decomposition="auto"`, which splits the discovered UCM into:
 
 - a **root map** holding the top-level skeleton, with one `Stub` per
   major phase / branch / loop;

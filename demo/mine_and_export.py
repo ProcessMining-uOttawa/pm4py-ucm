@@ -18,7 +18,9 @@ Usage
     # Real log, hierarchical decomposition
     python demo/mine_and_export.py path/to/log.xes --decompose
 
-Outputs ``out.jucm`` and ``out.png`` in the current directory.
+Outputs ``out.jucm`` and ``out.png`` in the current directory; ``--out
+base`` changes the base name, and ``--bpmn`` also writes ``out.bpmn``, a
+standard BPMN 2.0 file.
 """
 from __future__ import annotations
 

@@ -76,6 +76,12 @@ AREAS: dict[str, list[str]] = {
         "test_replay_budget.py",
         "test_quick_reductions.py",
     ],
+    "Log import & filtering": [
+        "test_csv_timestamp_mapping.py",
+        "test_upload_edge_cases.py",
+        "test_xes_gz_upload.py",
+        "test_variant_log_filter.py",
+    ],
     "BPMN 2.0 export": [
         "test_bpmn_export.py",
     ],
@@ -100,6 +106,7 @@ AREAS: dict[str, list[str]] = {
     ],
     "Progress / infrastructure": [
         "test_progress.py",
+        "test_release_consistency.py",
     ],
 }
 

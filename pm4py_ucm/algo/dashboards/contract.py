@@ -43,7 +43,7 @@ Size
 ----
 The encoding costs ~6 bytes per event plus ~8 bytes per case, before
 base64's 4/3 expansion. A 561 k-event log therefore lands near 6 MB —
-comparable to the PNGs :mod:`~pm4py_ucm.algo.discovery.families.report`
+comparable to the images :mod:`~pm4py_ucm.algo.discovery.families.report`
 already embeds, and cheap enough that no sampling is needed for
 realistic logs. :func:`build_fact_table` nonetheless enforces a byte
 budget and falls back to a deterministic case sample beyond it, so a

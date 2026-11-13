@@ -15,6 +15,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holds it to the code. The status lines of `sessions.md` and
   `scenario_simulation.md` no longer say "not yet implemented" for features
   that shipped in 0.7.1 and 0.8.0.
+- **`CONTRIBUTING.md`**: set-up, what to run before a pull request, and the
+  rules the suite enforces, each with the test that enforces it.
+- **README: a Dashboards section** for the Python API (`build_fact_table`,
+  `suggest_dashboards`, `compute_widget`, `write_dashboard`), and coverage of
+  the replay-based traversal counts, `rank_partition_attributes`,
+  `view_ucm_family` and `suggest_loop_iterations`.
+
+### Changed
+
+- **Documentation audit.** Every prose file was checked against the code.
+  No behaviour changed; these statements did:
+  - The inductive miner's `noise_threshold` defaults to PM4Py's `0.0`, not
+    `0.2` (that is the web app's starting value), and **performer mining is
+    on by default**. The README's scenario, coverage and log-cleaning
+    examples now mine at `0.2` explicitly, which is what their numbers were
+    computed on.
+  - PM4Py is distributed under **AGPL-3.0**; the README no longer says its
+    licence matches this package's GPL-3.0-or-later.
+  - The test command is `pytest`, on Python 3.10–3.14.
+  - `docs/sessions.md` and `docs/code_export.md` describe what was built
+    (a declarative `Param`, the bundle keeping the original log bytes, the
+    six-step checklist for adding a setting) rather than the original
+    design; `docs/scenario_simulation.md` is rewritten as built;
+    `docs/bpmn_export.md`'s options, namespace and family export are
+    corrected.
+  - `docs/metrics.md`: every overlay metric is written to the `.jucm`;
+    multi-pair segments, AND-fork branches and the replay parameters are
+    specified. `docs/dashboards.md` gains the widget-spec and filter
+    tables, result types, target fields and a Python API section, and no
+    longer says formulas cannot compare a categorical attribute.
+  - `docs/model_families.md`: the library does not annotate per-cell models
+    by itself, the report embeds SVG and has six views, and
+    `rank_partition_attributes` is documented.
+  - `web/README.md` is reorganised in the order a user meets the app, with
+    the controls' real labels and defaults; `demo/README.md` describes all
+    five notebooks and gives the sample logs' exact sizes
+    (`ClaimsPaymentLog`: 78,126 events, not "~90 K").
+  - Docstrings rendered in the API reference that named files, views or
+    functions which no longer exist.
 
 ## [0.9.0] — 2026-11-13
 
