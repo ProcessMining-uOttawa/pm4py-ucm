@@ -1373,7 +1373,8 @@ The landing page is the curated public API (the names in
 its full module tree, which the sidebar links. `pdoc pm4py_ucm` on its own
 documents only the public-API page, because `__all__` lists just the
 public helpers. Narrative guides live alongside the code in
-[`docs/`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/tree/main/docs): [`metrics.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/metrics.md),
+[`docs/`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/tree/main/docs), indexed by kind and by question in its
+[README](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/README.md): [`metrics.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/metrics.md),
 [`dashboards.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/dashboards.md),
 [`dashboard_suggestions.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/dashboard_suggestions.md),
 [`model_families.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/model_families.md),
