@@ -11,10 +11,23 @@ jobs:
   test:
     name: pytest (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    # A version that is tested but not yet claimed (see `experimental`
+    # below) reports its result without failing the workflow: a dependency
+    # that has no wheel for a brand-new Python is news, not a broken build.
+    continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12"]
+        # The claimed versions — keep in step with `requires-python` and
+        # the classifiers in pyproject.toml, and the badge in README.md.
+        # (3.9 left at its end of life: ubuntu-latest no longer offers it.)
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        experimental: [false]
+        include:
+          # Tested ahead of being claimed. Move it into the list above,
+          # and add its classifier, once this job is green.
+          - python-version: "3.14"
+            experimental: true
 
     steps:
       - name: Check out repository
