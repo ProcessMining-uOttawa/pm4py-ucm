@@ -126,6 +126,8 @@ def discover(
     parameters: Optional[Dict[str, Any]] = None,
     progress_callback=None,
     validate: bool = True,
+    max_enum_cardinality: Optional[int] = None,
+    numeric_coercion_threshold: Optional[float] = None,
 ) -> ModelFamily:
     """Mine a :class:`ModelFamily` from ``log`` partitioned by 1–2
     case-level attributes.
@@ -150,6 +152,12 @@ def discover(
         values (``{attribute: [labels]}``); other cases are dropped.
         ``ignore_value_case`` (default ``True``) merges enumeration
         values differing only in letter case (``F`` / ``f``).
+    max_enum_cardinality / numeric_coercion_threshold
+        Attribute *typing* policy, forwarded to ``partition_log`` when
+        given (``None`` keeps its defaults): the most distinct values a
+        string attribute may have and still be an enumeration, and the
+        share of a string column's values that must parse as numbers for
+        it to be typed numeric.
     parameters
         Converter / resource parameters applied per cell (e.g.
         ``resource_attribute``, ``urn_name``). ``map_name`` is ignored:
@@ -185,6 +193,12 @@ def discover(
         unknown_bucket=unknown_bucket,
         include_values=include_values,
         ignore_value_case=ignore_value_case,
+        # Only when given, so partition_log's own defaults stay the one
+        # place those numbers are written down.
+        **{k: v for k, v in (
+            ("max_enum_cardinality", max_enum_cardinality),
+            ("numeric_coercion_threshold", numeric_coercion_threshold),
+        ) if v is not None},
     )
     if not part.cells:
         raise ValueError(
@@ -243,4 +257,5 @@ def discover(
         log_df=df,
         cell_parameters=parameters,
         decomposition=decomposition,
+        case_id_col=case_id_col,
     )

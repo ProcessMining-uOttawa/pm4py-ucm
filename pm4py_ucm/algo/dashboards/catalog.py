@@ -145,7 +145,8 @@ CATALOG: Tuple[MetricSpec, ...] = (
     MetricSpec(
         id="duration", level="process", label="Case duration",
         result_type="time", default_agg="avg",
-        help="First to last event of the case.",
+        help="Earliest start to latest completion of the case "
+             "(first to last event without start timestamps).",
     ),
     MetricSpec(
         id="timeBetween", level="process",

@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+> **Upgrade notes.**
+> - **Case duration is longer on dashboards for interval logs.** On a log
+>   with start timestamps, a case now starts when its earliest event
+>   *starts*, not when its first event completes, so `duration` includes
+>   the first activity's own duration: on the bundled claims sample the
+>   mean goes from 14.92 d to 15.07 d, which is what the family report
+>   always showed. Targets set on case duration are scored against the
+>   longer figure. A case is also placed on the time axes, in the date
+>   filter and in the arrival counts by that earlier start, so one that
+>   straddles a period boundary can move to the earlier period. Logs
+>   without start timestamps are unaffected, and so is every time measured
+>   between two events (`timeBetween`, `edgeTime`, sojourn, waiting).
+> - **The partition advisor measures case duration the same way**, so on
+>   an interval log an attribute's duration effect size, and with it the
+>   ranking of `rank_partition_attributes`, can shift slightly. The
+>   attribute scores behind the suggested dashboards follow the dashboard
+>   duration and shift likewise.
+> - **The app's cycle-time filter ranks cases by the same duration.** On
+>   an interval log the percentile band of the Model view's log filter
+>   can therefore keep slightly different cases than before, including in
+>   a saved project that stores such a band and in a script generated
+>   from it.
+> - **Service time on dashboards now includes each case's first event.**
+>   On an interval log, `actService` (and the suggested "avg service"
+>   KPI) used to leave out any event that started before its case's first
+>   completion — in practice the first event of almost every case. An
+>   activity that opens cases therefore reads higher than before: on the
+>   bundled claims sample, service time of *Register Claim* goes from
+>   0.0 d (3 cases) to 0.15 d (all 5,600).
+> - **A widget with a per-case target and a segment axis now reports
+>   shares in `%`**, like the unsegmented KPI always did: each bar and
+>   cell was already the share of cases meeting the target, but was
+>   printed with the metric's unit ("44.2 d" for 44.2%). The widget's own
+>   value (and its scorecard row) is now the overall share rather than
+>   the metric's aggregate.
+> - `discover_scenarios` no longer warns that `discovery_parameters` is
+>   ignored: it uses them. A call that passed a noise threshold there and
+>   got an unfiltered tree now gets the filtered one.
+
 ### Added
 
 - **An index for `docs/`** ([`docs/README.md`](docs/README.md)): every
@@ -21,6 +60,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `suggest_dashboards`, `compute_widget`, `write_dashboard`), and coverage of
   the replay-based traversal counts, `rank_partition_attributes`,
   `view_ucm_family` and `suggest_loop_iterations`.
+
+- **`discover_ucm_family(..., max_enum_cardinality=…,
+  numeric_coercion_threshold=…)`**: the two attribute-typing settings of
+  `partition_log`, whose documentation already told users to pass the
+  latter (above `1.0` keeps a column of numeric strings categorical).
+- **`compute_family_stats(family, coarsen_loops=False)`** counts
+  behavioural variants without collapsing loop iterations to `{0, 1, ≥2}`.
+- **`ModelFamily.case_id_col`** records the case-id column the family was
+  mined with; `compute_family_stats` defaults to it.
+- **`pm4py_ucm.util.timing.case_durations(log_df, …)`**: per-case duration
+  in seconds, the definition every part of the package now shares.
+  `rank_partition_attributes` takes a `start_timestamp_col`.
+- **The app says when a project was saved by a newer version** (in the
+  load notes), since settings it does not know were not applied.
+  `ProjectDoc.from_newer_app` carries the fact.
+
+### Fixed
+
+Code defects reported by the documentation audit, each now held by a test.
+
+- **Case duration had two definitions on interval logs.** The family
+  statistics measured earliest start to latest completion; the
+  dashboards, the partition advisor and the app's cycle-time log filter
+  (with the script generated from it) measured first to last completion.
+  All now use the first, defined once in `pm4py_ucm.util.timing` and held
+  together by tests. See the upgrade notes.
+- **Dashboards: `actService` dropped the first event of almost every
+  case.** A start timestamp earlier than the case start was treated as
+  invalid, but the case start was the first *completion*, so a first
+  event with any duration started before it. With the case start now the
+  earliest start, no valid start precedes it. See the upgrade note.
+- **Dashboards: a per-case target on a segmented widget printed shares
+  with the metric's unit**, in both engines. The widget's `unit` is now
+  `%` for every shape, including the Activity axis. Also, a target that
+  is switched off but remembers its per-case mode no longer turns a KPI's
+  unit into `%`.
+- **Dashboards: a histogram or box plot under a per-case target labelled
+  its axis in `%`.** The headline of such a widget is a share, but its
+  bins and quartiles are the metric's values ("3.0%–8.0%" for 3 to 8
+  days). Both engines now report the distribution's own unit
+  (`valueUnit`) and the charts use it.
+- **`discover_scenarios` ignored `parameters["discovery_parameters"]`**
+  (and warned that it did), so a noise threshold needed a pre-mined
+  `process_tree`. It is forwarded to the inductive miner, as in
+  `discover_ucm_inductive`.
+- **Combined family assembly with a performance overlay raised `KeyError`
+  for a log whose case-id column is not `case:concept:name`**, even
+  though the family had been mined with `case_id_col=…`.
+- **Saved projects: a file from a newer schema had a stray
+  `_newer_schema` key written into it** on the next save. Nothing read
+  it. It is no longer written, and is dropped from files that carry it.
+- **Codespaces: the dev container installed Streamlit and nothing else.**
+  It looked for a root `requirements.txt`; the file is
+  `web/requirements.txt`.
+- **App: the Decomposition help said the Scenarios view "always runs
+  flat".** It builds its model with the sidebar's decomposition, and has
+  since decomposed models became fully supported by the synthesizer.
 
 ### Changed
 

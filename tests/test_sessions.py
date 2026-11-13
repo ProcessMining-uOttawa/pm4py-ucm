@@ -179,3 +179,19 @@ def test_dashboards_survive_a_project_round_trip():
     again = loads(dumps(doc))
     assert again.dashboards == {"version": BRIDGE_VERSION, "registry": _REGISTRY}
     assert unwrap_registry(again.dashboards) == _REGISTRY
+
+
+def test_a_newer_schema_is_flagged_on_the_document_not_in_the_file():
+    """Loading a file from a newer app used to plant ``_newer_schema`` in
+    the document, where nothing read it and the next save wrote it out."""
+    raw = json.loads(dumps(_doc()))
+    assert ProjectDoc.from_dict(dict(raw)).from_newer_app is False
+
+    raw["schema_version"] = SCHEMA_VERSION + 5
+    doc = ProjectDoc.from_dict(dict(raw))
+    assert doc.from_newer_app is True
+    assert "_newer_schema" not in doc.to_dict()
+
+    # A file an 0.9.0 app already wrote the stray key into loads clean.
+    raw["_newer_schema"] = SCHEMA_VERSION + 5
+    assert "_newer_schema" not in ProjectDoc.from_dict(dict(raw)).to_dict()

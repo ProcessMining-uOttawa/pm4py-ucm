@@ -386,16 +386,10 @@ def _process_level(
 
     duration: Dict[str, float] = {}
     if timestamp_col in cell_df.columns:
-        end = pd.to_datetime(cell_df[timestamp_col])
-        start = (
-            pd.to_datetime(cell_df[start_timestamp_col])
-            if start_timestamp_col in cell_df.columns else end
-        )
-        case = cell_df[case_id_col].astype(str)
-        span = (
-            end.groupby(case).max() - start.groupby(case).min()
-        ).dt.total_seconds()
-        duration = _duration_stats(span)
+        from ....util.timing import case_durations
+        duration = _duration_stats(case_durations(
+            cell_df, case_id_col, timestamp_col, start_timestamp_col,
+            case=cell_df[case_id_col].astype(str)))
     return events_per_case, duration, n_events, n_activities
 
 

@@ -82,6 +82,13 @@ class ProjectDoc:
     schema_version: int = SCHEMA_VERSION
     extra: Dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def from_newer_app(self) -> bool:
+        """True when the file was written with a newer schema than this
+        app knows: it loads (unknown keys are preserved), but settings the
+        newer app added are not applied — worth telling the user."""
+        return self.schema_version > SCHEMA_VERSION
+
     def to_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {
             "format": FORMAT,
@@ -110,7 +117,10 @@ class ProjectDoc:
         log = d.get("log")
         if not isinstance(log, dict):
             raise ProjectError("Project file has no 'log' section.")
-        extra = {k: v for k, v in d.items() if k not in _KNOWN_TOP_KEYS}
+        # "_newer_schema" is a flag 0.9.0 and earlier planted in the
+        # document on load and then saved; it was never part of the format.
+        extra = {k: v for k, v in d.items()
+                 if k not in _KNOWN_TOP_KEYS and k != "_newer_schema"}
         return cls(
             log=LogRef.from_dict(log),
             config=dict(d.get("config") or {}),

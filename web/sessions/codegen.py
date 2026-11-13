@@ -207,9 +207,9 @@ def apply_log_filters(log, filter_spec):
     dpct = spec.get("duration_pct")
     if dpct:
         lo_pct, hi_pct = dpct       # percentile band; 0 = fastest, 100 = slowest
-        ts = pd.to_datetime(df["time:timestamp"], utc=True, errors="coerce")
-        dur = ts.groupby(df["case:concept:name"]).agg(lambda s: s.max() - s.min())
-        dur = dur.sort_values()     # ascending: fastest case first
+        # Case duration: earliest start to latest completion.
+        from pm4py_ucm.util.timing import case_durations
+        dur = case_durations(df).sort_values(kind="stable")  # fastest first
         n = len(dur)
         if n:
             lo_i = int(lo_pct / 100.0 * n)          # floor

@@ -843,3 +843,74 @@ class TestDifferentialPm4py:
             if "std_time" in stats.pairs[edge] and "stdev" in v:
                 assert stats.pairs[edge]["std_time"] == pytest.approx(
                     float(v["stdev"]), rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# One definition of case duration (pm4py_ucm.util.timing)
+# ---------------------------------------------------------------------------
+
+class TestOneCaseDuration:
+    """The family statistics, the partition advisor and the dashboards
+    report the same case duration: earliest start to latest completion.
+
+    Up to 0.9.0 the advisor and the dashboards measured first to last
+    *completion* on interval logs — 14.92 d against the family statistics'
+    15.07 d on the claims sample."""
+
+    @staticmethod
+    def _three(df):
+        from pm4py_ucm.algo.dashboards import build_fact_table
+        from pm4py_ucm.algo.dashboards.engine import per_case_values
+        from pm4py_ucm.algo.discovery.families.advisor import _case_durations
+        from pm4py_ucm.util.timing import case_durations
+
+        shared = case_durations(df)
+        advisor = _case_durations(df, "case:concept:name", "time:timestamp")
+        table = build_fact_table(df)
+        dash = pd.Series(per_case_values(table, "duration") * 86400.0,
+                         index=[str(c) for c in table.case_ids])
+        return shared, advisor, dash, _process_duration(df)
+
+    def test_hand_computed_interval_log(self):
+        """Case ``c``: A runs 08:00-09:00, B 08:30-12:00, C 13:00-13:30.
+        Earliest start 08:00, latest completion 13:30: 5.5 h (first to
+        last completion would be 4.5 h)."""
+        day = pd.Timestamp("2026-03-02", tz="UTC")
+
+        def at(h):
+            return day + pd.Timedelta(hours=h)
+
+        df = pd.DataFrame([
+            {"case:concept:name": "c", "concept:name": a,
+             "start_timestamp": at(s), "time:timestamp": at(e)}
+            for a, s, e in (("A", 8, 9), ("B", 8.5, 12), ("C", 13, 13.5))])
+        shared, advisor, dash, family = self._three(df)
+        assert shared["c"] == advisor["c"] == dash["c"] == 5.5 * 3600
+        assert family["mean"] == 5.5 * 3600
+
+    def test_random_interval_logs_agree(self):
+        for seed in (3, 11):
+            df = _random_interval_log(seed)
+            shared, advisor, dash, family = self._three(df)
+            assert list(advisor) == list(shared)
+            # The fact table stores whole seconds: half a second per end.
+            assert (dash.reindex(shared.index.astype(str)).to_numpy()
+                    == pytest.approx(shared.to_numpy(), abs=1.0))
+            assert family["mean"] == pytest.approx(shared.mean())
+
+    def test_claims_sample_agrees(self):
+        """The bundled interval log the difference was measured on."""
+        pm4py = pytest.importorskip("pm4py")
+        from pathlib import Path
+
+        path = (Path(__file__).resolve().parent.parent
+                / "demo" / "ClaimsPaymentLog.xes")
+        if not path.is_file():
+            pytest.skip("demo/ClaimsPaymentLog.xes is not present")
+        df = pm4py.read_xes(str(path))
+        shared, advisor, dash, family = self._three(df)
+        day = 86400.0
+        assert family["mean"] / day == pytest.approx(15.07, abs=0.005)
+        assert advisor.mean() / day == pytest.approx(15.07, abs=0.005)
+        assert dash.mean() / day == pytest.approx(15.07, abs=0.005)
+        assert dash.mean() == pytest.approx(shared.mean(), abs=1.0)

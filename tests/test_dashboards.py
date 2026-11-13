@@ -89,6 +89,30 @@ def _log():
     return pd.DataFrame(rows)
 
 
+def _interval_log():
+    """Two cases of an interval log (start + completion per event).
+
+    * ``c0`` A runs day -1 to 0, B runs day 2 to 4
+    * ``c1`` A runs day -3 to 0, B runs day -0.5 to 1 (overlapping A)
+
+    The first completion of both cases is day 0, but c0 starts on day -1
+    and c1 on day -3: a case starts when its earliest event starts. c1's B
+    overlaps A, so its wait is negative.
+    """
+    base = pd.Timestamp("2026-01-05", tz="UTC")
+    rows = []
+    for cid, act, start, end, country in (
+            ("c0", "A", -1, 0, "AUS"), ("c0", "B", 2, 4, "AUS"),
+            ("c1", "A", -3, 0, "NZL"), ("c1", "B", -0.5, 1, "NZL")):
+        rows.append({
+            "case:concept:name": cid, "concept:name": act,
+            "time:timestamp": base + pd.Timedelta(days=end),
+            "start_timestamp": base + pd.Timedelta(days=start),
+            "case:country": country,
+        })
+    return pd.DataFrame(rows)
+
+
 @pytest.fixture()
 def table():
     return build_fact_table(_log(), log_name="t")
@@ -305,6 +329,88 @@ class TestServiceTimes:
         }]
         t = build_fact_table(pd.DataFrame(rows))
         assert np.isnan(per_case_values(t, "actService", {"activity": "A"})[0])
+
+    def test_first_event_keeps_its_service_time(self):
+        """A first event with a duration starts before the case's first
+        completion. When that completion was taken as the case start, the
+        start was discarded as "before the case", which dropped the first
+        event of nearly every case of an interval log."""
+        t = build_fact_table(_interval_log())
+        assert t.interval_log is True
+        # c0's A runs from day -1 to day 0; c1's A from day -3 to day 0.
+        assert list(per_case_values(t, "actService", {"activity": "A"})) \
+            == pytest.approx([1.0, 3.0])
+        w = compute_widget({"id": "w", "metric": "actService", "agg": "avg",
+                            "viz": "kpi", "params": {"activity": "A"}}, t)
+        assert w["value"] == pytest.approx(2.0)
+
+    def test_a_start_before_the_first_completion_is_kept_on_any_event(self):
+        """c1's B starts half a day before A completes (real concurrency):
+        1.5 d of service and a negative wait, neither thrown away."""
+        t = build_fact_table(_interval_log())
+        assert per_case_values(t, "actService", {"activity": "B"})[1] \
+            == pytest.approx(1.5)
+        assert per_case_values(t, "actWaiting", {"activity": "B"})[1] \
+            == pytest.approx(-0.5)
+
+    def test_case_duration_is_earliest_start_to_latest_completion(self):
+        """On an interval log the case starts when its earliest event
+        starts, not at its first completion (docs/dashboards.md §4;
+        pm4py_ucm.util.timing). By hand: c0 runs day -1 to 4, c1 day -3
+        to 1. First-to-last completion would give 4 and 1."""
+        t = build_fact_table(_interval_log())
+        assert list(per_case_values(t, "duration")) == pytest.approx([5.0, 4.0])
+        base = pd.Timestamp("2026-01-05", tz="UTC")
+        assert [int(s) for s in t.starts] == [
+            int((base - pd.Timedelta(days=1)).timestamp()),
+            int((base - pd.Timedelta(days=3)).timestamp())]
+
+    def test_single_timestamp_duration_is_unchanged(self, table):
+        assert list(per_case_values(table, "duration")) == [3.0, 6.0, 4.0, 8.0]
+
+    def test_gaps_between_events_do_not_move_with_the_case_start(self):
+        """Everything measured between two events is a difference of
+        offsets, so it is the same whatever they are counted from."""
+        t = build_fact_table(_interval_log())
+        assert list(per_case_values(
+            t, "timeBetween", {"from": "A", "to": "B"})) \
+            == pytest.approx([4.0, 1.0])
+        assert list(per_case_values(t, "actSojourn", {"activity": "B"})) \
+            == pytest.approx([4.0, 1.0])
+        assert list(per_case_values(
+            t, "edgeTime", {"from": "A", "to": "B"})) \
+            == pytest.approx([4.0, 1.0])
+
+    def test_a_broken_start_counts_from_its_completion(self):
+        """A start after its own completion (or one that does not parse)
+        must neither stretch the case nor shorten it."""
+        base = pd.Timestamp("2026-01-05", tz="UTC")
+        rows = [
+            {"case:concept:name": "c", "concept:name": "A",
+             "time:timestamp": base,
+             "start_timestamp": base + pd.Timedelta(days=9)},
+            {"case:concept:name": "c", "concept:name": "B",
+             "time:timestamp": base + pd.Timedelta(days=3),
+             "start_timestamp": base + pd.Timedelta(days=2)},
+            {"case:concept:name": "c", "concept:name": "C",
+             "time:timestamp": base + pd.Timedelta(days=5),
+             "start_timestamp": pd.NaT},
+        ]
+        t = build_fact_table(pd.DataFrame(rows))
+        assert per_case_values(t, "duration")[0] == pytest.approx(5.0)
+        assert np.isnan(per_case_values(t, "actService", {"activity": "A"})[0])
+        assert per_case_values(t, "actService", {"activity": "B"})[0] \
+            == pytest.approx(1.0)
+
+    def test_time_axes_read_the_earliest_start(self):
+        """A case whose first activity starts in December and completes in
+        January belongs to December."""
+        rows = [{"case:concept:name": "c", "concept:name": "A",
+                 "time:timestamp": pd.Timestamp("2026-01-02", tz="UTC"),
+                 "start_timestamp": pd.Timestamp("2025-12-30", tz="UTC")}]
+        t = build_fact_table(pd.DataFrame(rows))
+        _codes, labels = segment_keys(t, "year")
+        assert labels == ["2025"]
 
 
 # ---------------------------------------------------------------------------
@@ -618,6 +724,85 @@ class TestWidgets:
                                      "missed": 25.0}
         assert w["state"] == "missed"
         assert w["sub"] == "goal ≥ 90%"
+
+    _PER_CASE = {"on": True, "dir": "<=", "value": 4, "warn": 6,
+                 "mode": "per_case", "shareGoal": 90}
+
+    def test_per_case_target_on_a_segmented_widget_is_a_share(self, table):
+        """Durations are 3, 6, 4, 8 (AUS: 3, 4; NZL: 6, 8). Each bar is the
+        share of its cases within 4 d: a percentage, not a duration."""
+        w = compute_widget({"id": "w", "metric": "duration", "viz": "bar",
+                            "segment": {"rows": "attr:case:country"},
+                            "target": self._PER_CASE}, table)
+        by = {p["label"]: p for p in w["series"]}
+        assert by["AUS"]["value"] == pytest.approx(100.0)
+        assert by["AUS"]["text"] == "100.0%"
+        assert by["NZL"]["text"] == "0.0%"
+        assert w["unit"] == "%"
+        # The widget's own value is the share over all its cases, so the
+        # scorecard compares like with like.
+        assert w["value"] == pytest.approx(50.0)
+        assert w["text"] == "50.0%"
+
+    def test_per_case_target_on_a_grid_is_a_share(self, table):
+        w = compute_widget({"id": "w", "metric": "duration", "viz": "table",
+                            "segment": {"rows": "attr:case:country",
+                                        "cols": "resource"},
+                            "target": self._PER_CASE}, table)
+        texts = [c["text"] for row in w["cells"] for c in row
+                 if c["value"] is not None]
+        assert texts and all(x.endswith("%") for x in texts)
+        assert w["unit"] == "%"
+        assert w["text"] == "50.0%"
+
+    def test_per_case_target_on_the_activity_axis_is_a_share(self, table):
+        w = compute_widget({"id": "w", "metric": "actSojourn", "viz": "bar",
+                            "agg": "avg", "segment": {"rows": "activity"},
+                            "target": self._PER_CASE}, table)
+        assert w["series"]
+        assert all(p["text"].endswith("%") for p in w["series"])
+        assert w["unit"] == "%"
+
+    def test_scorecard_row_of_a_segmented_per_case_widget(self, table):
+        spec = {"id": "w", "metric": "duration", "viz": "bar",
+                "segment": {"rows": "attr:case:country"},
+                "target": self._PER_CASE}
+        row = scorecard([spec], table)[0]
+        assert row["goal"] == "≥ 90% of cases"
+        assert row["actual"] == "50.0%"
+
+    @pytest.mark.parametrize("viz", ["hist", "box"])
+    def test_distribution_under_a_per_case_target_keeps_its_own_unit(
+            self, table, viz):
+        """The headline of such a widget is a share ("50.0%"), but the
+        histogram's bins and the box plot's quartiles are still the
+        metric's values, in days. Formatting them with the widget's unit
+        printed "3.0%–8.0%" on the axis."""
+        w = compute_widget({"id": "w", "metric": "duration", "viz": viz,
+                            "target": self._PER_CASE}, table)
+        assert w["unit"] == "%" and w["text"] == "50.0%"
+        assert w["valueUnit"] == "d"
+        assert (w[viz]["min"], w[viz]["max"]) == (3.0, 8.0)
+        plain = compute_widget({"id": "w", "metric": "duration",
+                                "viz": viz}, table)
+        assert plain["valueUnit"] == plain["unit"] == "d"
+
+    def test_the_ui_formats_distributions_with_their_own_unit(self):
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        assert "_histSvg(hh, w.unit)" not in ui
+        assert "_boxSvg(bx, w.unit)" not in ui
+        assert "_histSvg(w.hist, w.unit)" not in ui
+        assert "_boxSvg(w.box, w.unit)" not in ui
+        assert ui.count("distUnit(w)") >= 4
+
+    def test_per_case_mode_on_a_switched_off_target_changes_nothing(self, table):
+        """The mode is remembered when a target is switched off; the value
+        is then the plain aggregate and must keep the metric's unit."""
+        w = compute_widget({"id": "w", "metric": "duration", "viz": "kpi",
+                            "agg": "avg",
+                            "target": {**self._PER_CASE, "on": False}}, table)
+        assert w["unit"] == "d"
+        assert w["text"] == "5.3 d"
 
     def test_dashboard_filters_stack_on_widget_filters(self, table):
         spec = {"id": "w", "metric": "duration", "viz": "kpi",
@@ -1654,6 +1839,30 @@ _PARITY_SPECS = [
      "params": {"activity": "A"}},
     {"id": "box-count", "metric": "actFreq", "viz": "box", "agg": "avg",
      "params": {"activity": "A"}},
+    # A per-case target on segmented widgets: every bar and cell is a
+    # share, formatted as one; and the mode left on a switched-off target.
+    {"id": "bar-percase", "metric": "duration", "viz": "bar",
+     "segment": {"rows": "attr:case:country"},
+     "target": {"on": True, "dir": "<=", "value": 4, "warn": 6,
+                "mode": "per_case", "shareGoal": 90, "shareWarn": 40}},
+    {"id": "table-percase", "metric": "duration", "viz": "table",
+     "segment": {"rows": "attr:case:country", "cols": "resource"},
+     "target": {"on": True, "dir": "<=", "value": 4, "warn": 6,
+                "mode": "per_case", "shareGoal": 90}},
+    {"id": "act-axis-percase", "metric": "actSojourn", "viz": "bar",
+     "agg": "avg", "params": {}, "segment": {"rows": "activity"},
+     "target": {"on": True, "dir": "<=", "value": 2, "mode": "per_case"}},
+    {"id": "act-grid-percase", "metric": "actSojourn", "viz": "table",
+     "agg": "avg", "params": {},
+     "segment": {"rows": "activity", "cols": "attr:case:country"},
+     "target": {"on": True, "dir": "<=", "value": 2, "mode": "per_case"}},
+    {"id": "hist-percase", "metric": "duration", "viz": "hist",
+     "target": {"on": True, "dir": "<=", "value": 4, "mode": "per_case"}},
+    {"id": "box-percase", "metric": "duration", "viz": "box",
+     "target": {"on": True, "dir": "<=", "value": 4, "mode": "per_case"}},
+    {"id": "kpi-percase-off", "metric": "duration", "viz": "kpi",
+     "agg": "avg",
+     "target": {"on": False, "dir": "<=", "value": 4, "mode": "per_case"}},
 ]
 
 _PARITY_DASHBOARD_FILTERS = [
@@ -1757,8 +1966,9 @@ class TestJsParity:
         assert "error" not in js, f"JS raised: {js.get('error')}"
 
         label = f"{py['id']} (filter set {i // len(_PARITY_SPECS)})"
-        for key in ("id", "viz", "unit", "resultType", "nCases", "agg",
-                    "state", "text", "sub", "rows", "cols", "axis"):
+        for key in ("id", "viz", "unit", "valueUnit", "resultType",
+                    "nCases", "agg", "state", "text", "sub", "rows", "cols",
+                    "axis"):
             if key in py or key in js:
                 assert js.get(key) == py.get(key), f"{label}: {key}"
 
@@ -1791,6 +2001,65 @@ class TestJsParity:
         py = scorecard(_PARITY_SPECS, t)
         js = js_results[-1]["scorecard"]
         assert json.dumps(_norm(js)) == json.dumps(_norm(py))
+
+
+_INTERVAL_PARITY_SPECS = [
+    {"id": "svc-a", "metric": "actService", "agg": "avg", "viz": "kpi",
+     "params": {"activity": "A"}},
+    {"id": "svc-b", "metric": "actService", "agg": "avg", "viz": "kpi",
+     "params": {"activity": "B"}},
+    {"id": "wait-b", "metric": "actWaiting", "agg": "avg", "viz": "kpi",
+     "params": {"activity": "B"}},
+    {"id": "svc-axis", "metric": "actService", "agg": "avg", "viz": "bar",
+     "params": {}, "segment": {"rows": "activity"}},
+    {"id": "wait-grid", "metric": "actWaiting", "agg": "avg", "viz": "table",
+     "params": {},
+     "segment": {"rows": "activity", "cols": "attr:case:country"}},
+    {"id": "duration", "metric": "duration", "agg": "avg", "viz": "kpi"},
+]
+
+
+class TestJsParityOnAnIntervalLog:
+    """Service time, waiting time and case duration in both engines, on a
+    log whose events start before their case's first completion, as the
+    first event of nearly every case of a real interval log does."""
+
+    @pytest.fixture(scope="class")
+    def tbl(self):
+        return build_fact_table(_interval_log(), log_name="t")
+
+    @pytest.fixture(scope="class")
+    def js_results(self, tbl, tmp_path_factory):
+        return _run_js(
+            tbl.to_payload(), _INTERVAL_PARITY_SPECS, [[]],
+            catalog_json(interval_log=tbl.interval_log),
+            tmp_path_factory.mktemp("interval_parity"),
+        )
+
+    def test_first_event_service_time_in_js(self, js_results):
+        assert js_results[0]["value"] == pytest.approx(2.0)   # (1 + 3) / 2
+        assert js_results[1]["value"] == pytest.approx(1.75)  # (2 + 1.5) / 2
+        assert js_results[2]["value"] == pytest.approx(0.75)  # (2 - 0.5) / 2
+
+    def test_case_duration_in_js(self, js_results):
+        assert js_results[5]["id"] == "duration"
+        assert js_results[5]["value"] == pytest.approx(4.5)   # (5 + 4) / 2
+
+    @pytest.mark.parametrize("i", range(len(_INTERVAL_PARITY_SPECS)))
+    def test_widget_matches(self, i, tbl, js_results):
+        py = compute_widget(_INTERVAL_PARITY_SPECS[i], tbl)
+        js = js_results[i]
+        assert "error" not in js, f"JS raised: {js.get('error')}"
+        for key in ("unit", "state", "text", "rows", "cols", "axis"):
+            assert js.get(key) == py.get(key), f"{py['id']}: {key}"
+        if py.get("value") is None:
+            assert js.get("value") is None
+        else:
+            assert js["value"] == pytest.approx(py["value"])
+        for k in ("series", "cells"):
+            if k in py:
+                assert json.dumps(_norm(js[k])) == json.dumps(_norm(py[k])), \
+                    f"{py['id']}: {k}"
 
 
 _UNBOUND_RUNNER = r"""

@@ -1197,3 +1197,109 @@ def test_family_png_grid_and_report_images_honour_heatmap():
                                       parameters=heat_classic)
         assert s_off.read_text() != s_on.read_text(), \
             "SVG grid export ignored the heat-map"
+
+
+# ---------------------------------------------------------------------------
+# Parameters the public API must pass through (0.9.0 documentation audit)
+# ---------------------------------------------------------------------------
+
+def _coded_log(n_codes=3, per_code=4, case_col="case:concept:name"):
+    """Cases carrying ``case:code``: a number serialised as a string
+    (``"1"``, ``"2"``, …) and ``case:site``, a plain string with one
+    distinct value per code."""
+    rows = []
+    ts = pd.Timestamp("2026-01-01")
+    i = 0
+    for code in range(1, n_codes + 1):
+        for _ in range(per_code):
+            for k, act in enumerate(("A", "B")):
+                rows.append({
+                    case_col: f"c{i:03d}", "concept:name": act,
+                    "time:timestamp": ts + pd.Timedelta(days=i, hours=k),
+                    "case:code": str(code),
+                    "case:site": f"site-{code}",
+                })
+            i += 1
+    return pd.DataFrame(rows)
+
+
+def _seq_miner(case_col):
+    def mine(df):
+        seqs = df.groupby(case_col, sort=True)["concept:name"].apply(tuple)
+        return T(operator="->", children=[T(label=a) for a in seqs.iloc[0]])
+    return mine
+
+
+class TestApiPassesParametersThrough:
+
+    _PARAMS = {"tree_miner": _toy_miner, "resource_attribute": False}
+
+    def test_numeric_coercion_threshold_reaches_the_partition(self):
+        """`partition_log`'s docstring tells users to raise the threshold
+        to keep a column of numeric strings categorical; the public entry
+        point has to accept it for that advice to be usable."""
+        df = _coded_log()
+        binned = pm4py_ucm.discover_ucm_family(
+            df, ["case:code"], min_cases=1, parameters=self._PARAMS)
+        assert binned.attributes[0].spec.type == "integer"
+
+        kept = pm4py_ucm.discover_ucm_family(
+            df, ["case:code"], min_cases=1, parameters=self._PARAMS,
+            numeric_coercion_threshold=1.01)
+        assert kept.attributes[0].spec.type == "enumeration"
+        assert [v.label for v in kept.attributes[0].values] == ["1", "2", "3"]
+
+    def test_max_enum_cardinality_reaches_the_partition(self):
+        """Three distinct sites: an enumeration by default, not a usable
+        attribute once the ceiling is two."""
+        df = _coded_log()
+        fam = pm4py_ucm.discover_ucm_family(
+            df, ["case:site"], min_cases=1, parameters=self._PARAMS)
+        assert len(fam.cells) == 3
+        with pytest.raises(ValueError, match="not a usable case-level"):
+            pm4py_ucm.discover_ucm_family(
+                df, ["case:site"], min_cases=1, parameters=self._PARAMS,
+                max_enum_cardinality=2)
+
+    def test_compute_family_stats_exposes_coarsen_loops(self):
+        """Cells whose cases repeat A once, twice or three times.
+        Coarsened, two and three iterations are one behavioural variant;
+        uncoarsened they are two."""
+        rows = []
+        ts = pd.Timestamp("2026-01-01")
+        for i, reps in enumerate((1, 1, 2, 2, 3, 3) * 2):
+            for k, act in enumerate(["S"] + ["A"] * reps + ["E"]):
+                rows.append({
+                    "case:concept:name": f"c{i:02d}", "concept:name": act,
+                    "time:timestamp": ts + pd.Timedelta(days=i, hours=k),
+                    "case:kind": "x" if i < 6 else "y",
+                })
+        df = pd.DataFrame(rows)
+
+        def loop_miner(_df):
+            return T(operator="->", children=[
+                T(label="S"),
+                T(operator="*", children=[T(label="A"), T()]),
+                T(label="E")])
+
+        fam = pm4py_ucm.discover_ucm_family(
+            df, ["case:kind"], min_cases=1,
+            parameters={"tree_miner": loop_miner,
+                        "resource_attribute": False})
+        coarse = pm4py_ucm.compute_family_stats(fam)
+        fine = pm4py_ucm.compute_family_stats(fam, coarsen_loops=False)
+        assert [c.variants["n_variants"] for c in coarse.cells] == [2, 2]
+        assert [c.variants["n_variants"] for c in fine.cells] == [3, 3]
+
+    def test_combined_assembly_overlay_with_a_custom_case_id_column(self):
+        """The family remembers the case-id column it was mined with; the
+        per-cell overlay used to look for "case:concept:name" regardless
+        and raise KeyError."""
+        df = _coded_log(case_col="claim")
+        fam = pm4py_ucm.discover_ucm_family(
+            df, ["case:site"], min_cases=1, case_id_col="claim",
+            parameters={"tree_miner": _seq_miner("claim"),
+                        "resource_attribute": False})
+        assert fam.case_id_col == "claim"
+        ucm = assemble_combined(fam, node_metrics=("frequency",))
+        assert len(ucm.maps) == 3

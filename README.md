@@ -632,17 +632,22 @@ pm4py_ucm.write_ucm(ucm_dd, "log.data_driven.jucm")
 pm4py_ucm.write_condition_mining_report(group, "condition_mining.csv")
 ```
 
-`discover_scenarios` mines the tree itself at PM4Py's default noise
-threshold of `0.0`, and does not read `discovery_parameters`. To synthesize
-scenarios for a noise-filtered model, mine the tree and hand it over; the
-cases the tree cannot replay are then reported as noise:
+`discover_scenarios` mines the tree itself, at PM4Py's default noise
+threshold of `0.0` unless told otherwise. It takes the same
+`discovery_parameters` entry as `discover_ucm_inductive`, so scenarios
+for a noise-filtered model need nothing more; the cases the filtered tree
+cannot replay are reported as noise:
 
 ```python
-tree = pm4py.discover_process_tree_inductive(log, noise_threshold=0.2)
 ucm, clustering = pm4py_ucm.discover_scenarios(
-    log, parameters={"process_tree": tree})
+    log, parameters={"discovery_parameters": {"noise_threshold": 0.2}})
 print(clustering.fitness_percentage, len(clustering.noise_case_ids))
 ```
+
+A tree you mined yourself can still be handed over as
+`parameters={"process_tree": tree}`; `discovery_parameters` is then ignored
+(with a warning), since nothing is mined. (Up to 0.9.0 that was the only
+way to set a noise threshold here: `discovery_parameters` was not read.)
 
 The long-running entry points — `discover_scenarios`, `discover_ucm_family`,
 `compute_family_stats` — take a `progress_callback(stage, done, total)`.

@@ -232,14 +232,24 @@ case:
   wall-clock span including the first event's lead-in.
 * Single-timestamp log: `max(completion) − min(completion)` (start
   defaults to completion), i.e. first-event → last-event span.
+* An event whose start timestamp is missing, does not parse or lies after
+  its own completion counts from its completion.
 
 `duration.total` is the **sum** of case durations across the cell (added
 because it is a headline figure for effort/throughput comparisons). Case
 duration is **absent** (empty dict) when the log has no timestamps.
 
-The dashboards' `duration` metric is not this one on an interval log: it
-runs from the first to the last *completion*, leaving out the first
-event's lead-in ([`dashboards.md`](dashboards.md) §4).
+**This is the one definition of case duration in the package**, written
+down in [`pm4py_ucm.util.timing`](../pm4py_ucm/util/timing.py). The
+dashboards' `duration` metric ([`dashboards.md`](dashboards.md) §4) and
+the partition advisor's duration effect size
+([`model_families.md`](model_families.md)) use it too, as does the web
+app's cycle-time log filter, and
+`TestOneCaseDuration` holds the three to one another; the dashboards
+store whole seconds, so their figure can differ by the rounding of two
+timestamps. (Up to 0.9.0 the dashboards and the advisor measured first
+to last *completion* on interval logs: 14.92 d against 15.07 d on the
+claims sample.)
 
 The single-timestamp case duration matches pm4py's
 `get_all_case_durations` exactly (validated on the claims log, all

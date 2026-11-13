@@ -30,7 +30,9 @@ IssueTracker         2.94 MB / 7.9 s      0.92 MB / 0.1 s
 
 so the payload is **columnar**: activity names and resources are
 dictionary-encoded to integer codes, event timestamps are delta-encoded
-against their case's start, and the per-case event lists are flattened
+against their case's start (its earliest start timestamp on an interval
+log, else its first completion — see :mod:`pm4py_ucm.util.timing`), and
+the per-case event lists are flattened
 into one array addressed by CSR-style offsets. Each buffer is a typed
 little-endian array, base64-encoded. The JS side decodes straight into
 ``TypedArray`` views.
@@ -178,9 +180,10 @@ class CaseAttribute:
 class FactTable:
     """A log snapshot the client engine can compute any catalog metric on.
 
-    Timestamps are epoch **seconds** throughout: ``start[i]`` is case
-    *i*'s first event, and an event's absolute time is
-    ``start[i] + dt[j]``. Second resolution is deliberate — it keeps the
+    Timestamps are epoch **seconds** throughout: ``start[i]`` is when
+    case *i* starts (the earliest start timestamp of its events on an
+    interval log, else its first completion), and an event's absolute
+    completion time is ``start[i] + dt[j]``. Second resolution is deliberate — it keeps the
     delta buffers in ``uint32`` and no process-mining metric in the
     catalog is meaningful at finer granularity.
     """
@@ -619,7 +622,24 @@ def build_fact_table(
     offsets = np.zeros(n_cases + 1, dtype=np.uint32)
     np.cumsum(counts, out=offsets[1:])
 
-    starts = np.minimum.reduceat(ts, offsets[:-1].astype(np.int64))
+    # When a case starts. On an interval log that is the earliest moment
+    # any of its events *started*, not the first completion: the first
+    # activity's own duration is part of the case. This is the definition
+    # of pm4py_ucm.util.timing (shared with the family statistics and the
+    # partition advisor), applied to the integer seconds held here — an
+    # event whose start is missing, unparseable or after its own
+    # completion counts from its completion.
+    interval = start_timestamp_col in df.columns
+    begins = ts
+    if interval:
+        sts, sts_valid = _epoch_seconds(df[start_timestamp_col])
+        # A start after its own completion is meaningless — mark it
+        # missing rather than clamp it to a fake zero-length service time
+        # that would quietly drag every mean down. Same for a start that
+        # did not parse.
+        bad = ~sts_valid | (sts > ts)
+        begins = np.where(bad, ts, sts)
+    starts = np.minimum.reduceat(begins, offsets[:-1].astype(np.int64))
     deltas = (ts - np.repeat(starts, counts))
     # A clock skew or unparsed timestamp must not wrap the unsigned
     # buffer into a colossal duration; clamp and let it read as 0.
@@ -642,14 +662,12 @@ def build_fact_table(
                 df[resource_col].astype(str).where(df[resource_col].notna()),
                 resources)
 
-    interval = start_timestamp_col in df.columns
     if interval:
-        sts, sts_valid = _epoch_seconds(df[start_timestamp_col])
-        # A start after its own completion is meaningless — mark it
-        # missing rather than clamp it to a fake zero-length service time
-        # that would quietly drag every mean down. Same for a start that
-        # did not parse, and for one before its own case's start.
-        bad = ~sts_valid | (sts > ts) | (sts < np.repeat(starts, counts))
+        # No valid start precedes the case start, which is the earliest of
+        # them, so the offset is never negative. (Up to 0.9.0 the case
+        # start was the first completion and an earlier start was marked
+        # missing — which dropped the first event of nearly every case
+        # from the service time.)
         sdt = np.clip(sts - np.repeat(starts, counts), 0, None).astype(
             np.uint32)
         sdt[bad] = np.iinfo(np.uint32).max

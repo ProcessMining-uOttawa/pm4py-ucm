@@ -85,6 +85,10 @@ class ModelFamily:
     log_df: Any
     cell_parameters: Dict[str, Any] = field(default_factory=dict)
     decomposition: Any = None
+    #: The case-id column of ``log_df`` the family was partitioned on, so
+    #: later steps that slice the log by a cell's case ids read the same
+    #: column instead of assuming the XES name.
+    case_id_col: str = "case:concept:name"
 
     # ------------------------------------------------------------------
     # Lookup / grid helpers

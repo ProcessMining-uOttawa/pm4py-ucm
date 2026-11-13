@@ -102,9 +102,9 @@ without the decoder caring:
 | buffer | per | holds |
 |---|---|---|
 | `off` | case (+1) | CSR offsets: case *i* owns events `[off[i], off[i+1])` |
-| `start` | case | first event's time, epoch seconds |
+| `start` | case | the case start, epoch seconds: the earliest start timestamp of its events on an interval log, else its first event's time (see below) |
 | `act` | event | index into `activities` |
-| `dt` | event | seconds since the case's `start` |
+| `dt` | event | completion time, seconds since the case's `start` |
 | `res` | event | index into `resources` (absent when the log has no resource column) |
 | `sdt` | event | start timestamp, seconds since the case's `start` (interval logs only) |
 | `attr<i>`, `behaviour` | case | one column per case attribute: a dictionary index, or the raw number for a numeric attribute |
@@ -165,6 +165,22 @@ On an interval log, a *start* timestamp that does not parse, or that lies
 after its own event's completion, is marked missing rather than clamped
 to a zero-length service time that would drag every mean down. The event
 is kept; it simply has no service or waiting time.
+
+**When a case starts.** On an interval log a case starts at the
+earliest moment any of its events *started*; on a single-timestamp log,
+at its first event. An event whose start is missing, unparseable or after
+its own completion counts from its completion. This is the definition of
+[`pm4py_ucm.util.timing`](../pm4py_ucm/util/timing.py), shared with the
+family statistics and the partition advisor ([`metrics.md`](metrics.md)
+§4). `duration`, the time axes, the date filter and the series metrics
+all read this one case start, and every offset counts from it, so no
+valid start is ever negative.
+
+Up to 0.9.0 the case start was the first *completion* on every log. Two
+things followed on interval logs: `duration` left out the first
+activity's own duration, and a start earlier than that first completion
+— the first event of nearly every case — was marked missing, which
+removed it from `actService`.
 
 ---
 
@@ -241,7 +257,7 @@ reconcile — and the composer surfaces it on the affected metrics.
 
 | id | level | result | definition |
 |---|---|---|---|
-| `duration` | process | time | first to last event of the case, by **completion** timestamp. |
+| `duration` | process | time | earliest start to latest completion of the case. On a log without start timestamps that is its first event to its last. |
 | `timeBetween` | process | time | first `from` to the first `to` **that follows it**. No value when `to` never follows `from`. |
 | `wip` | process | rate | cases open at each month boundary — started at or before it, last event after it (a stock). |
 | `arrivalRate` / `completionRate` | process | rate | cases starting / ending within each month (flows). |
@@ -252,7 +268,7 @@ reconcile — and the composer surfaces it on the affected metrics.
 | `actRepeats` | activity | count | occurrences beyond the first; 0 when it runs once *and* when it never runs. |
 | `actRework` | activity | percent | 1 when the case runs the activity more than once, **among cases that run it at all**. |
 | `actSojourn` | activity | time | time since the case's previous event (waiting + service). |
-| `actService` | activity | time | start to completion. **Interval logs only.** |
+| `actService` | activity | time | start to completion, for every event with a valid start timestamp — a case's first event included. **Interval logs only.** |
 | `actWaiting` | activity | time | previous event's completion to this activity's start. **Interval logs only.** Negative values are kept — they mean real concurrency, not an error. |
 | `edgeFreq` | edge | count | directly-follows traversals of `from → to` within the case. |
 | `edgeTime` | edge | time | elapsed time across the `from → to` step, completion to completion. |
@@ -282,12 +298,10 @@ real ending is still "ended" at that event: the log cannot tell *still
 running* from *ended silently*.
 
 Where a definition here and one in [`metrics.md`](metrics.md) share a
-name, two differences are deliberate. `duration` runs from the case's
-first to its last *completion* on every log, whereas the family report's
-case duration starts at the earliest `start_timestamp` on an interval
-log (`metrics.md` §4) — so the report's figure is longer by the first
-event's lead-in. And the activity time metrics are case-weighted
-([§3](#case-weighted-vs-event-weighted)).
+name, they agree on what is measured: `duration` is the family report's
+case duration (`metrics.md` §4), up to the rounding of two timestamps to
+the second. One difference is deliberate: the activity time metrics here
+are case-weighted ([§3](#case-weighted-vs-event-weighted)).
 
 A metric naming an activity the log does not have is not an error:
 counts and presence are 0, times are missing.
@@ -391,7 +405,8 @@ has a resource column), `variant`, and one per detected case attribute
 (`attr:<name>`). A spec's `segment` holds up to two, as `rows` and
 `cols`.
 
-* **Time axes read the case's start** — its first event. Labels are
+* **Time axes read the case's start** — on an interval log the earliest
+  start timestamp of its events, else its first event ([§2](#2-the-data-contract)). Labels are
   `2011`, `2011-Q1`, `2011-01`, `Mon`.
 * **Weekday is Monday-first.** (Epoch day 0 was a Thursday = index 3.)
 * **`resource` is the case's first event's resource.** A case has many
@@ -601,6 +616,11 @@ Two modes:
   threshold to have a state at all, so it is scored (as a `>=` target)
   against `shareGoal` / `shareWarn`, two further fields of the target;
   without a `shareGoal` the share is reported but has no state.
+  **Every value the widget reports is then a share**, whatever the metric
+  measures: its `unit` is `%`, and so are its headline, each bar and each
+  cell — a widget segmented by country reads "the share of each
+  country's cases within 14 days". The mode takes effect only while the
+  target is on.
 
 **Scoring is per segment, and a widget rolls up to its worst segment.** A
 heatmap of 40 segments with one breach is a breach; reporting its average
@@ -673,9 +693,13 @@ computation, not two. Every result carries `id`, `title`, `viz`, `unit`,
 `sampled`, then by shape:
 
 * no axis — `value`, `text`, `state`, `sub` (the caption), plus
-  `distribution` in `per_case` mode and `hist` / `box` for those shapes;
+  `distribution` in `per_case` mode and `hist` / `box` for those shapes.
+  A `hist` or `box` result also carries `valueUnit`, the unit of its bins
+  and quartiles: the metric's own, which under a `per_case` target is not
+  the widget's `unit` (a share in `%`);
 * one axis — `axis` and `series`: `[{label, value, text, state, nCases}]`,
-  with the unsegmented `value` / `text` alongside;
+  with the unsegmented `value` / `text` alongside (in `per_case` mode, the
+  share over all the widget's cases);
 * two axes — `rowsAxis`, `colsAxis`, `rows`, `cols` and `cells[r][c]` =
   `{value, text, state, nCases}`;
 * a series metric — `series`: `[{label, value}]` per month, and the

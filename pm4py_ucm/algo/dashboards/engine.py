@@ -224,7 +224,9 @@ def per_case_values(table: FactTable, metric: str,
         return custom_values(table, p.get("formula", ""))
 
     if metric == "duration":
-        # Events are time-ordered, so the case's last dt is its span.
+        # Events are ordered by completion and dt counts from the case
+        # start (the earliest start on an interval log), so the case's
+        # last dt is its span: earliest start to latest completion.
         last = off[1:] - 1
         return dt[last] / DAY
 
@@ -1160,6 +1162,10 @@ def compute_widget(spec: Dict[str, Any], table: FactTable, *,
     rows_ax = (spec.get("segment") or {}).get("rows") or "none"
     cols_ax = (spec.get("segment") or {}).get("cols") or "none"
     target = spec.get("target")
+    if _share_mode(target):
+        # Every value this widget reports is a share of cases, whatever
+        # the metric measures — the headline, each bar, each cell.
+        unit = out["unit"] = "%"
 
     if ACTIVITY_AXIS in (rows_ax, cols_ax):
         return {**out, **_by_activity(table, spec, mask, rows_ax, cols_ax,
@@ -1172,10 +1178,15 @@ def compute_widget(spec: Dict[str, Any], table: FactTable, *,
         res = {**out, **_kpi(values, agg_kind, unit, target, n_cases)}
         # hist/box keep the KPI headline and add the distribution's shape;
         # both are only meaningful for an unsegmented per-case metric.
+        # The shape is of the metric's own values, so it carries their
+        # unit: under a per_case target the headline (``unit``) is a share
+        # in % while the bins and quartiles are still, say, days.
         if out["viz"] == "hist":
             res["hist"] = _histogram(values)
+            res["valueUnit"] = UNIT_BY_TYPE[metric.result_type]
         elif out["viz"] == "box":
             res["box"] = _box_stats(values)
+            res["valueUnit"] = UNIT_BY_TYPE[metric.result_type]
         return res
 
     if cols_ax == "none" or rows_ax == "none":
@@ -1185,6 +1196,15 @@ def compute_widget(spec: Dict[str, Any], table: FactTable, *,
 
     return {**out, **_grid(table, values, rows_ax, cols_ax, agg_kind, unit,
                            target)}
+
+
+def _share_mode(target) -> bool:
+    """True when the widget reports the **share of cases meeting** its
+    target instead of the aggregated metric: a ``per_case`` target that is
+    switched on. The mode is remembered on a switched-off target, where it
+    must change nothing."""
+    return bool(target and target.get("on")
+                and target.get("mode") == "per_case")
 
 
 def _score(values, agg_kind: str, target) -> Tuple[Optional[float],
@@ -1206,7 +1226,7 @@ def _score(values, agg_kind: str, target) -> Tuple[Optional[float],
     """
     import numpy as np
 
-    if not target or not target.get("on") or target.get("mode") != "per_case":
+    if not _share_mode(target):
         value = aggregate(values, agg_kind)
         return value, target_state(value, target), None
 
@@ -1231,9 +1251,8 @@ def _score(values, agg_kind: str, target) -> Tuple[Optional[float],
 
 
 def _kpi(values, agg_kind, unit, target, n_cases) -> Dict[str, Any]:
-    per_case = bool(target and target.get("mode") == "per_case")
+    per_case = _share_mode(target)  # compute_widget already set the unit
     value, state, dist = _score(values, agg_kind, target)
-    unit = "%" if per_case else unit
     out: Dict[str, Any] = {
         "value": value, "text": fmt(value, unit), "state": state,
         "unit": unit,
@@ -1268,10 +1287,12 @@ def _series_by(table, values, axis, agg_kind, unit, target) -> Dict[str, Any]:
                        "text": fmt(value, unit), "state": state,
                        "nCases": int(np.count_nonzero(np.isfinite(sel)))})
         states.append(state)
+    # The widget's own value, over all its cases: the aggregate, or in
+    # per_case mode the overall share, which is what the scorecard reads.
+    overall = _score(values, agg_kind, target)[0]
     return {"axis": axis, "series": series,
             "state": worst_state(states),
-            "value": aggregate(values, agg_kind),
-            "text": fmt(aggregate(values, agg_kind), unit)}
+            "value": overall, "text": fmt(overall, unit)}
 
 
 def _grid(table, values, rows_ax, cols_ax, agg_kind, unit,
@@ -1305,14 +1326,14 @@ def _grid(table, values, rows_ax, cols_ax, agg_kind, unit,
             states.append(state)
         cells.append(row)
 
+    overall = _score(values, agg_kind, target)[0]
     return {
         "rowsAxis": rows_ax, "colsAxis": cols_ax,
         "rows": [r_labels[i] for i in r_used],
         "cols": [c_labels[i] for i in c_used],
         "cells": cells,
         "state": worst_state(states),
-        "value": aggregate(values, agg_kind),
-        "text": fmt(aggregate(values, agg_kind), unit),
+        "value": overall, "text": fmt(overall, unit),
     }
 
 

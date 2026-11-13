@@ -10,7 +10,7 @@
 // pannable offline.
 //
 // Built client-side (buildSessionReport, below), so it carries the user's
-// actual widgets: components.html is one-way, so a server-built report
+// actual widgets: the embedding iframe is one-way, so a server-built report
 // would only ever know the seed dashboard. The model SVGs the report
 // embeds are the one thing the browser cannot produce, so Python puts
 // them in the page config for the report to lift.
