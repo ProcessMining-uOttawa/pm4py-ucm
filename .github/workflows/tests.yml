@@ -10,7 +10,11 @@ on:
 jobs:
   test:
     name: pytest (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: that label moved to Ubuntu 26.04, for which
+    # setup-python has no Python 3.9 build, so the 3.9 job failed at set-up
+    # before running a test. 24.04 still provides every version in the
+    # matrix. Unpin when 3.9 leaves the matrix (and requires-python).
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
