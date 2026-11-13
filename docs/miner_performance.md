@@ -1,5 +1,9 @@
 # Inductive miner and replay performance
 
+**Status:** measurements, dated 2026-08-15 — true for the PM4Py version and
+the logs named below. The recommendations were adopted in 0.7.11
+(`pm4py_ucm.algo.complexity` and the V6 app's cost screen); §6 says how.
+
 Why some logs mine in milliseconds and others do not finish at all, which
 knobs actually help (few), and how to give a user a trustworthy estimate
 before they commit to a long run.
@@ -272,11 +276,13 @@ get aligned within it are reported as `unexplained_cases`.
 Ten seconds is the same allowance whether the mine took 0.1 s or 253 s.
 On a hard log almost every non-fitting case is therefore abandoned, and the
 coverage figure reports a time limit as though it were a property of the
-model. V6 scales it to the work already done — repair gets roughly the
-time the mine itself took, floored at the library default so fast logs are
-unaffected — and states the budget in the UI so an "unexplained" count
-reads as the budget decision it is. The library defaults are unchanged;
-this is app policy, since only the app knows how long the mine took.
+model. V6 scales it to the size of the job instead — the larger of the
+library default, the time the mine took and one second per 50 distinct
+sequences, capped at 120 s, with a per-sequence allowance of a twentieth of
+that — and states the budget in the UI so an "unexplained" count reads as
+the budget decision it is. (Scaling on mine time alone did not survive:
+the mine is cached, so on most runs it measured as zero and the budget fell
+back to its floor.) The library defaults are unchanged; this is app policy.
 
 ### Sampling predicts it well
 
@@ -330,6 +336,33 @@ options. Both return a model this library cannot use, and the honest label
    the probe completes the whole replay anyway.
 5. **Let the user cancel.** For the worst logs mining does not finish, and
    no estimate substitutes for a stop button.
+
+## 6. What was adopted
+
+Recommendations 1–4 are built (0.7.11); 5 is not, for a reason given below.
+
+- **Library** — `pm4py_ucm.algo.complexity` (imported from the module; not
+  re-exported at the top level): `profile_log(df)` → `LogProfile` (events,
+  cases, activities, sequence variants, median and maximum trace length);
+  `screen_mining(profile, variant_limit=2000, activity_limit=50)` →
+  `MiningRisk` with `high`, a `reason` to show and its `triggers`, and never
+  a duration; `estimate_replay(df, tree, time_budget=5.0, probe_cases=50)` →
+  `ReplayEstimate`, which replays a small batch, finishes the whole log if
+  it fits the time box (`complete`, with the real clustering attached) and
+  otherwise extrapolates linearly.
+- **App (V6)** — the log is profiled and screened before mining and again
+  after every filter change. A risky log gets the cost screen with two
+  one-click reductions — keep the most frequent variants, keep the most
+  frequent activities — each reporting what it retained (how they are
+  persisted is in [`sessions.md`](sessions.md) §5). The replay probe runs
+  with a 10 s box: shorter than that, reading the prompt costs more than the
+  replay it would save.
+- **No stop button.** Streamlit cannot interrupt a running computation, so
+  the choice is made *before* the run: the cost screen for mining, and a
+  "Replay the log for traversal counts" opt-out for the replay, with the
+  event-based metrics as the fallback.
+- **Neither `disable_fallthroughs` nor IMd nor `multi_processing`** is
+  offered anywhere.
 
 ## Reproducing
 

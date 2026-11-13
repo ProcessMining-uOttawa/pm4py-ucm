@@ -27,7 +27,7 @@ Modules:
 * :mod:`.view` — assembles the self-contained HTML artifact that serves
   as *both* the app's Dashboards view and the exported report.
 
-The engine exists twice: here, and in JS (``web/assets/dash-engine.js``)
+The engine exists twice: here, and in JS (``assets/dash-engine.js``)
 for the browser and the self-contained HTML export. Both read the same
 :mod:`.contract` payload and return the same widget structure. The pair
 is pinned by a parity test rather than by good intentions — see

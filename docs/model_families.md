@@ -1,6 +1,8 @@
 # Model families and performance overlays
 
-This document covers the family feature sets added in v0.4.0–v0.5.0:
+A user guide to comparing one process across case attributes. It
+describes the library as released; the exact definition of every number
+mentioned here is in [`metrics.md`](metrics.md). Three feature sets:
 
 1. **Model families** — partition an event log by the values of one or
    two case-level attributes (e.g. *cancer type* × *age group*), mine
@@ -16,9 +18,9 @@ This document covers the family feature sets added in v0.4.0–v0.5.0:
    self-contained interactive HTML report for ranking the combinations
    and comparing any two side by side.
 
-Everything here is also available point-and-click in the V3 web app
-(`web/streamlit_app_v3.py`: the **Family** tab, the **Compare** tab,
-and the **Performance overlay** sidebar section).
+Everything here is also available point-and-click in the web app
+([`web/`](../web/README.md)): the **Family** and **Compare** views, and
+the performance-overlay controls of the Model view.
 
 ---
 
@@ -47,8 +49,8 @@ family = pm4py_ucm.discover_ucm_family(
     log,
     ["cancer_type", "age"],       # 1 or 2 case-level attributes
     decomposition="auto",         # per-cell, same as discover_ucm_inductive
-    min_cases=20,                 # skip combinations with fewer cases
-    bins=4,                       # numeric attributes → quantile ranges
+    min_cases=20,                 # skip combinations with fewer cases (default 10)
+    bins=4,                       # numeric attributes → quantile ranges (default)
 )
 
 # One .jucm per combination + family_summary.csv (zip or directory)
@@ -56,7 +58,7 @@ pm4py_ucm.write_ucm_family(family, "family.zip")
 
 # All combinations rendered side by side: a stack for one attribute,
 # a matrix (rows × columns) for two, with n / % captions per cell.
-pm4py_ucm.save_vis_ucm_family(family, "family_grid.png")
+pm4py_ucm.save_vis_ucm_family(family, "family_grid.png")   # or .svg
 
 # One overarching model: shared skeleton + dynamic stubs at the
 # points of divergence, one strategy per combination.
@@ -68,6 +70,41 @@ pm4py_ucm.write_ucm(umbrella, "family_umbrella.jucm")
 combined = pm4py_ucm.assemble_ucm_family(family, mode="combined")
 pm4py_ucm.write_ucm(combined, "family_combined.jucm")
 ```
+
+`write_bpmn_family(family, "family.zip", assembled=umbrella)` writes the
+same family as BPMN 2.0 — see [`bpmn_export.md`](bpmn_export.md).
+
+### Choosing the attributes
+
+Which attribute yields genuinely different processes, rather than
+noise? `rank_partition_attributes` answers from the log, with no model
+mined and no LLM:
+
+```python
+for score in pm4py_ucm.rank_partition_attributes(log)[:3]:
+    print(score.label, score.score, score.rationale)
+```
+
+It returns one `AttributeScore` per case attribute, best first. Each
+attribute is first bucketed onto a bounded axis (its 8 most frequent
+values plus *Other*; quantile ranges for a numeric with more than 10
+distinct values), then scored on two signals in `[0, 1]`:
+
+- `divergence` — normalised mutual information between the attribute and
+  the case's activity sequence, `I(A; variant) / min(H(A), H(variant))`,
+  with the sequences beyond the 30 most frequent pooled: how cleanly the
+  attribute's values map onto behaviour;
+- `effect` — η² of case duration (first to last event) across the
+  attribute's values: the share of duration variance that lies between
+  them.
+
+`score = 0.6 · divergence + 0.4 · effect`, multiplied by 0.25 when the
+attribute is flagged *high-cardinality* (more distinct values than
+`max(20, half the cases)` — an identifier, not a determinant) or *nearly
+constant* (its largest bucket holds over 95% of cases). `flags` also
+notes an attribute present in under half the cases; `rationale` is the
+one-line reading; `to_row()` gives a flat dict for a table. The ranking
+advises — `discover_ucm_family` accepts any detected attribute.
 
 ### Partitioning
 
@@ -85,10 +122,12 @@ XES exports). Per attribute type:
 
 A column is numeric when its **values** are, not when its dtype says so:
 XES exports routinely serialise numbers as strings, so an object column
-is coerced first and treated as numeric when at least
-`numeric_coercion_threshold` of its non-null values parse (default
-`0.99`). Values that do not parse become missing, and land in the
-**Unknown** bucket.
+is coerced first and treated as numeric when at least 99% of its
+non-null values parse. Values that do not parse become missing, and land
+in the **Unknown** bucket. (The share is the `numeric_coercion_threshold`
+parameter of the lower-level
+[`partition_log`](../pm4py_ucm/algo/discovery/families/partition.py);
+`discover_ucm_family` does not expose it.)
 
 Two consequences worth knowing before you partition:
 
@@ -99,8 +138,10 @@ Two consequences worth knowing before you partition:
 - Columns naming an *entity* — `org:resource`, `org:group`, `org:role`,
   `concept:instance` — are never coerced however numeric they look,
   because their digits are labels and a range like `541-561` over them
-  means nothing. They partition as enumerations, or are dropped when
-  their cardinality is too high.
+  means nothing. They partition as enumerations.
+- An enumeration with more than 40 distinct values is not offered as a
+  partition attribute at all; naming one raises a `ValueError` listing
+  the attributes that were detected.
 
 The threshold is deliberately strict. A column of treatment codes
 `"1"`/`"2"`/`"3"` that writes combinations as `"2,3"` is 97.7% numeric,
@@ -110,9 +151,14 @@ single `"na"` sits at 99.6% and is genuinely numeric.
 
 Additional policy knobs:
 
-- `min_cases` — observed combinations below the threshold are *skipped*
-  (recorded on the family and shown grayed in the grid) rather than
-  mined into overfitted micro-models;
+- `min_cases` (default 10) — observed combinations below the threshold
+  are *skipped* (recorded on the family and shown grayed in the grid)
+  rather than mined into overfitted micro-models; if no combination
+  reaches it, `discover_ucm_family` raises a `ValueError` listing the
+  combinations it saw;
+- `max_values_per_attribute` (default 12) and `other_bucket` — the cap
+  past which an enumeration's least frequent values merge into
+  **Other**; with `other_bucket=False` those cases are dropped instead;
 - `include_values={attribute: [labels]}` — restrict an attribute to the
   listed values (labels as they appear on the axis, including
   `Other` / `Unknown` and range labels like `"18-39"`, matched
@@ -121,11 +167,30 @@ Additional policy knobs:
   merging for logs whose codes are genuinely case-significant;
 - `noise_threshold` — forwarded to the inductive miner per cell;
 - `decomposition` — applied per cell, so the family is flat or
-  hierarchical exactly like a single model would be.
+  hierarchical exactly like a single model would be;
+- `parameters` — converter and resource parameters applied to every cell
+  (`resource_attribute`, `urn_name`, …);
+- `validate` (default `True`) — check each cell's model as it is mined
+  and raise a `ValueError` naming the cell if it is malformed;
+- `progress_callback(stage, done, total)` — fired after each mined cell.
 
-The result is a `ModelFamily`: one standalone `UCM` per cell plus the
-partition axes, per-cell case lists, coverage bookkeeping, and each
-cell's mined `{activity: performer}` mapping.
+Axis values are ordered deterministically — sorted values, ranges
+ascending, **Other** and **Unknown** last — so repeated runs give
+identical partitions, map names and exports.
+
+The result is a `ModelFamily`: one standalone `UCM` per cell
+(`family.cells`, each with its `labels`, `case_ids`, `n_cases`,
+`coverage`, `tree` and mined `{activity: performer}` mapping) plus the
+partition axes (`attributes`) and the coverage bookkeeping
+(`total_cases`, `covered_cases`, `dropped_cases`, `skipped_cells`).
+`family.cell("Breast", "40-59")` looks a cell up by its labels. The
+family keeps the log (`log_df`), which the assemblers and the statistics
+need.
+
+`write_ucm_family` names each file after its combination
+(`cancer_type=Breast_age=40-59.jucm`); `family_summary.csv` lists every
+combination with its case count, coverage and file, skipped ones
+included.
 
 ### The umbrella (overarching model)
 
@@ -178,13 +243,14 @@ By default (`path_scenarios=True`) the umbrella's strategies are
 (concurrency-aware variant clustering) on the cell's *configured tree*
 — the skeleton with each variation point substituted by the cell's
 variant subtree — and one `ScenarioDef` is emitted per
-(combination × behavioural variant, capped by
-`max_variants_per_cell`). Each scenario initialises:
+(combination × behavioural variant, the most frequent first, capped by
+`max_variants_per_cell`, default 5). Each scenario initialises:
 
 - the attribute variables → plug-in selection at every dynamic stub;
 - a `family_variant` enumeration value → branch selection at every
   outside-loop OR-fork (`family_variant == AUS_v2` disjunctions);
-- per-loop iteration counters (capped by `max_loop_iterations`) →
+- per-loop iteration counters (capped by `max_loop_iterations`,
+  default 2) →
   deterministic loop traversal via the same entry-guard / decrement
   scaffolding as `discover_scenarios`.
 
@@ -194,7 +260,12 @@ the observed per-variant proportions); XORs with more than two
 branches inside loops fall back to a deterministic split — the same
 behaviour as the single-model synthesizer. Uncovered low-frequency
 variants are noted on the scenario group. `path_scenarios=False`
-restores one plain configuration strategy per combination.
+restores one plain configuration strategy per combination, which is also
+the fallback when the family's log has been dropped; `strategies=False`
+emits none.
+
+Both assembly modes check the finished model (`validate=True`) and raise
+a `ValueError` if it is not structurally well-formed.
 
 ### Grid rendering and resolution
 
@@ -207,7 +278,13 @@ rendering aims for `target_dpi` (default 192) and backs off toward the
 (default 150M, enforced exactly after rendering by supersampled
 downscaling); the floor wins over the budget with a warning. Pass
 `parameters={"dpi": …}` to pin an exact resolution. The effective DPI
-is recorded in the PNG metadata (`pm4py_ucm_dpi`).
+is recorded in the PNG metadata (`pm4py_ucm_dpi`). PNG output needs
+Pillow.
+
+A target ending in `.svg` writes the same grid as one vector document
+instead — crisp at any zoom, with selectable text and none of the DPI
+machinery. `style="bpmn"` draws either in BPMN notation.
+`view_ucm_family` renders to a temporary PNG and opens it (Windows).
 
 ---
 
@@ -226,31 +303,81 @@ pm4py_ucm.save_vis_ucm(ucm, "annotated.png")     # gray overlay text
 pm4py_ucm.write_ucm(ucm, "annotated.jucm")       # metadata in jUCMNav
 ```
 
+The default selection is `frequency` on both layers. Re-annotating
+replaces the previous overlay; an empty sequence switches a layer's
+display off. `parameters` may rename the log columns (`case_id_col`,
+`activity_col`, `timestamp_col`, `start_timestamp_col`).
+
 ### Metrics
 
-| Layer      | Metric          | Meaning                                                            |
-|------------|-----------------|---------------------------------------------------------------------|
-| activities | `frequency`     | number of executions (events) — `n` exceeding `case_coverage` instantly shows loop rework |
-| activities | `case_coverage` | number of cases containing the activity                             |
-| activities | `mean/median/total_time` | activity **service time** — requires an *interval* log (a `start_timestamp` column); silently omitted otherwise |
-| edges      | `frequency`     | directly-follows traversals of the edge's segment                   |
-| edges      | `percentage`    | an OR-fork branch's share of the fork's traversals                  |
-| edges      | `mean/median/total_time` | **waiting time** between the segment's activities (completion → next start for interval logs, completion → completion otherwise) |
+Each metric is defined in [`metrics.md`](metrics.md) (§2 activities, §3
+edges, §9 traversal); this is the list of names
+`annotate_performance` accepts.
+
+| Layer | Names | Needs |
+|---|---|---|
+| activities | `frequency`, `case_coverage`, `relative_frequency`, `repeat_frequency` | any log |
+| activities | `sojourn_<agg>_time` — time since the case's previous event | timestamps |
+| activities | `<agg>_time` — **service time** | an *interval* log (a `start_timestamp` column); silently omitted otherwise |
+| edges | `frequency`, `case_frequency`, `relative_frequency` — directly-follows counts of the edge's segment | any log |
+| edges | `percentage` — an OR-fork branch's share of the fork's directly-follows traversals | an OR-fork branch |
+| edges | `<agg>_time` — **waiting time** between the segment's activities | timestamps |
+| both | `traversal_frequency`; edges also `traversal_percentage` | a replay, below |
+
+`<agg>` is one of `mean`, `median`, `min`, `max`, `std`, `p90`, `p95`,
+`total`. The full tuples are `NODE_METRICS` and `EDGE_METRICS` in
+[`algo/performance.py`](../pm4py_ucm/algo/performance.py); an unknown
+name raises a `ValueError`.
+
+### Counts that add up: the traversal metrics
+
+`frequency` on an edge counts event *adjacency*, which concurrency and
+silent skips break — an activity with 257 executions can show `40` on
+its only outgoing edge ([`metrics.md` §9](metrics.md#9-traversal-metrics-replay-on-the-model)).
+The traversal metrics count how often the log walks the model instead,
+and need the process tree the model was built from:
+
+```python
+tree = pm4py.discover_process_tree_inductive(log)
+ucm = pm4py_ucm.convert_to_ucm(tree)
+traversal = pm4py_ucm.compute_traversal_stats(tree, log)
+
+pm4py_ucm.annotate_performance(
+    ucm, log,
+    node_metrics=["traversal_frequency", "median_time"],
+    edge_metrics=["traversal_percentage", "mean_time"],
+    traversal=traversal, tree=tree,
+)
+print(f"{traversal.fitting_ratio:.0%} of cases fit the model exactly")
+```
+
+Without `traversal` and `tree` those two metrics are simply absent.
+`fitting_ratio` is the figure to report beside them: a model mined with
+a noise threshold explains only part of its log.
+
+### Reading the overlay
+
+Activities: `n=5600` (frequency or traversal frequency), `5600 cases`
+(coverage), `12%` (relative frequency), `rpt 31` (repeats), then times
+as `avg`, `med`, `min`, `max`, `sd`, `p90`, `p95`, `sum`, prefixed `soj`
+for sojourn. Edges: a bare count, `1742c` for distinct cases, a
+percentage, `50% of 5600` for a traversal share with the base it
+divides, and the same time prefixes. Durations use the largest fitting
+unit (`s`, `m`, `h`, `d`, `y`), in the display string and in the
+stored `perf_<metric>` values alike.
 
 ### Segment attribution
 
-A UCM edge is not a DFG edge, so statistics are attributed via
-**segments**: every arc is walked backward and forward — through
-routing bends, empty points, joins (backward: *all* predecessor
-branches), forks (forward: *all* outgoing branches), and static
-single-binding stubs (into and out of the plug-in, so decomposed
-models get edge statistics across stub boundaries). The edge's
-statistics are the aggregate of the directly-follows pairs over the
-two activity sets: frequencies and totals add, means are
-frequency-weighted, and the median is kept only for single-pair
-segments. One annotation lands on each segment's first arc. Dynamic /
-multi-binding stubs stop the walk, honestly leaving those arcs
-unannotated.
+A UCM edge is not a DFG edge, so the directly-follows statistics are
+attributed via **segments**: every arc is walked backward and forward to
+the nearest activities — through routing bends, empty points, joins,
+forks and static single-binding stubs, so decomposed models get edge
+statistics across stub boundaries — and the edge carries the aggregate
+of the pairs between the two activity sets. One annotation lands on each
+segment's first arc. Dynamic / multi-binding stubs stop the walk,
+honestly leaving those arcs unannotated. The aggregation rules, and what
+a multi-pair segment cannot report, are in
+[`metrics.md` §3.1–3.4](metrics.md#31-segment-attribution-how-an-edge-maps-to-activity-pairs).
 
 ### Storage: how the overlay lives in the model
 
@@ -273,13 +400,26 @@ Two metadata layers (re-annotating replaces both):
 
 ### Families
 
-The overlay composes with families throughout: per-cell models (grid
-and zip) are annotated from each cell's own sub-log, and the
-assemblies accept the metric selections too —
+The assemblies accept the metric selections —
 `assemble_ucm_family(family, mode="umbrella", node_metrics=[...],
-edge_metrics=[...])` annotates the shared skeleton from the **whole**
-family log and each variant plug-in from its **covering cells'**
-sub-log.
+edge_metrics=[...])` annotates the shared skeleton from **all** the
+family's cells and each variant plug-in from its **covering cells'**
+sub-log; `mode="combined"` annotates each cell's maps from that cell.
+Traversal metrics appear only on maps that belong to a single cell: a
+map merged from several cells has no one tree to replay on.
+
+The standalone per-cell models (`cell.ucm` — what the grid and
+`write_ucm_family` use) are *not* annotated by `discover_ucm_family`.
+Annotate them before rendering or writing:
+
+```python
+case = family.log_df["case:concept:name"].astype(str)
+for cell in family.cells:
+    pm4py_ucm.annotate_performance(
+        cell.ucm, family.log_df[case.isin(set(cell.case_ids))],
+        node_metrics=["frequency"], edge_metrics=["percentage"],
+    )
+```
 
 ---
 
@@ -301,28 +441,31 @@ pm4py_ucm.write_family_report(
 
 ### The statistics (`FamilyStats`)
 
-`compute_family_stats` computes, per family member, three levels of
-statistics designed for *comparison across cells*:
+`compute_family_stats` computes, per family member, four levels of
+statistics designed for *comparison across cells* (definitions:
+[`metrics.md`](metrics.md) §2–§5):
 
 - **Process level** — case count and share of the log, event count,
   events per case (min/mean/median/max), **case duration
-  min/mean/median/max and the TOTAL across the cell's cases**,
-  distinct activities, concurrency-aware behavioural variant counts,
-  and replay fitness.
-- **Activity level** — execution frequency, case coverage,
-  **sojourn time** (time since the case's previous event ≈ waiting +
-  service — derivable from *any* timestamped log, so single-timestamp
-  logs get activity-level time statistics too), and (for interval
-  logs carrying a `start_timestamp` column) service-time
-  **min/mean/median/max/total** per activity. Metrics the log cannot
-  support are omitted, never fabricated.
+  min/mean/median/max, std, P90/P95 and the TOTAL across the cell's
+  cases**, distinct activities, rework (share of cases repeating an
+  activity, mean repeats per case), start and end activities, the
+  concurrency-aware behavioural variant count beside the plain
+  sequence-variant count, and replay fitness.
+- **Activity level** — execution frequency, relative frequency, case
+  coverage, repeats, **sojourn time** (time since the case's previous
+  event ≈ waiting + service — derivable from *any* timestamped log, so
+  single-timestamp logs get activity-level time statistics too), and
+  (for interval logs carrying a `start_timestamp` column) service
+  time, each as min/mean/median/max/std/P90/P95/total. Metrics the log
+  cannot support are omitted, never fabricated.
 - **Edge level** — directly-follows activity pairs (`Register Claim →
-  Quick Assessment`) with traversal frequency and waiting-time
-  min/mean/median/max/total, ordered by family-wide frequency.
-  Waiting is completion→start on interval logs; on single-timestamp
-  logs it is completion→completion (which includes the successor's
-  own duration — the report says so rather than pretending
-  otherwise).
+  Quick Assessment`) with frequency, distinct-case frequency, relative
+  frequency and the same waiting-time aggregates, ordered by
+  family-wide frequency. Waiting is completion→start on interval
+  logs; on single-timestamp logs it is completion→completion (which
+  includes the successor's own duration — the report says so rather
+  than pretending otherwise). Empty for a log with no timestamps.
 - **Choice level** — OR-fork branch counts **aligned across cells**:
   the per-cell trees are anti-unified into the family skeleton (the
   same merge that builds the umbrella, control-flow only) and each
@@ -338,28 +481,30 @@ statistics designed for *comparison across cells*:
 Call it **right after mining** — it needs `family.log_df`, but the
 result carries no DataFrames, so it stays small and picklable after
 the log is dropped. pandas views for notebooks and apps:
-`process_frame()`, `activity_frame(metric)`,
-`choice_count_frame(choice)` / `choice_share_frame(choice)`; JSON via
-`to_dict()`.
+`process_frame()`, `activity_frame(metric)`, `edge_frame(metric)`,
+`choice_count_frame(choice)` / `choice_share_frame(choice)` (for a
+`choice` in `stats.choices`); JSON via `to_dict()`. `parameters` may
+rename the log columns, as for the overlay; `progress_callback` fires
+per cell.
 
 ### The interactive HTML report
 
 `write_family_report` emits **one self-contained HTML file** — the
 statistics embedded as JSON, the per-cell model images embedded as
-base64 PNGs, and vanilla JavaScript for the interactivity. No CDN, no
+SVG, and vanilla JavaScript for the interactivity. No CDN, no
 external assets: it opens offline in any browser and can be archived
-as supplementary material for a paper. Five views:
+as supplementary material for a paper. Six views:
 
 - **Overview** — sortable process-level table (click a header to
-  rank) with per-column heat-mapping; every duration column includes
-  the per-case aggregate *and* the cell total.
+  rank) with per-column heat-mapping; the duration columns give the
+  per-case aggregates *and* the cell total.
 - **Compare** — pick any two family members: headline delta cards
   (absolute and percent change), the two model images side by side
-  (click to zoom, or open in a separate browser tab at full
-  resolution), an activity delta table (Δ and ratio, diverging
-  color scale, optional per-case normalisation), and the two members'
-  choice bars aligned. "Multiple windows" = open the file in several
-  browser tabs, one pair each.
+  (click to zoom, or open in a separate browser tab), activity and
+  edge delta tables (Δ and ratio, diverging color scale, optional
+  per-case normalisation), and the two members' choice bars aligned.
+  To keep several pairs in view, open the file in several browser
+  tabs, one pair each.
 - **Activities** — the activities × members matrix for any metric,
   heat-mapped, with per-case normalisation for frequency-like
   metrics (the cells of a family routinely differ in size by an
@@ -374,18 +519,24 @@ as supplementary material for a paper. Five views:
 The report is deterministic for a given family (no embedded
 timestamps). `images=False` — or a machine without the graphviz
 binary — omits the model images and keeps every statistics view.
-`style="bpmn"` switches the embedded images to BPMN notation.
+`style="bpmn"` switches the embedded images to BPMN notation, and
+`heat={…}` forwards performance heat-map settings to them. `stats`
+defaults to `compute_family_stats(family)`; pass a precomputed one when
+the log has been dropped. `family_report_html` (in
+`pm4py_ucm.algo.discovery.families`) returns the same document as a
+string.
 
-In the V3 web app, the **Compare** tab offers the same ranking table,
+In the web app, the **Compare** view offers the same ranking table,
 pair pickers, side-by-side models, activity deltas and aligned choice
 tables directly in Streamlit, plus a download button for the HTML
 report (also available next to the other downloads on the Family
-tab).
+view).
 
 ---
 
 ## Known limitations
 
+- A family partitions on one or two attributes, not more.
 - Numeric attributes partition via bins; umbrella preconditions use an
   enumeration variable over the bin labels rather than honest integer
   range comparisons.
@@ -396,6 +547,9 @@ tab).
   events is not implemented.
 - Edge segments through dynamic or multi-binding stubs are not
   attributed (ambiguous by construction).
+- In an assembled family, traversal metrics are available only on maps
+  that come from a single cell; the shared skeleton and shared plug-ins
+  carry the directly-follows metrics alone.
 - Variation inside commutative operators (e.g. one cell having an
   extra XOR alternative) surfaces as a whole-node variant rather than
   a finer-grained per-branch stub.

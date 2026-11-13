@@ -1,45 +1,50 @@
 # AI insights — analysis & recommendations — design proposal
 
-> **Status: partly implemented.** The agreed shape for the LLM-powered *analysis
-> and recommendation* capabilities of Feature 1. Its deterministic companion —
-> synthesising a **GRL goal model** from the metrics — is specified in
-> [`goal_insights.md`](goal_insights.md); this document is the **single home**
-> for the LLM grounding contract and the provider seam, which that feature
-> references.
->
-> **What the old §4.1 became.** "Partition & decomposition advisor" was really
-> two unrelated *setup* decisions at two different views, only one of which is
-> AI-shaped:
-> - **4.1a — decomposition auto-tuner** (Model view): pure tree geometry, **no
->   LLM**. **Shipped in v0.7.7** as `pm4py_ucm.suggest_decomposition` +
->   the reworked Model-view control; it is *not* an AI feature and no longer
->   lives here except as this pointer.
-> - **4.1b — partition advisor** (Family view): rank case attributes by
->   discriminative power. **Deterministic-first** — the ranking ships with no
->   provider; the LLM is an optional sense-check. This is the genuine §4.1.
->
-> **Guiding principle (applies to every capability below): the deterministic
-> layer is the product; the LLM is an optional naming/explanation layer, OFF by
-> default.** Every feature ships and is useful with *zero* LLM configured.
+**Status:** proposal, partly built. The two deterministic parts have shipped
+— the decomposition auto-tuner (`pm4py_ucm.suggest_decomposition`, 0.7.7) and
+the partition advisor (`pm4py_ucm.rank_partition_attributes`, 0.7.8; §4.1b).
+**No LLM capability is built**: there is no provider code in the package or
+the app, and §3, §4.2–§4.4 and §6 describe intentions.
+
+Related documents:
+
+- [`goal_insights.md`](goal_insights.md) — the deterministic companion,
+  synthesising a **GRL goal model** from the metrics (not built). It refers
+  here for the grounding contract (§2) and for element naming (§4.2).
+- [`dashboard_suggestions.md`](dashboard_suggestions.md) §3–§4 — the newer
+  proposal for LLM-written dashboard definitions and dashboards from a goal
+  model. It takes a different route from §3 below: the tool **exports a
+  brief**, the user takes it to an **external LLM** of their choosing, and
+  the tool validates what comes back — no provider, key or network call in
+  the tool. §3 predates that and has not been reconciled with it.
+
+**Guiding principle (applies to every capability below): the deterministic
+layer is the product; the LLM is an optional naming/explanation layer, OFF by
+default.** Every feature ships and is useful with *zero* LLM configured.
 
 ## 1. Scope & thesis
 
-This is the "analysis of results and recommendations" half of Feature 1: an LLM
-acting as a **grounded analyst** over pm4py-ucm's *already-computed* structured
+The subject is LLM support for *analysing results and recommending next
+steps*: an LLM acting as a **grounded analyst** over pm4py-ucm's *already-computed* structured
 outputs. It never sources numbers — it interprets, critiques, names, and
 recommends, always citing the deterministic layer.
 
 The four capabilities span the analysis lifecycle:
 
-| Stage | Capability | § | LLM |
-|---|---|---|---|
-| **Before a family** (setup) | Partition advisor | 4.1b | optional sense-check |
-| **Per model** (annotation) | Variation-point & stub naming | 4.2 | core |
-| **Per model** (critique) | Decision-rule critique & naming | 4.3 | core |
-| **Across a family** (analysis) | Cohort-divergence explanation | 4.4 | core |
+| Stage | Capability | § | LLM | Status |
+|---|---|---|---|---|
+| **Before a family** (setup) | Partition advisor | 4.1b | optional sense-check | ranking built (0.7.8); sense-check not |
+| **Per model** (annotation) | Variation-point & stub naming | 4.2 | core | not built |
+| **Per model** (critique) | Decision-rule critique & naming | 4.3 | core | not built |
+| **Across a family** (analysis) | Cohort-divergence explanation | 4.4 | core | not built |
 
-(The decomposition auto-tuner, old §4.1a, is deterministic and already shipped —
-see the banner; it is not an AI capability.)
+**Why the numbering starts at 4.1b.** An earlier §4.1, "partition &
+decomposition advisor", turned out to be two unrelated *setup* decisions in
+two different views. The decomposition half (4.1a, Model view) is pure tree
+geometry with no LLM in it: it shipped in 0.7.7 as
+`suggest_decomposition(tree, level="auto")` behind the Model view's
+decomposition control, and is not an AI capability. The partition half is
+4.1b below.
 
 What makes these different from the me-too "narrate the KPIs" of other tools:
 pm4py-ucm's outputs are **structured** (aligned family stats, per-fork mined
@@ -66,7 +71,12 @@ Applies to every capability here **and** to the LLM naming in
    frames (not raw logs); outputs carry back-references so a reader — and a test
    (§6) — can confirm each figure traces to an input.
 
-## 3. Provider seam — agnostic + local (decided stance)
+## 3. Provider seam — agnostic + local
+
+*Not built, and not reconciled with the external-LLM route of
+[`dashboard_suggestions.md`](dashboard_suggestions.md) §3 (see the status
+note above). That document expects an in-tool provider, if one is ever
+built, to reuse its brief and its validator.*
 
 - A **provider-agnostic interface** with **no default wired in**. The user
   supplies provider + endpoint + key, or points at a **local model** (Ollama /
@@ -117,35 +127,36 @@ partitioning on, so the analyst doesn't guess.
 attribute yields genuinely different processes rather than noise. That expertise
 barrier gates adoption.
 
-**Deterministic ranking (the whole feature ships without an LLM).** One row per
-candidate case attribute (from `detect_case_attributes`), scored on three
-signals, all from material the Family view already has:
+**Deterministic ranking — built** (`pm4py_ucm.rank_partition_attributes(log)`,
+in `algo/discovery/families/advisor.py`; tested by
+`tests/test_partition_advisor.py`). It returns one `AttributeScore` per
+candidate case attribute (from `detect_case_attributes`), best first, scored
+on three signals:
 
-1. **Control-flow divergence** — split the log by the attribute's values and
-   measure how different the per-value **trace-variant distributions** are
-   (Jensen–Shannon divergence from the pooled distribution), or equivalently the
-   information gain of the attribute for predicting the variant (reuse
-   `decision_mining.extract_case_features` + its classifier). High ⇒ it *routes
-   behaviour*.
-2. **Metric effect size** — does a key per-case metric (duration, rework,
-   event-count — from the fact table) differ across the attribute's values?
-   (η² / Kruskal–Wallis.) High ⇒ it *segments performance*.
-3. **Sanity flags** — cardinality (near-unique ⇒ likely an ID/artifact such as
-   `case_id_prefix`), coverage balance, and missingness. Reuses the pre-mining
-   coverage heatmap (`_family_preview`).
+1. **Control-flow divergence** — normalised mutual information between the
+   attribute and the trace variant, `I(A; variant) / min(H(A), H(variant))`:
+   0 means the attribute says nothing about the trace, 1 means one determines
+   the other. High ⇒ it *routes behaviour*.
+2. **Duration effect size** — η² of case duration across the attribute's
+   values. High ⇒ it *segments performance*.
+3. **Sanity** — cardinality (near-unique ⇒ likely an identifier), coverage,
+   balance and missingness, surfaced as flags and used to discount the score.
 
-Output: a ranked table feeding the *First / Second attribute* pickers, each with
-a one-line rationale (*"Channel — high control-flow divergence, 3 balanced
-values"* vs *"Broker — low divergence, likely not a determinant"*). No provider
-required; fully unit-testable on a synthetic log with a known determinant.
+Cardinality bias is controlled by bucketing every attribute to the axes a
+family would actually partition on (top values + "Other" for categoricals,
+quantile bins for numerics) before measuring divergence. Each row carries a
+one-line rationale. The Family view shows the ranking as a **Suggested
+attributes** table above the *First / Second attribute* pickers, and says so
+when nothing scores high.
 
-**Optional LLM sense-check** (only when a provider is configured): a domain
-judgment over the *ranked shortlist* — "`Broker` looks like a routing
-determinant; `case_id_prefix` is probably an artifact" — grounded in the computed
-scores (per §2). The ranking is the product; the LLM adds a labelled opinion.
+What changed from the proposal: divergence is normalised mutual information
+rather than Jensen–Shannon divergence, and the effect size is measured on
+case duration only, not also on rework and event count.
 
-**Build order:** ship the deterministic ranking **before** any provider work
-(it's independent of §3). See §5.
+**Optional LLM sense-check — not built:** a domain judgment over the *ranked
+shortlist* — "`Broker` looks like a routing determinant; `case_id_prefix` is
+probably an artifact" — grounded in the computed scores (per §2). The ranking
+is the product; the LLM would add a labelled opinion.
 
 **Business value:** onboarding — turns "which attribute?" from expert intuition
 into a guided recommendation. **Originality:** ties the recommendation to a
@@ -218,21 +229,22 @@ makes the comparison verifiable; the hypotheses are tied to specific figures.
 
 ## 5. Phasing
 
-| Phase | Deliverable | Needs a provider? |
-|---|---|---|
-| **A0** *(done, v0.7.7)* | Decomposition auto-tuner (old 4.1a) — `suggest_decomposition`. | no |
-| **A1** *(next)* | **Partition advisor (4.1b) — deterministic ranking.** No provider seam; ships standalone in the Family view. | **no** |
-| **B0** | Provider seam (agnostic + local, one OpenAI-compatible client), grounding contract enforced in code, opt-in gating. **Variation-point & stub naming (4.2)** — lowest LLM risk, writes into `.jucm`. | yes |
-| **B0+** | The optional **LLM sense-check on 4.1b** (rides on B0). | yes |
-| **B1** | **Decision-rule critique (4.3)** over `condition_mining.csv`. | yes |
-| **B2** | **Cohort-divergence explanation (4.4)** over the aligned family stats (and, once available, the GRL strategy profiles). | yes |
+| Phase | Deliverable | Needs an LLM? | Status |
+|---|---|---|---|
+| **A0** | Decomposition auto-tuner (old 4.1a) — `suggest_decomposition`. | no | built, 0.7.7 |
+| **A1** | Partition advisor (4.1b) — deterministic ranking in the Family view. | no | built, 0.7.8 |
+| **B0** | Provider seam (§3), grounding contract enforced in code, opt-in gating. **Variation-point & stub naming (4.2)** — lowest LLM risk, writes into `.jucm`. | yes | not built |
+| **B0+** | The optional **LLM sense-check on 4.1b** (rides on B0). | yes | not built |
+| **B1** | **Decision-rule critique (4.3)** over `condition_mining.csv`. | yes | not built |
+| **B2** | **Cohort-divergence explanation (4.4)** over the aligned family stats (and, once available, the GRL strategy profiles). | yes | not built |
 
-The `A*` phases are pure deterministic and independent of the provider seam; the
-`B*` phases add the LLM and can interleave with the `Pn` phases in
-`goal_insights.md` (4.2 depends only on an existing umbrella, 4.3 on data-driven
-scenarios, 4.4 on a mined family).
+The `B*` phases can interleave with the `Pn` phases in `goal_insights.md`
+(4.2 depends only on an existing umbrella, 4.3 on data-driven scenarios, 4.4
+on a mined family).
 
 ## 6. Testing — enforce the contract
+
+For the LLM capabilities, when built:
 
 - **No-fabrication test:** feed a fixture whose structured frames contain known
   figures; assert every number in the AI output traces back to an input value
@@ -246,12 +258,10 @@ scenarios, 4.4 on a mined family).
 
 ## 7. Open questions
 
+
 - How prominently to surface hypotheses vs facts in the UI (a visual "measured
   vs inferred" split).
 - Whether rule-critique flags (4.3) should gate the scenario export or only
   annotate it.
-- ~~How much of the advisor (4.1) ranking is worth shipping deterministically~~
-  **Resolved:** *all* of the partition-advisor ranking ships deterministically
-  (phase A1); the LLM is a strictly optional sense-check on top.
 - Prompt-size strategy for large families (summarise from frames, never dump raw
   stats).

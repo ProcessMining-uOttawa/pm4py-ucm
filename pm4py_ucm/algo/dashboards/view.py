@@ -243,7 +243,7 @@ def dashboard_html(
         widget the host wants added, as "Pin to dashboard" on the Model
         view does.
 
-        The host cannot add it directly: ``components.html`` is one-way
+        The host cannot add it directly: the embedding iframe is one-way
         and the widgets live in the browser. So it travels in the config
         and the island applies it. Because the config is re-sent on every
         rerun, ``id`` must be **fresh per request** — the island

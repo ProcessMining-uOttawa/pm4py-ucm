@@ -5,17 +5,20 @@ feature is built, and why it was built that way. For installation, a quick
 start and the API tour, read the [root README](../README.md); for runnable
 walk-throughs, the notebooks in [`demo/`](../demo/README.md).
 
-The documents here are of four kinds, and it helps to know which one you are
-reading:
+The documents here are of five kinds, and it helps to know which one you are
+reading. Each says which it is under its title.
 
 - **Contract** — a specification the code is held to. A test fails when the
   code and the document disagree, so it describes what the package does
   *now*.
-- **Design note** — how a feature was shaped, written before or while it was
-  built. It explains the decisions; where it and the code differ on a detail,
-  the code and the [changelog](../CHANGELOG.md) are right.
+- **Guide** — how to use a feature, with its options and limitations.
+- **Design note** — how a built feature works and why it was shaped that
+  way: the decisions, the alternatives rejected, what changed between the
+  design and the code. Where it and the code differ on a detail, the code
+  and the [changelog](../CHANGELOG.md) are right.
 - **Measurements** — a dated study. True for the versions and logs it names.
-- **Proposal** — agreed direction for something not built yet.
+- **Proposal** — direction for something not built yet, or built only in
+  part; it says which part.
 
 ## Where to look
 
@@ -50,9 +53,9 @@ Notebook: [`dashboards_tutorial.ipynb`](../demo/dashboards_tutorial.ipynb).
 | Document | Kind | What it covers | Held to by |
 |---|---|---|---|
 | [`model_families.md`](model_families.md) | Guide | Partitioning a log by one or two case attributes and mining one model per combination; the overarching model with dynamic stubs; performance overlays; the family statistics report; known limitations. | [`test_family.py`](../tests/test_family.py), [`test_family_stats.py`](../tests/test_family_stats.py), [`test_performance.py`](../tests/test_performance.py) |
-| [`bpmn_export.md`](bpmn_export.md) | Design note (built) | The UCM → BPMN 2.0 element mapping, components as one pool with nested lanes, how the layout is carried over, performance annotations, families, and the decisions taken (call activities, inclusive gateways, no task typing). | [`test_bpmn_export.py`](../tests/test_bpmn_export.py), against the OMG schema |
-| [`scenario_simulation.md`](scenario_simulation.md) | Design note (built in 0.8.0) | Running a UCM's scenarios the way jUCMNav does, highlighting what a scenario covers, and comparing two scenario sets; the gaps that existed, the decisions and the plan. | [`test_scenario_traversal.py`](../tests/test_scenario_traversal.py), [`test_scenario_coverage.py`](../tests/test_scenario_coverage.py) |
-| [`miner_performance.md`](miner_performance.md) | Measurements (2026-08-15) | What mining and replay cost across twelve logs, why there is no faster path that preserves the model, why `multi_processing=True` does not help, and how to estimate a run before committing to it. | — |
+| [`bpmn_export.md`](bpmn_export.md) | Design note (built in 0.8.5) | The UCM → BPMN 2.0 element mapping, components as one pool with nested lanes, how the layout is carried over, performance annotations, families, and the decisions taken (call activities, inclusive gateways, no task typing). | [`test_bpmn_export.py`](../tests/test_bpmn_export.py), against the OMG schema |
+| [`scenario_simulation.md`](scenario_simulation.md) | Design note (built in 0.8.0) | Running a UCM's scenarios the way jUCMNav does, highlighting what a scenario covers, comparing two scenarios, and exporting the log for the selected variants; the simulator's API, the decisions, and the measurements taken while it was built. | [`test_scenario_traversal.py`](../tests/test_scenario_traversal.py), [`test_scenario_coverage.py`](../tests/test_scenario_coverage.py) |
+| [`miner_performance.md`](miner_performance.md) | Measurements (2026-08-15) | What mining and replay cost across twelve logs, why there is no faster path that preserves the model, why `multi_processing=True` does not help, how to estimate a run before committing to it, and what the package and the app adopted from it. | [`test_complexity.py`](../tests/test_complexity.py), for the screening code only |
 
 Notebooks: [`pm4py_ucm_tutorial.ipynb`](../demo/pm4py_ucm_tutorial.ipynb),
 [`model_families_tutorial.ipynb`](../demo/model_families_tutorial.ipynb),
@@ -62,8 +65,8 @@ Notebooks: [`pm4py_ucm_tutorial.ipynb`](../demo/pm4py_ucm_tutorial.ipynb),
 
 | Document | Kind | What it covers | Held to by |
 |---|---|---|---|
-| [`sessions.md`](sessions.md) | Design note (built) | Saving, sharing and resuming a project: the session parameter registry, the drift guard that stops a new setting being silently dropped, file formats, migration, and the dashboards bridge. §17 is the checklist for adding a setting. | [`test_sessions.py`](../tests/test_sessions.py), [`test_sessions_registry.py`](../tests/test_sessions_registry.py) |
-| [`code_export.md`](code_export.md) | Design note (built, bar the optional LLM comment pass) | Exporting a session as a runnable Python script or notebook: the registry → code mapping and the property that the script reproduces what the app showed. | [`test_sessions_codegen.py`](../tests/test_sessions_codegen.py) |
+| [`sessions.md`](sessions.md) | Design note (built in 0.7.1) | Saving, sharing and resuming a project: the session parameter registry, the drift guard that stops a new setting being silently dropped, file formats, migration, and the dashboards bridge. §17 is the checklist for adding a setting. | [`test_sessions.py`](../tests/test_sessions.py), [`test_sessions_registry.py`](../tests/test_sessions_registry.py) |
+| [`code_export.md`](code_export.md) | Design note (built in 0.7.3; the optional LLM comment pass is not) | Exporting a session as a runnable Python script or notebook: the registry → code mapping and the property that the script reproduces what the app showed. | [`test_sessions_codegen.py`](../tests/test_sessions_codegen.py) |
 
 Notebook: [`sessions_tutorial.ipynb`](../demo/sessions_tutorial.ipynb). The
 app itself is described in [`web/README.md`](../web/README.md).
@@ -72,8 +75,8 @@ app itself is described in [`web/README.md`](../web/README.md).
 
 | Document | Kind | What it covers |
 |---|---|---|
-| [`ai_insights.md`](ai_insights.md) | Proposal, partly built | LLM-assisted analysis and recommendations, the grounding contract (the LLM never sources a number) and the provider-agnostic, local-first seam. The two deterministic parts have shipped: the decomposition auto-tuner (`suggest_decomposition`) and the partition advisor (`rank_partition_attributes`). No LLM capability is built. |
-| [`goal_insights.md`](goal_insights.md) | Proposal, not built | Synthesising a GRL goal model from the mined UCM and its metrics, with an optional AI interpretation layer. |
+| [`ai_insights.md`](ai_insights.md) | Proposal, partly built | LLM-assisted analysis and recommendations, the grounding contract (the LLM never sources a number) and a provider-agnostic, local-first seam that the newer external-LLM route in `dashboard_suggestions.md` §3 has not been reconciled with. The two deterministic parts have shipped: the decomposition auto-tuner (`suggest_decomposition`, 0.7.7) and the partition advisor (`rank_partition_attributes`, 0.7.8). No LLM capability is built. |
+| [`goal_insights.md`](goal_insights.md) | Proposal, not built | Synthesising a GRL goal model from the mined UCM and its metrics — indicators, softgoals, contribution links, per-cohort strategies, traceable to the UCM — with optional LLM naming specified in `ai_insights.md`. |
 
 ## The UCM class diagram
 

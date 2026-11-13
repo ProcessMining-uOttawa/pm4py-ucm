@@ -1,9 +1,13 @@
-# Goal-model synthesis & AI insights — design proposal
+# Goal-model synthesis — design proposal
 
-> **Status: design proposal — not yet implemented.** This document is the
-> agreed shape for the "AI / LLM support for analysis and recommendations"
-> feature. It is written to be built against (like `docs/sessions.md` was),
-> not to describe shipped behaviour. Nothing here exists in the code yet.
+**Status:** proposal, not built. Nothing here exists in the code: the `.jucm`
+exporter still writes an empty `grlspec` (§2.6). It is written to be built
+against, not to describe shipped behaviour.
+
+Related documents: [`ai_insights.md`](ai_insights.md) holds the LLM side —
+the grounding contract, the capabilities and their status — and this document
+defers to it (§3). [`dashboard_suggestions.md`](dashboard_suggestions.md) §4
+proposes the inverse direction, deriving dashboards from a goal model.
 
 ## 1. Thesis
 
@@ -27,7 +31,7 @@ The feature is therefore **two layers**:
 | Layer | What it is | LLM? |
 |---|---|---|
 | **A. Goal-model synthesis** | Metrics → GRL indicators → softgoals → contribution links → per-cohort strategies, traceable to UCM | **No** — deterministic. LLM only *names* things. |
-| **B. AI interpretation** | Rule critique, element naming in domain terms, labelled hypotheses about divergence | **Yes** — optional, grounded, bring-your-own-model. |
+| **B. AI interpretation** | Naming the goal model's elements in domain terms, and nuancing contribution signs (§3) | **Yes** — optional and grounded; specified in `ai_insights.md`. |
 
 Layer A is the crown jewel and does **not** depend on an LLM. That is exactly
 why it is not fluffy: the metric→indicator→contribution→strategy→traceability
@@ -44,7 +48,8 @@ containing:
   is `(worstValue, thresholdValue, targetValue)` + a measured real-world value;
   jUCMNav interpolates a satisfaction in `[worst..target] → evalRange`. Our
   **dashboard targets are already proto-indicators** — lift them straight in;
-  derive the rest from the data distribution.
+  derive the rest from the data distribution. (`dashboard_suggestions.md` §4
+  is the reverse mapping, indicator → widget with a target.)
 - **Softgoals** — a small **quality catalog** (§2.4): *Timeliness*,
   *Efficiency*, *Quality / low rework*, *Conformance*, *Throughput*, and a
   *Cost* proxy. Indicators **contribute** to these.
@@ -104,7 +109,7 @@ scorecard machinery so the goal model inherits the analyst's intent.
 
 ### 2.6 Scope: extend the GRL metamodel
 
-Today `_emit_grlspec` writes only an **empty** `grlspec`. Building Layer A
+`_emit_grlspec` in the `.jucm` exporter writes only an **empty** `grlspec`. Building Layer A
 means implementing the GRL side of the metamodel, mirroring what already exists
 for UCM:
 
@@ -122,9 +127,9 @@ for UCM:
 ## 3. Layer B — AI interpretation (optional)
 
 The LLM annotates the deterministic artifacts; it never sources numbers. This
-layer — its capabilities, the **grounding contract**, the **agnostic + local
-provider seam**, and its failure modes — is specified in full in
-[`ai_insights.md`](ai_insights.md). Two instances touch the goal model directly:
+layer — its capabilities, the **grounding contract** and how an LLM is
+reached at all — is specified in [`ai_insights.md`](ai_insights.md), not
+here. Two instances touch the goal model directly:
 
 - **Naming** softgoals / goals / indicators / variation points in domain terms
   (the "variation-point & stub naming" capability of `ai_insights.md` §4.2),
@@ -132,8 +137,8 @@ provider seam**, and its failure modes — is specified in full in
 - **Contribution-sign nuance** — refining the quality-catalog defaults (§2.4)
   where a metric's effect on a softgoal is domain-specific.
 
-Layer A ships the goal model with or without a configured provider; Layer B is
-never a hard dependency. The grounding contract in `ai_insights.md` §2 applies
+Layer A ships the goal model with or without an LLM; Layer B is never a hard
+dependency. The grounding contract in `ai_insights.md` §2 applies
 verbatim to any figure the LLM touches here.
 
 ## 4. Phasing
@@ -142,7 +147,7 @@ verbatim to any figure the LLM touches here.
 |---|---|
 | **P0** | GRL metamodel in `obj.py` + exporter/importer, byte-stable round-trip; synthesise **indicators + softgoals + contributions + `URNlink` traceability** from a single mined UCM's overlay metrics; emit a jUCMNav-loadable `.grl` view. |
 | **P1** | **Per-cohort evaluation strategies** from family stats; the strategy-comparison as the quantified divergence view; influential-metric selection (§2.3). |
-| **P2** | **Layer B** — provider seam (agnostic + local), element naming, rule critique, labelled hypotheses, all under the grounding contract. |
+| **P2** | **Layer B** on the goal model — element naming and contribution-sign nuance (§3), under the grounding contract. Rule critique and divergence hypotheses are phases B1–B2 of `ai_insights.md`, not part of this document. |
 | **P3** | Pure-Python GRL propagation for in-app satisfaction display; goal-model export wired into sessions + code export. |
 
 ## 5. Testing
@@ -159,8 +164,8 @@ verbatim to any figure the LLM touches here.
 suited because it holds the behaviour notation (UCM), the goal notation (GRL),
 native traceability, and a satisfaction semantics under one metamodel. Mining a
 GRL model with indicators + strategies, traceable to a mined UCM, is a genuine
-MoDRE/RE contribution — and it stays within URN even though it reaches past the
-paper's current UCM-only scope.
+requirements-engineering contribution — and it stays within URN even though
+it reaches past the package's current UCM-only scope.
 
 ## 7. Open questions
 

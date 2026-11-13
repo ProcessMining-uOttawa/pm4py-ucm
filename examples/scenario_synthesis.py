@@ -19,8 +19,9 @@ Usage::
     python examples/scenario_synthesis.py
     python examples/scenario_synthesis.py --no-conditions
     python examples/scenario_synthesis.py --fine-loops
+    python examples/scenario_synthesis.py --out path/to/base
 
-The ``--no-conditions`` flag suppresses OR-fork condition emission so
+``--out`` sets the base name of the three output files. The ``--no-conditions`` flag suppresses OR-fork condition emission so
 you can inspect the metamodel layer separately. ``--fine-loops``
 turns off loop coarsening — irrelevant for this synthetic tree but a
 documented switch for empirical sensitivity analysis on real logs.

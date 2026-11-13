@@ -24,13 +24,15 @@ tooling described below.
   and **verified installable** (`pip install "pm4py-ucm==0.9.0" --dry-run
   --no-cache-dir`). The maintainer confirmed the README images render on
   PyPI and that the deployed app runs 0.9.0.
-- `main` is two documentation commits past the tag (PR #143 and this file);
-  no code has changed since `v0.9.0`.
+- Since `v0.9.0` only documentation has changed: the `docs/` index (PR
+  #143) and a **documentation audit** of every prose file against the code
+  (see below). No behaviour has changed.
 - All three version sites read **0.9.0** and are kept in lock-step by a test:
   `pyproject.toml`, `pm4py_ucm/__init__.py`, `web/sessions/codegen.py`
   (`GENERATOR_VERSION`).
-- `CHANGELOG.md`'s `[Unreleased]` holds one entry, the `docs/` index.
-  Documentation only: it does not call for a release on its own.
+- `CHANGELOG.md`'s `[Unreleased]` holds the `docs/` index and the audit.
+  Documentation only: it does not call for a release on its own, though the
+  root README is the PyPI page and only refreshes there with a release.
 - **[`docs/README.md`](docs/README.md) indexes the documents** (PR #143):
   each by the question it answers, its kind (contract, design note,
   measurements, proposal), whether it is built, and the test that holds it
@@ -46,6 +48,31 @@ tooling described below.
   (`pm4py-ucm-scenarios`, which served the frozen V2) has been **deleted** —
   the SAM 2026 paper that required it was accepted and its final version
   points at the main app. That URL now 404s; do not link it.
+
+## The documentation audit (after 0.9.0)
+
+Every prose file was checked against the code, corrected, and filled in:
+the root README, `web/`, `demo/` and `tests/` READMEs, all of `docs/`, the
+docstrings the audit found stale, and a new
+[`CONTRIBUTING.md`](CONTRIBUTING.md). What it taught:
+
+- **Design notes had kept describing the design, not the code.**
+  `sessions.md` documented a `Param` with `get`/`apply` callables, a
+  `PERSIST_IGNORE` list and a `pm4py_ucm/algo/sessions/` package, none of
+  which were ever built; `code_export.md` claimed byte-identity with the
+  GUI. Each built feature's document now describes it as built, and opens
+  with a status line. Section numbers were kept, because tests, code
+  comments and other documents cite them.
+- **The README stated defaults the library does not have.** The inductive
+  miner's `noise_threshold` is PM4Py's `0.0` (the *app* starts at `0.2`),
+  and performer mining is **on** by default. Several of the README's
+  numbers (18 scenarios, the coverage figures) only reproduce on a tree
+  mined at `0.2`; the snippets now say so.
+- **PM4Py is distributed under AGPL-3.0**, not GPL; the README no longer
+  says the licences match. The maintainer should confirm the wording.
+- The sample log has **78,126 events**, not "~90 K".
+- `CONTRIBUTING.md` is now in the link guard
+  (`tests/test_release_consistency.py`).
 
 ## What 0.9.0 added
 
@@ -377,6 +404,49 @@ afterwards and confirm with `git status`. The IRCC log lives at
 events; ~10 min to mine after reduction).
 
 ## Open items, by value
+
+A. **Code defects the documentation audit found** — reported, not fixed;
+   the documents describe the intended behaviour and say nothing false
+   about these. Each needs a test first.
+   - **`actService` loses the first event of almost every case.**
+     `build_fact_table` discards a start timestamp earlier than the case
+     start, but the case start is the first *completion*, so any first
+     event with a duration is dropped. On the claims sample the audit
+     measured 5,597 of 5,600 first events missing. The suggested "avg
+     service" KPI inherits it.
+   - **A `per_case` target on a segmented widget is formatted with the
+     metric's unit**: a share of 44.2% prints as "44.2 d". Only the
+     unsegmented KPI switches to `%`.
+   - **`discover_scenarios` ignores `discovery_parameters`** (it mines with
+     a bare `pm4py.discover_process_tree_inductive(log)`), so a noise
+     threshold can only be set by passing a pre-mined `process_tree`. The
+     README documents that workaround.
+   - **`discover_ucm_family` does not forward `numeric_coercion_threshold`
+     or `max_enum_cardinality`**, although `partition_log`'s docstring tells
+     users to pass the former; `api.compute_family_stats` does not expose
+     `coarsen_loops`; `assembly._cell_sub_log` hard-codes
+     `"case:concept:name"`.
+   - **Case duration has two definitions on interval logs**: dashboards and
+     the partition advisor use first-to-last completion, the family
+     statistics earliest start to latest completion (14.92 d against
+     15.07 d on the claims sample). Both contracts now say so; confirm it
+     is intended.
+   - **`web/sessions/migrate.py` sets `_newer_schema` and nothing reads
+     it**; the key is written back into the saved file.
+   - **The app's Decomposition help text says the Scenarios view "always
+     runs flat"**, but scenarios are attached to the model built with the
+     sidebar's decomposition. Check in the app before rewording.
+   - **`.devcontainer/devcontainer.json` installs from a root
+     `requirements.txt` that does not exist** (it is `web/requirements.txt`),
+     so a Codespace gets Streamlit and nothing else.
+   - Comments in `dash-ui.js` still name `components.html`; the app embeds
+     through `st.iframe`. Cosmetic; left because the file is a shipped
+     asset.
+
+B. **One decision is the maintainer's.** `docs/ai_insights.md` §3 specifies
+   an *in-tool* LLM provider seam; the stance settled for dashboards is an
+   *external* LLM fed an exported brief (`dashboard_suggestions.md` §3).
+   The two documents now flag the conflict instead of hiding it.
 
 0. **Dashboards, next steps** (all designed in
    `docs/dashboard_suggestions.md`, none built):

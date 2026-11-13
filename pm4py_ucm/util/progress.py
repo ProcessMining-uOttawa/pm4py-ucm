@@ -13,7 +13,7 @@ intervals in between — never more than ~200 times per stage, so a
 callback that repaints a UI cannot slow down the work it is
 measuring. Passing ``None`` (the default everywhere) costs nothing.
 
-Consumers decide the presentation: the V3 Streamlit app renders a
+Consumers decide the presentation: the Streamlit app renders a
 progress bar with an elapsed-based remaining-time estimate; a script
 can pass ``lambda s, d, t: print(f"{s}: {d}/{t}")`` or adapt a
 ``tqdm`` bar.
