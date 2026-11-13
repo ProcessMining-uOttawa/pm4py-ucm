@@ -51,7 +51,7 @@ const ARRAY_OF = {
   int32: Int32Array, float64: Float64Array,
 };
 const SENTINEL = {
-  uint8: 0xff, uint16: 0xffff, uint32: 0xffffffff, int32: 0x7fffffff,
+  uint8: 0xff, uint16: 0xffff, uint32: 0xffffffff,
 };
 
 // ---------------------------------------------------------------------
@@ -181,19 +181,12 @@ function prevDt(t, j, i) {
   return j > t.off[i] ? t.dt[j - 1] : NaN;
 }
 
-/**
- * Start-time delta of event j, or NaN when absent/invalid. Signed: an
- * event may start before its case's first completion, which is what the
- * deltas are measured from. (A payload built before the offset was signed
- * carries it as uint32, with such starts marked missing.)
- */
+/** Start-time delta of event j, or NaN when absent/invalid. */
 function sdtOf(t, j) {
   const b = t.buffers.sdt;
   if (!b) return NaN;
   const v = b[j];
-  const missing = b.constructor === Int32Array
-    ? SENTINEL.int32 : SENTINEL.uint32;
-  return v === missing ? NaN : v;
+  return v === SENTINEL.uint32 ? NaN : v;
 }
 
 // ---------------------------------------------------------------------
@@ -208,6 +201,8 @@ export function perCaseValues(t, metric, params) {
   switch (metric) {
     case "custom": return customValues(t, p.formula || "");
     case "duration": {
+      // dt counts from the case start (the earliest start on an interval
+      // log), so the last dt is earliest start to latest completion.
       for (let i = 0; i < n; i++) out[i] = t.dt[t.off[i + 1] - 1] / DAY;
       return out;
     }

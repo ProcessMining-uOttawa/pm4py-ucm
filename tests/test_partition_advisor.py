@@ -6,6 +6,7 @@ import pytest
 pd = pytest.importorskip("pandas")
 
 from pm4py_ucm.algo.discovery.families.advisor import (  # noqa: E402
+    _case_durations,
     _eta_squared,
     _uncertainty_coefficient,
     rank_partition_attributes,
@@ -104,3 +105,51 @@ def test_eta_squared_bounds():
     assert perfect == pytest.approx(1.0)
     none = _eta_squared([5, 5, 5, 5], ["a", "b", "a", "b"])
     assert none == 0.0
+
+
+# -- case duration: earliest start to latest completion --------------------
+
+def _interval_rows(lead_by_kind):
+    """Eight cases, two events each, completing at hour 2 and hour 10 —
+    so every case lasts 8 h between completions. The first event's own
+    duration (its lead-in) depends on ``case:kind``."""
+    base = pd.Timestamp("2026-01-01", tz="UTC")
+    rows = []
+    for i in range(8):
+        kind = "slow" if i < 4 else "fast"
+        day = base + pd.Timedelta(days=i)
+        for act, end, dur in (("A", 2, lead_by_kind[kind]), ("B", 10, 1)):
+            rows.append({
+                "case:concept:name": f"c{i}", "concept:name": act,
+                "time:timestamp": day + pd.Timedelta(hours=end),
+                "start_timestamp": day + pd.Timedelta(hours=end - dur),
+                "case:kind": kind, "case:parity": "even" if i % 2 else "odd"})
+    return pd.DataFrame(rows)
+
+
+def test_case_duration_on_an_interval_log_starts_at_the_earliest_start():
+    """By hand: completions at hours 2 and 10; A starts 20 h (slow) or 1 h
+    (fast) before it completes. Earliest start to latest completion is
+    8 + 20 = 28 h and 8 + 1 = 9 h; first-to-last completion would be 8 h
+    for every case."""
+    df = _interval_rows({"slow": 20, "fast": 1})
+    dur = _case_durations(df, "case:concept:name", "time:timestamp")
+    assert list(dur / 3600) == [28.0] * 4 + [9.0] * 4
+
+
+def test_case_duration_without_start_timestamps_is_first_to_last_event():
+    df = _interval_rows({"slow": 20, "fast": 1}).drop(
+        columns="start_timestamp")
+    dur = _case_durations(df, "case:concept:name", "time:timestamp")
+    assert list(dur / 3600) == [8.0] * 8
+
+
+def test_duration_effect_sees_the_first_activitys_lead_in():
+    """``kind`` changes nothing but how long the first activity runs. With
+    durations measured between completions every case lasted 8 h and the
+    effect size was 0; it is now 1 (all the variance lies between the two
+    kinds)."""
+    by = _by_label(rank_partition_attributes(
+        _interval_rows({"slow": 20, "fast": 1})))
+    assert by["kind"].effect == pytest.approx(1.0)
+    assert by["parity"].effect == pytest.approx(0.0, abs=1e-9)

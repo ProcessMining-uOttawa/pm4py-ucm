@@ -102,11 +102,11 @@ without the decoder caring:
 | buffer | per | holds |
 |---|---|---|
 | `off` | case (+1) | CSR offsets: case *i* owns events `[off[i], off[i+1])` |
-| `start` | case | the case start: its first event's *completion* time, epoch seconds |
+| `start` | case | the case start, epoch seconds: the earliest start timestamp of its events on an interval log, else its first event's time (see below) |
 | `act` | event | index into `activities` |
-| `dt` | event | seconds since the case's `start` |
+| `dt` | event | completion time, seconds since the case's `start` |
 | `res` | event | index into `resources` (absent when the log has no resource column) |
-| `sdt` | event | start timestamp, seconds since the case's `start` (interval logs only). **Signed** (`int32`): an event may start before the case start, and the first event of a case does whenever it has a duration |
+| `sdt` | event | start timestamp, seconds since the case's `start` (interval logs only) |
 | `attr<i>`, `behaviour` | case | one column per case attribute: a dictionary index, or the raw number for a numeric attribute |
 
 Integer columns reserve their dtype's maximum as the *missing* sentinel;
@@ -166,13 +166,21 @@ after its own event's completion, is marked missing rather than clamped
 to a zero-length service time that would drag every mean down. The event
 is kept; it simply has no service or waiting time.
 
-A start timestamp **earlier than the case start is valid** and is kept.
-The case start is the first *completion* (which is what `duration`, the
-time axes and the date filter read), so the first event of a case starts
-before it whenever it has a duration, and a later event does too when
-activities overlap. Up to 0.9.0 such starts were marked missing, which
-removed the first event of nearly every case from `actService`; the
-case start itself, and therefore `duration`, was and is unaffected.
+**When a case starts.** On an interval log a case starts at the
+earliest moment any of its events *started*; on a single-timestamp log,
+at its first event. An event whose start is missing, unparseable or after
+its own completion counts from its completion. This is the definition of
+[`pm4py_ucm.util.timing`](../pm4py_ucm/util/timing.py), shared with the
+family statistics and the partition advisor ([`metrics.md`](metrics.md)
+§4). `duration`, the time axes, the date filter and the series metrics
+all read this one case start, and every offset counts from it, so no
+valid start is ever negative.
+
+Up to 0.9.0 the case start was the first *completion* on every log. Two
+things followed on interval logs: `duration` left out the first
+activity's own duration, and a start earlier than that first completion
+— the first event of nearly every case — was marked missing, which
+removed it from `actService`.
 
 ---
 
@@ -249,7 +257,7 @@ reconcile — and the composer surfaces it on the affected metrics.
 
 | id | level | result | definition |
 |---|---|---|---|
-| `duration` | process | time | first to last event of the case, by **completion** timestamp. |
+| `duration` | process | time | earliest start to latest completion of the case. On a log without start timestamps that is its first event to its last. |
 | `timeBetween` | process | time | first `from` to the first `to` **that follows it**. No value when `to` never follows `from`. |
 | `wip` | process | rate | cases open at each month boundary — started at or before it, last event after it (a stock). |
 | `arrivalRate` / `completionRate` | process | rate | cases starting / ending within each month (flows). |
@@ -290,12 +298,10 @@ real ending is still "ended" at that event: the log cannot tell *still
 running* from *ended silently*.
 
 Where a definition here and one in [`metrics.md`](metrics.md) share a
-name, two differences are deliberate. `duration` runs from the case's
-first to its last *completion* on every log, whereas the family report's
-case duration starts at the earliest `start_timestamp` on an interval
-log (`metrics.md` §4) — so the report's figure is longer by the first
-event's lead-in. And the activity time metrics are case-weighted
-([§3](#case-weighted-vs-event-weighted)).
+name, they agree on what is measured: `duration` is the family report's
+case duration (`metrics.md` §4), up to the rounding of two timestamps to
+the second. One difference is deliberate: the activity time metrics here
+are case-weighted ([§3](#case-weighted-vs-event-weighted)).
 
 A metric naming an activity the log does not have is not an error:
 counts and presence are 0, times are missing.
@@ -399,7 +405,8 @@ has a resource column), `variant`, and one per detected case attribute
 (`attr:<name>`). A spec's `segment` holds up to two, as `rows` and
 `cols`.
 
-* **Time axes read the case's start** — its first event. Labels are
+* **Time axes read the case's start** — on an interval log the earliest
+  start timestamp of its events, else its first event ([§2](#2-the-data-contract)). Labels are
   `2011`, `2011-Q1`, `2011-01`, `Mon`.
 * **Weekday is Monday-first.** (Epoch day 0 was a Thursday = index 3.)
 * **`resource` is the case's first event's resource.** A case has many

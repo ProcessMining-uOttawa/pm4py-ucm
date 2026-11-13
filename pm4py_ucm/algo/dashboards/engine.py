@@ -174,10 +174,7 @@ def _prev_dt(table: FactTable):
 
 
 def _sdt(table: FactTable):
-    """``[n_events]`` start-time delta, ``NaN`` where absent/invalid.
-
-    Signed: an event may start before its case's first completion, which
-    is what the deltas are measured from."""
+    """``[n_events]`` start-time delta, ``NaN`` where absent/invalid."""
     import numpy as np
 
     if "sdt" not in table.buffers:
@@ -227,7 +224,9 @@ def per_case_values(table: FactTable, metric: str,
         return custom_values(table, p.get("formula", ""))
 
     if metric == "duration":
-        # Events are time-ordered, so the case's last dt is its span.
+        # Events are ordered by completion and dt counts from the case
+        # start (the earliest start on an interval log), so the case's
+        # last dt is its span: earliest start to latest completion.
         last = off[1:] - 1
         return dt[last] / DAY
 

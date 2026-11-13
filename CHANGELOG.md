@@ -8,14 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 > **Upgrade notes.**
+> - **Case duration is longer on dashboards for interval logs.** On a log
+>   with start timestamps, a case now starts when its earliest event
+>   *starts*, not when its first event completes, so `duration` includes
+>   the first activity's own duration: on the bundled claims sample the
+>   mean goes from 14.92 d to 15.07 d, which is what the family report
+>   always showed. Targets set on case duration are scored against the
+>   longer figure. A case is also placed on the time axes, in the date
+>   filter and in the arrival counts by that earlier start, so one that
+>   straddles a period boundary can move to the earlier period. Logs
+>   without start timestamps are unaffected, and so is every time measured
+>   between two events (`timeBetween`, `edgeTime`, sojourn, waiting).
+> - **The partition advisor measures case duration the same way**, so on
+>   an interval log an attribute's duration effect size, and with it the
+>   ranking of `rank_partition_attributes`, can shift slightly. The
+>   attribute scores behind the suggested dashboards follow the dashboard
+>   duration and shift likewise.
 > - **Service time on dashboards now includes each case's first event.**
 >   On an interval log, `actService` (and the suggested "avg service"
 >   KPI) used to leave out any event that started before its case's first
 >   completion — in practice the first event of almost every case. An
 >   activity that opens cases therefore reads higher than before: on the
 >   bundled claims sample, service time of *Register Claim* goes from
->   0.0 d (3 cases) to 0.15 d (all 5,600). `actWaiting`, `actSojourn` and
->   case `duration` are unchanged.
+>   0.0 d (3 cases) to 0.15 d (all 5,600).
 > - **A widget with a per-case target and a segment axis now reports
 >   shares in `%`**, like the unsegmented KPI always did: each bar and
 >   cell was already the share of cases meeting the target, but was
@@ -49,6 +64,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   behavioural variants without collapsing loop iterations to `{0, 1, ≥2}`.
 - **`ModelFamily.case_id_col`** records the case-id column the family was
   mined with; `compute_family_stats` defaults to it.
+- **`pm4py_ucm.util.timing.case_durations(log_df, …)`**: per-case duration
+  in seconds, the definition every part of the package now shares.
+  `rank_partition_attributes` takes a `start_timestamp_col`.
 - **The app says when a project was saved by a newer version** (in the
   load notes), since settings it does not know were not applied.
   `ProjectDoc.from_newer_app` carries the fact.
@@ -57,12 +75,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Code defects reported by the documentation audit, each now held by a test.
 
+- **Case duration had two definitions on interval logs.** The family
+  statistics measured earliest start to latest completion; the dashboards
+  and the partition advisor measured first to last completion. All three
+  now use the first, defined once in `pm4py_ucm.util.timing` and held
+  together by a test. See the upgrade notes.
 - **Dashboards: `actService` dropped the first event of almost every
   case.** A start timestamp earlier than the case start was treated as
-  invalid, but the case start is the first *completion*, so a first event
-  with any duration starts before it. The start-time offset in the fact
-  table (`sdt`) is now signed and such starts are kept, in the Python and
-  the browser engine alike. See the upgrade note.
+  invalid, but the case start was the first *completion*, so a first
+  event with any duration started before it. With the case start now the
+  earliest start, no valid start precedes it. See the upgrade note.
 - **Dashboards: a per-case target on a segmented widget printed shares
   with the metric's unit**, in both engines. The widget's `unit` is now
   `%` for every shape, including the Activity axis. Also, a target that

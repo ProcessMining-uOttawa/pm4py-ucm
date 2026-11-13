@@ -94,9 +94,10 @@ distinct values), then scored on two signals in `[0, 1]`:
   the case's activity sequence, `I(A; variant) / min(H(A), H(variant))`,
   with the sequences beyond the 30 most frequent pooled: how cleanly the
   attribute's values map onto behaviour;
-- `effect` — η² of case duration (first to last event) across the
-  attribute's values: the share of duration variance that lies between
-  them.
+- `effect` — η² of case duration (earliest start to latest completion,
+  [`metrics.md`](metrics.md) §4; first to last event on a log without
+  start timestamps) across the attribute's values: the share of duration
+  variance that lies between them.
 
 `score = 0.6 · divergence + 0.4 · effect`, multiplied by 0.25 when the
 attribute is flagged *high-cardinality* (more distinct values than

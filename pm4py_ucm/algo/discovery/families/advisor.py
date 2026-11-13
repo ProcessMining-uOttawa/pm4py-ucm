@@ -168,13 +168,15 @@ def _variant_codes(log_df, case_id_col, activity_col, timestamp_col):
     return sig.map(code)
 
 
-def _case_durations(log_df, case_id_col, timestamp_col):
-    """Per-case end-to-end duration in seconds, indexed by case id."""
-    import pandas as pd
+def _case_durations(log_df, case_id_col, timestamp_col,
+                    start_timestamp_col="start_timestamp"):
+    """Per-case duration in seconds, indexed by case id: earliest start to
+    latest completion — the one definition the family statistics and the
+    dashboards use too (:func:`pm4py_ucm.util.timing.case_durations`)."""
+    from ....util.timing import case_durations
 
-    ts = pd.to_datetime(log_df[timestamp_col], utc=True, errors="coerce")
-    g = ts.groupby(log_df[case_id_col], sort=False)
-    return (g.max() - g.min()).dt.total_seconds()
+    return case_durations(
+        log_df, case_id_col, timestamp_col, start_timestamp_col)
 
 
 def rank_partition_attributes(
@@ -183,6 +185,7 @@ def rank_partition_attributes(
     case_id_col: str = "case:concept:name",
     activity_col: str = "concept:name",
     timestamp_col: str = "time:timestamp",
+    start_timestamp_col: str = "start_timestamp",
 ) -> List[AttributeScore]:
     """Rank ``log_df``'s case attributes by discriminative power (best first).
 
@@ -206,7 +209,8 @@ def rank_partition_attributes(
     variant = _variant_codes(log_df, case_id_col, activity_col, timestamp_col)
     cases = variant.index
     has_time = timestamp_col in log_df.columns
-    dur = (_case_durations(log_df, case_id_col, timestamp_col).reindex(cases)
+    dur = (_case_durations(log_df, case_id_col, timestamp_col,
+                           start_timestamp_col).reindex(cases)
            if has_time else None)
     raw = per_case_raw.reindex(cases)
     n_cases = len(cases)

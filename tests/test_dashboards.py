@@ -95,8 +95,9 @@ def _interval_log():
     * ``c0`` A runs day -1 to 0, B runs day 2 to 4
     * ``c1`` A runs day -3 to 0, B runs day -0.5 to 1 (overlapping A)
 
-    Both first events start *before* their case start, which is the first
-    completion; c1's second event does too.
+    The first completion of both cases is day 0, but c0 starts on day -1
+    and c1 on day -3: a case starts when its earliest event starts. c1's B
+    overlaps A, so its wait is negative.
     """
     base = pd.Timestamp("2026-01-05", tz="UTC")
     rows = []
@@ -330,9 +331,10 @@ class TestServiceTimes:
         assert np.isnan(per_case_values(t, "actService", {"activity": "A"})[0])
 
     def test_first_event_keeps_its_service_time(self):
-        """The case start is the first *completion*, so a first event with
-        a duration starts before it. That start is valid: discarding it
-        dropped the first event of nearly every case of an interval log."""
+        """A first event with a duration starts before the case's first
+        completion. When that completion was taken as the case start, the
+        start was discarded as "before the case", which dropped the first
+        event of nearly every case of an interval log."""
         t = build_fact_table(_interval_log())
         assert t.interval_log is True
         # c0's A runs from day -1 to day 0; c1's A from day -3 to day 0.
@@ -342,7 +344,7 @@ class TestServiceTimes:
                             "viz": "kpi", "params": {"activity": "A"}}, t)
         assert w["value"] == pytest.approx(2.0)
 
-    def test_a_start_before_the_case_start_is_kept_on_any_event(self):
+    def test_a_start_before_the_first_completion_is_kept_on_any_event(self):
         """c1's B starts half a day before A completes (real concurrency):
         1.5 d of service and a negative wait, neither thrown away."""
         t = build_fact_table(_interval_log())
@@ -351,13 +353,64 @@ class TestServiceTimes:
         assert per_case_values(t, "actWaiting", {"activity": "B"})[1] \
             == pytest.approx(-0.5)
 
-    def test_case_duration_still_runs_between_completions(self):
-        """Keeping early starts must not move the case start: `duration`
-        stays first-to-last completion (docs/dashboards.md, section 4)."""
+    def test_case_duration_is_earliest_start_to_latest_completion(self):
+        """On an interval log the case starts when its earliest event
+        starts, not at its first completion (docs/dashboards.md §4;
+        pm4py_ucm.util.timing). By hand: c0 runs day -1 to 4, c1 day -3
+        to 1. First-to-last completion would give 4 and 1."""
         t = build_fact_table(_interval_log())
-        assert list(per_case_values(t, "duration")) == pytest.approx([4.0, 1.0])
-        assert int(t.starts[0]) == int(
-            pd.Timestamp("2026-01-05", tz="UTC").timestamp())
+        assert list(per_case_values(t, "duration")) == pytest.approx([5.0, 4.0])
+        base = pd.Timestamp("2026-01-05", tz="UTC")
+        assert [int(s) for s in t.starts] == [
+            int((base - pd.Timedelta(days=1)).timestamp()),
+            int((base - pd.Timedelta(days=3)).timestamp())]
+
+    def test_single_timestamp_duration_is_unchanged(self, table):
+        assert list(per_case_values(table, "duration")) == [3.0, 6.0, 4.0, 8.0]
+
+    def test_gaps_between_events_do_not_move_with_the_case_start(self):
+        """Everything measured between two events is a difference of
+        offsets, so it is the same whatever they are counted from."""
+        t = build_fact_table(_interval_log())
+        assert list(per_case_values(
+            t, "timeBetween", {"from": "A", "to": "B"})) \
+            == pytest.approx([4.0, 1.0])
+        assert list(per_case_values(t, "actSojourn", {"activity": "B"})) \
+            == pytest.approx([4.0, 1.0])
+        assert list(per_case_values(
+            t, "edgeTime", {"from": "A", "to": "B"})) \
+            == pytest.approx([4.0, 1.0])
+
+    def test_a_broken_start_counts_from_its_completion(self):
+        """A start after its own completion (or one that does not parse)
+        must neither stretch the case nor shorten it."""
+        base = pd.Timestamp("2026-01-05", tz="UTC")
+        rows = [
+            {"case:concept:name": "c", "concept:name": "A",
+             "time:timestamp": base,
+             "start_timestamp": base + pd.Timedelta(days=9)},
+            {"case:concept:name": "c", "concept:name": "B",
+             "time:timestamp": base + pd.Timedelta(days=3),
+             "start_timestamp": base + pd.Timedelta(days=2)},
+            {"case:concept:name": "c", "concept:name": "C",
+             "time:timestamp": base + pd.Timedelta(days=5),
+             "start_timestamp": pd.NaT},
+        ]
+        t = build_fact_table(pd.DataFrame(rows))
+        assert per_case_values(t, "duration")[0] == pytest.approx(5.0)
+        assert np.isnan(per_case_values(t, "actService", {"activity": "A"})[0])
+        assert per_case_values(t, "actService", {"activity": "B"})[0] \
+            == pytest.approx(1.0)
+
+    def test_time_axes_read_the_earliest_start(self):
+        """A case whose first activity starts in December and completes in
+        January belongs to December."""
+        rows = [{"case:concept:name": "c", "concept:name": "A",
+                 "time:timestamp": pd.Timestamp("2026-01-02", tz="UTC"),
+                 "start_timestamp": pd.Timestamp("2025-12-30", tz="UTC")}]
+        t = build_fact_table(pd.DataFrame(rows))
+        _codes, labels = segment_keys(t, "year")
+        assert labels == ["2025"]
 
 
 # ---------------------------------------------------------------------------
@@ -1938,9 +1991,9 @@ _INTERVAL_PARITY_SPECS = [
 
 
 class TestJsParityOnAnIntervalLog:
-    """Service and waiting time in both engines, on a log whose events
-    start before their case's first completion, as the first event of
-    nearly every case of a real interval log does."""
+    """Service time, waiting time and case duration in both engines, on a
+    log whose events start before their case's first completion, as the
+    first event of nearly every case of a real interval log does."""
 
     @pytest.fixture(scope="class")
     def tbl(self):
@@ -1958,6 +2011,10 @@ class TestJsParityOnAnIntervalLog:
         assert js_results[0]["value"] == pytest.approx(2.0)   # (1 + 3) / 2
         assert js_results[1]["value"] == pytest.approx(1.75)  # (2 + 1.5) / 2
         assert js_results[2]["value"] == pytest.approx(0.75)  # (2 - 0.5) / 2
+
+    def test_case_duration_in_js(self, js_results):
+        assert js_results[5]["id"] == "duration"
+        assert js_results[5]["value"] == pytest.approx(4.5)   # (5 + 4) / 2
 
     @pytest.mark.parametrize("i", range(len(_INTERVAL_PARITY_SPECS)))
     def test_widget_matches(self, i, tbl, js_results):

@@ -137,7 +137,8 @@ on three signals:
    attribute and the trace variant, `I(A; variant) / min(H(A), H(variant))`:
    0 means the attribute says nothing about the trace, 1 means one determines
    the other. High ⇒ it *routes behaviour*.
-2. **Duration effect size** — η² of case duration across the attribute's
+2. **Duration effect size** — η² of case duration (earliest start to
+   latest completion, [`metrics.md`](metrics.md) §4) across the attribute's
    values. High ⇒ it *segments performance*.
 3. **Sanity** — cardinality (near-unique ⇒ likely an identifier), coverage,
    balance and missingness, surfaced as flags and used to discount the score.

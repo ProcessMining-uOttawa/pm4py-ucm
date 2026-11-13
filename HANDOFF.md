@@ -45,7 +45,7 @@ tooling described below.
   implemented" headers since before they shipped; a design note's status
   line is prose, so nothing guards it — update it in the PR that ships the
   feature.
-- Suite: **1525 passed, 0 failed, 0 skipped** (~3 min locally); CI
+- Suite: **1536 passed, 0 failed, 0 skipped** (~3 min locally); CI
   green on Python 3.10–3.14. `requires-python` is `>=3.10`.
 - **One deployment.** https://pm4py-ucm.streamlit.app/ serves V6 through the
   `streamlit_app.py` shim. The second deployment
@@ -80,18 +80,33 @@ docstrings the audit found stale, and a new
 
 ## The audit's code defects, fixed (after 0.9.0)
 
-The audit listed defects it deliberately left alone. All but one are
-fixed, each with a test that failed first. What is worth knowing:
+The audit listed defects it deliberately left alone. They are fixed,
+each with a test that failed first. What is worth knowing:
 
-- **`actService` and the case start.** The fact table's case start is the
-  first *completion*, on every log; `duration`, the time axes and the date
-  filter all read it. That was kept. What changed is the start-time
-  offset `sdt`, now a signed `int32`, so a start before the case start is
-  a valid value instead of "missing". Moving the case start to the
-  earliest start timestamp would have fixed service time too, but it
-  would also have changed `duration` on interval logs, which is the open
-  question below. The JS decoder reads the sentinel from the buffer's
-  type, so a payload built by 0.9.0 (unsigned) still decodes.
+- **One definition of case duration: earliest start to latest
+  completion.** The maintainer settled the audit's open question
+  ("Dashboard should also use earliest start to latest completion", then
+  the same for the partition advisor). It lives in
+  `pm4py_ucm/util/timing.py`: `case_durations` serves the family
+  statistics and the advisor; `build_fact_table` applies the same rule to
+  its integer seconds, because the case start is also the origin of the
+  delta encoding. `TestOneCaseDuration` holds the three together, on a
+  hand-computed log and on the claims sample (15.07 d from all three; the
+  dashboards and the advisor used to give 14.92 d).
+- **`actService` was the same defect.** With the case start at the first
+  *completion*, a first event's start lay "before the case" and was
+  marked missing. Moving the case start to the earliest start fixes both;
+  the engines did not change, since `duration` is the case's last offset
+  and everything else is a difference of offsets. The time axes, the date
+  filter and the series metrics read the case start, so on an interval
+  log they now place a case by its earliest start.
+- **A broken start counts from its completion** (missing, unparseable, or
+  after its own completion) in all three callers. The family statistics
+  used to take `min(start)` as it came; on a clean log nothing changes.
+- **The app's log filter still measures first to last event.** The
+  cycle-time percentile band (`duration_pct` in `streamlit_app_v6.py`)
+  computes its own `max − min` over completions. The maintainer spoke of
+  the dashboards and the advisor only; see the open items.
 - **`per_case` is one decision, taken once.** `_share_mode(target)` /
   `shareMode(target)` (target on *and* mode `per_case`) is asked in
   `compute_widget`, which sets the widget's `unit` to `%` for every
@@ -452,14 +467,14 @@ events; ~10 min to mine after reduction).
 
 A. **What is left of the documentation audit's code findings.** The
    defects themselves are fixed (see "The audit's code defects, fixed").
-   - **Case duration has two definitions on interval logs** — a question
-     for the maintainer, deliberately not touched: dashboards and the
-     partition advisor use first-to-last completion, the family statistics
-     earliest start to latest completion (14.92 d against 15.07 d on the
-     claims sample). Both contracts say so; confirm it is intended. If the
-     dashboards should follow the family statistics, the case start in
-     `build_fact_table` becomes the earliest start timestamp, and
-     `duration`, the time axes and the date filter move with it.
+   - **The app's cycle-time filter is the last first-to-last-completion
+     duration.** The Model view's log filter keeps cases by a percentile
+     band of `max − min` completion (`duration_pct`,
+     `web/streamlit_app_v6.py`), so on an interval log it ranks cases by a
+     slightly different duration than the dashboards, the advisor and the
+     family report now share. Ask the maintainer; if it should follow,
+     call `pm4py_ucm.util.timing.case_durations`. Saved projects store the
+     percentile band, not durations, so they would keep loading.
    - **A project from a newer schema is re-saved with this app's
      `schema_version`** (`ProjectDoc.to_dict` always writes the current
      one), so the file then claims an older schema than its content.
