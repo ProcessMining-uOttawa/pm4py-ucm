@@ -20,11 +20,25 @@ tooling described below.
 
 ## State on arrival
 
-- `main` carries 0.9.0, tagged `v0.9.0`, published to PyPI.
+- `main` carries 0.9.0, tagged `v0.9.0`, published to PyPI on 2026-11-13
+  and **verified installable** (`pip install "pm4py-ucm==0.9.0" --dry-run
+  --no-cache-dir`). The maintainer confirmed the README images render on
+  PyPI and that the deployed app runs 0.9.0.
+- `main` is two documentation commits past the tag (PR #143 and this file);
+  no code has changed since `v0.9.0`.
 - All three version sites read **0.9.0** and are kept in lock-step by a test:
   `pyproject.toml`, `pm4py_ucm/__init__.py`, `web/sessions/codegen.py`
   (`GENERATOR_VERSION`).
-- `CHANGELOG.md` has a fresh empty `[Unreleased]`.
+- `CHANGELOG.md`'s `[Unreleased]` holds one entry, the `docs/` index.
+  Documentation only: it does not call for a release on its own.
+- **[`docs/README.md`](docs/README.md) indexes the documents** (PR #143):
+  each by the question it answers, its kind (contract, design note,
+  measurements, proposal), whether it is built, and the test that holds it
+  to the code. A new document gets a status line under its title and a row
+  there. `sessions.md` and `scenario_simulation.md` had kept "not yet
+  implemented" headers since before they shipped; a design note's status
+  line is prose, so nothing guards it — update it in the PR that ships the
+  feature.
 - Suite: **1476 passed, 0 failed, 0 skipped** (~3 min locally); CI
   green on Python 3.10–3.14. `requires-python` is `>=3.10`.
 - **One deployment.** https://pm4py-ucm.streamlit.app/ serves V6 through the
@@ -325,6 +339,10 @@ Carried forward because each one bit during development:
 - Docs-only merges can skip CI with `[skip ci]` in the **merge commit** subject
   (`gh pr merge --subject`). It skips every workflow for that push, including
   the pdoc deploy.
+- **This repository does not allow GitHub auto-merge** ("Auto merge is not
+  allowed for this repository"). To merge once CI is green, chain it:
+  `gh pr checks <n> --watch --fail-fast && gh pr merge <n> --merge
+  --delete-branch`, run in the background.
 
 ## Testing the web app
 
