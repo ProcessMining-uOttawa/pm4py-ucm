@@ -309,6 +309,26 @@ def test_replay_fallback_dedupes_when_both_metrics_collapse():
     assert ns["NODE_METRICS"] == ["frequency"]
 
 
+def test_dashboards_script_supplies_behavioural_variants():
+    """A dashboard segmented by behavioural variant only binds if the
+    script builds the fact table with the clustering — on the tree mined at
+    the app's noise threshold, so its v1, v2, ... are the app's."""
+    from sessions.dashboards import wrap_registry
+    reg = {"active": "d1", "dashboards": [
+        {"id": "d1", "name": "Variants", "filters": [],
+         "specs": [{"id": "w1", "metric": "duration", "agg": "median",
+                    "viz": "bar",
+                    "segment": {"rows": "attr:behavioural variant"}}]}]}
+    src = generate_script(ProjectDoc(
+        log=LogRef("sample", "L.zip", "zip", ""), config={},
+        dashboards=wrap_registry(reg)))
+    compile(src, "gen.py", "exec")
+    body = src.split("def run_dashboards", 1)[1]
+    assert '"behavioural variant" in repr(DASHBOARDS)' in body
+    assert "noise_threshold=NOISE_THRESHOLD" in body
+    assert "behaviour=behaviour" in body
+
+
 def test_dashboards_emitted_when_the_project_carries_them():
     from sessions.dashboards import wrap_registry
     reg = {"active": "d1", "dashboards": [

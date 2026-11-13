@@ -437,6 +437,7 @@ export function buildSessionReport(dash) {
   const cfg = JSON.parse(document.getElementById("pm-data").textContent);
   cfg.mode = "report";
   cfg.readOnly = true;
+  cfg.suggestions = [];   // a report cannot add a dashboard
   cfg.dashboards = [{ name: dash.name, specs: dash.specs }];
   cfg.filters = dash.filters;
   cfg.reportTitle = `${dash.name} — session report`;

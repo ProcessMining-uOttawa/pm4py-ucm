@@ -209,6 +209,19 @@ class TestPerCaseValues:
         assert list(per_case_values(table, "actRepeats", {"activity": "A"})) \
             == [0, 0, 0, 1]
 
+    def test_act_rework_is_among_the_cases_performing_the_activity(
+            self, table):
+        """A redone only in c3; B never redone, and c2 — which skips B —
+        has no value rather than a zero that would dilute the rate."""
+        a = per_case_values(table, "actRework", {"activity": "A"})
+        assert list(a) == [0, 0, 0, 1]
+        b = per_case_values(table, "actRework", {"activity": "B"})
+        assert list(b[[0, 1, 3]]) == [0, 0, 0] and np.isnan(b[2])
+        assert aggregate(a, "share") == pytest.approx(25.0)
+        # An activity the log lacks is missing everywhere, not 0%.
+        z = per_case_values(table, "actRework", {"activity": "Z"})
+        assert np.all(np.isnan(z)) and aggregate(z, "share") is None
+
     def test_act_presence_counts_absence_as_zero_not_missing(self, table):
         """Presence is a property of every case, so c2 is a 0 and stays in
         the denominator — unlike a duration, which it has no value for."""
@@ -1516,6 +1529,26 @@ class TestDurationFormat:
 # ---------------------------------------------------------------------------
 
 _PARITY_SPECS = [
+    # The Activity axis: the one axis that varies the metric's parameter
+    # instead of partitioning the cases — as bars, as a heatmap either way
+    # round, with a time metric that is missing where the activity is, and
+    # scored against a target.
+    {"id": "kpi-act-rework", "metric": "actRework", "viz": "kpi",
+     "params": {"activity": "A"}},
+    {"id": "kpi-act-rework-missing", "metric": "actRework", "viz": "kpi",
+     "params": {"activity": "nope"}},
+    {"id": "act-axis-rework", "metric": "actRework", "viz": "table",
+     "params": {}, "segment": {"rows": "activity", "cols": "resource"}},
+    {"id": "act-axis-sojourn", "metric": "actSojourn", "agg": "avg",
+     "viz": "bar", "params": {}, "segment": {"rows": "activity"}},
+    {"id": "act-axis-presence-grid", "metric": "actPresence",
+     "viz": "table", "params": {"activity": "ignored"},
+     "segment": {"rows": "activity", "cols": "attr:case:country"}},
+    {"id": "act-axis-freq-cols", "metric": "actFreq", "agg": "sum",
+     "viz": "table", "params": {},
+     "segment": {"rows": "resource", "cols": "activity"},
+     "target": {"on": True, "dir": "<=", "value": 2, "warn": 3,
+                "mode": "aggregate"}},
     {"id": "kpi-duration", "metric": "duration", "viz": "kpi", "agg": "avg"},
     {"id": "kpi-median", "metric": "duration", "viz": "kpi", "agg": "median"},
     {"id": "kpi-p90", "metric": "duration", "viz": "kpi", "agg": "p90"},
@@ -1630,6 +1663,8 @@ _PARITY_DASHBOARD_FILTERS = [
     # The date-range filter the new picker produces — parity across the
     # whole widget set, not just the standalone filter test.
     [{"field": "date", "op": "is", "value": ["2026-01-01", "2026-12-31"]}],
+    # Drilling into an activity's bar or row: the cases containing it.
+    [{"field": "segment", "op": "is", "value": ["activity", "B"]}],
 ]
 
 _RUNNER = r"""
@@ -2019,6 +2054,197 @@ class TestDateAndDistributionUI:
         ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
         assert 'class: "pm-w__chart" }, this._histSvg' in ui
         assert 'class: "pm-w__chart" }, this._boxSvg' in ui
+
+
+class TestActivityAxis:
+    """The Activity axis varies an activity-level metric's own parameter
+    over every activity, instead of partitioning the cases
+    (docs/dashboards.md §5). Values are hand-computed from ``_log``."""
+
+    def test_one_value_per_activity(self, table):
+        w = compute_widget({"metric": "actSojourn", "agg": "avg",
+                            "viz": "bar", "segment": {"rows": "activity"}},
+                           table)
+        assert w["axis"] == "activity"
+        got = {p["label"]: (p["value"], p["nCases"]) for p in w["series"]}
+        # A: only c3's second A has a previous event (1 day after B).
+        assert got["A"] == (pytest.approx(1.0), 1)
+        # B: 1 d (c0), 2 d (c1), 1 d (c3) — c2 skips B and is missing.
+        assert got["B"] == (pytest.approx(4 / 3), 3)
+        # C: 2, 4, 4 and 6 days.
+        assert got["C"] == (pytest.approx(4.0), 4)
+
+    def test_there_is_no_overall_value(self, table):
+        """The activities do not share one number to headline."""
+        w = compute_widget({"metric": "actSojourn", "viz": "bar",
+                            "segment": {"rows": "activity"}}, table)
+        assert w["value"] is None and w["text"] == "—"
+
+    def test_the_spec_activity_is_ignored(self, table):
+        base = {"metric": "actFreq", "agg": "sum", "viz": "bar",
+                "segment": {"rows": "activity"}}
+        a = compute_widget({**base, "params": {"activity": "B"}}, table)
+        b = compute_widget({**base, "params": {}}, table)
+        assert a["series"] == b["series"]
+        assert [p["value"] for p in a["series"]] == [5.0, 3.0, 4.0]
+
+    def test_heatmap_with_a_case_axis(self, table):
+        w = compute_widget(
+            {"metric": "actPresence", "viz": "table",
+             "segment": {"rows": "activity", "cols": "attr:case:country"}},
+            table)
+        assert w["rows"] == ["A", "B", "C"] and w["cols"] == ["AUS", "NZL"]
+        # B is skipped by c2, one of the two AUS cases.
+        assert [[c["value"] for c in r] for r in w["cells"]] == [
+            [100.0, 100.0], [50.0, 100.0], [100.0, 100.0]]
+
+    def test_activities_can_be_the_columns(self, table):
+        rows = compute_widget(
+            {"metric": "actPresence", "viz": "table",
+             "segment": {"rows": "activity", "cols": "attr:case:country"}},
+            table)
+        cols = compute_widget(
+            {"metric": "actPresence", "viz": "table",
+             "segment": {"rows": "attr:case:country", "cols": "activity"}},
+            table)
+        assert cols["rows"] == rows["cols"] and cols["cols"] == rows["rows"]
+        assert cols["cells"] == [list(c) for c in zip(*rows["cells"])]
+
+    def test_an_absent_time_is_omitted_not_zero(self, table):
+        """Filtered to the case that skips B, B has no sojourn at all: no
+        bar, rather than a bar at zero."""
+        w = compute_widget(
+            {"metric": "actSojourn", "viz": "bar",
+             "segment": {"rows": "activity"},
+             "filter": [{"field": "contains", "op": "not", "value": "B"}]},
+            table)
+        assert [p["label"] for p in w["series"]] == ["C"]
+
+    def test_needs_a_per_activity_metric(self, table):
+        with pytest.raises(ValueError, match="measured per activity"):
+            compute_widget({"metric": "duration", "viz": "bar",
+                            "segment": {"rows": "activity"}}, table)
+        with pytest.raises(ValueError, match="measured per activity"):
+            compute_widget({"metric": "edgeTime", "viz": "bar",
+                            "params": {"from": "A", "to": "B"},
+                            "segment": {"rows": "activity"}}, table)
+
+    def test_cannot_be_both_axes(self, table):
+        with pytest.raises(ValueError, match="both"):
+            compute_widget({"metric": "actFreq", "viz": "table",
+                            "segment": {"rows": "activity",
+                                        "cols": "activity"}}, table)
+
+    def test_drilling_into_an_activity_keeps_the_cases_containing_it(
+            self, table):
+        m = apply_filters(table, [{"field": "segment", "op": "is",
+                                   "value": ["activity", "B"]}])
+        assert m.tolist() == [True, True, False, True]
+        m = apply_filters(table, [{"field": "segment", "op": "not",
+                                   "value": ["activity", "B"]}])
+        assert m.tolist() == [False, False, True, False]
+
+    def test_composer_offers_it_only_for_per_activity_metrics(self):
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        assert 'h("option", { value: E.ACTIVITY_AXIS }' in ui
+        body = ui.split("const syncViz = () => {", 1)[1].split(
+            "spec.segment = {", 1)[0]
+        assert "o.disabled = !perActivity" in body
+        # ...and it is not in the generic axis list, which the filter
+        # picker enumerates: activities are filtered with "contains".
+        from pm4py_ucm.algo.dashboards import segment_axes
+        t = build_fact_table(_log(), log_name="t")
+        assert "activity" not in [a["id"] for a in segment_axes(t)]
+
+
+def _fake_clustering(groups):
+    """``[(variant_id, expression, [case ids])]`` as a clustering result."""
+    from types import SimpleNamespace
+    return SimpleNamespace(variants=[
+        SimpleNamespace(variant_id=v, partial_order_expression=e,
+                        case_ids=list(c)) for v, e, c in groups])
+
+
+class TestBehaviouralVariantAxis:
+    """``build_fact_table(behaviour=…)`` turns a concurrency-aware variant
+    clustering into an ordinary case attribute — so it segments and filters
+    in both engines with no engine code of its own."""
+
+    _GROUPS = [("v1", "A -> (B || X) -> C", ["c0", "c1"]),
+               ("v2", "A -> C", ["c2"])]   # c3 did not replay
+
+    def _table(self, groups=None):
+        return build_fact_table(
+            _log(), log_name="t",
+            behaviour=_fake_clustering(groups or self._GROUPS))
+
+    def test_absent_without_a_clustering(self, table):
+        assert table.attribute("behavioural variant") is None
+
+    def test_values_keep_the_clustering_ids_and_order(self):
+        a = self._table().attribute("behavioural variant")
+        assert a.type == "enumeration" and a.values == ["v1", "v2"]
+        assert a.descriptions == {"v1": "A -> (B || X) -> C",
+                                  "v2": "A -> C"}
+
+    def test_it_is_a_segment_axis(self):
+        t = self._table()
+        assert "attr:behavioural variant" in [
+            x["id"] for x in segment_axes(t)]
+        codes, labels = segment_keys(t, "attr:behavioural variant")
+        assert labels == ["v1", "v2"]
+        # c3 fits no variant: missing, not a bucket of its own.
+        assert codes.tolist() == [0, 0, 1, -1]
+
+    def test_an_unfit_case_leaves_every_denominator(self):
+        w = compute_widget(
+            {"metric": "duration", "agg": "avg", "viz": "bar",
+             "segment": {"rows": "attr:behavioural variant"}}, self._table())
+        assert [(p["label"], p["value"], p["nCases"])
+                for p in w["series"]] == [("v1", 4.5, 2), ("v2", 4.0, 1)]
+
+    def test_it_filters_like_any_enumeration(self):
+        m = apply_filters(self._table(), [
+            {"field": "attr:behavioural variant", "op": "in",
+             "value": ["v2"]}])
+        assert m.tolist() == [False, False, True, False]
+
+    def test_case_ids_are_matched_as_text(self):
+        """A clustering normalises case ids to ``str``; the log may hold
+        integers."""
+        df = _log()
+        df["case:concept:name"] = df["case:concept:name"].str[1:].astype(int)
+        t = build_fact_table(df, log_name="t", behaviour=_fake_clustering(
+            [("v1", "x", ["0", "1"]), ("v2", "y", ["2"])]))
+        codes, _ = segment_keys(t, "attr:behavioural variant")
+        assert codes.tolist() == [0, 0, 1, -1]
+
+    def test_only_variants_present_in_the_table_are_listed(self):
+        """A sampled table may hold no case of a rare variant."""
+        a = self._table(self._GROUPS + [("v3", "z", ["elsewhere"])]) \
+            .attribute("behavioural variant")
+        assert a.values == ["v1", "v2"]
+
+    def test_descriptions_travel_in_the_payload(self):
+        attrs = self._table().to_payload()["attributes"]
+        bv = next(a for a in attrs if a["name"] == "behavioural variant")
+        assert bv["descriptions"]["v2"] == "A -> C"
+        # ...and only there: an ordinary attribute carries none.
+        assert all("descriptions" not in a for a in attrs if a is not bv)
+
+    def test_a_real_attribute_of_that_name_wins(self):
+        df = _log()
+        df["case:behavioural variant"] = df["case:country"]
+        t = build_fact_table(df, log_name="t",
+                             behaviour=_fake_clustering(self._GROUPS))
+        assert [a.label for a in t.attributes].count(
+            "behavioural variant") == 1
+        assert "behaviour" not in t.buffers
+
+    def test_tooltips_show_the_expression(self):
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        assert "_segNote(axis, label)" in ui
+        assert ui.count("this._segNote(") >= 4  # bar, pie, row and column
 
 
 def _norm(obj):

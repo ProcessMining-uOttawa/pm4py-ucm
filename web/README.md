@@ -107,7 +107,8 @@ loaded log:
   bars and tables), narrow them with filters, set targets and a
   scorecard, write custom metrics in the **ƒ formula language**, and
   export a self-contained interactive HTML dashboard (or a multi-section
-  session report).
+  session report). **✦ Suggest** proposes whole dashboards from the log
+  itself, each widget with its reason.
 
   ![Dashboards view](PM4Py-UCM-Dashboard.png)
 
@@ -526,6 +527,27 @@ and per-edge Δ tables, and aligned OR-fork branch shares.
 An embedded, self-contained dashboard island over the log's per-case
 **fact table** — and the *same artifact* the HTML export writes, so what
 you build on screen is exactly what you ship.
+
+**Start from a suggestion.** A log's first dashboard opens on an
+**Overview** chosen for that log, and **✦ Suggest** lists further dashboards
+the log supports — *Bottlenecks*, *Rework and flow*, *Segments* — each
+widget with the sentence and the number that justify it. **Add** creates a
+new named dashboard (or fills the current one if it is empty); nothing you
+built is replaced. Suggested KPIs carry a target prefilled with today's
+value but switched off: turn it on in the widget's editor once you have
+decided the goal. Each proposed dashboard follows its headline KPIs with
+the whole picture — sojourn for **every activity**, activity × month and
+activity × attribute heatmaps — and a *Behavioural variants* dashboard
+appears when the model's replay was run: it segments by the
+**concurrency-aware variants** of the Scenarios view (same `v1`, `v2`, …),
+in which two orders of the same parallel work are one variant. The rules
+are in
+[`docs/dashboard_suggestions.md`](../docs/dashboard_suggestions.md).
+
+**Every activity at once.** For a per-activity metric (sojourn, service,
+waiting, frequency, presence, repeats) the segment pickers offer
+**Activity (every one)**: one bar per activity, or with a second axis a
+heatmap of activity × month, × attribute or × behavioural variant.
 
 **Build a widget.** Pick a metric from the catalog (or write your own in
 the **ƒ formula language** — `duration() where attr("Claim_Value") > 500`,

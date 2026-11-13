@@ -23,6 +23,7 @@ Modules:
 * :mod:`.catalog` — what a widget can measure;
 * :mod:`.engine` — per-case values, filters, segmentation, aggregation,
   targets and widget computation;
+* :mod:`.suggest` — proposes dashboards from the nature of the log;
 * :mod:`.view` — assembles the self-contained HTML artifact that serves
   as *both* the app's Dashboards view and the exported report.
 
@@ -34,6 +35,7 @@ is pinned by a parity test rather than by good intentions — see
 """
 
 from .contract import (  # noqa: F401
+    BEHAVIOUR_ATTRIBUTE,
     CONTRACT_VERSION,
     CaseAttribute,
     FactTable,
@@ -52,6 +54,7 @@ from .view import (  # noqa: F401
     dashboard_html,
     write_dashboard,
 )
+from .suggest import suggest_dashboards  # noqa: F401
 from .formula import (  # noqa: F401
     FUNCTIONS,
     FormulaError,

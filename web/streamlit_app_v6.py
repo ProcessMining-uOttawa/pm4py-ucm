@@ -1758,11 +1758,10 @@ def _variant_log_export(synth_fingerprint: str, picks: Tuple[str, ...],
 # Dashboards (cached)
 # ---------------------------------------------------------------------------
 
-#: The dashboard a log opens with, before the user builds their own.
-#: Deliberately log-agnostic: every metric here needs no activity
-#: parameter, so this works on any log rather than naming activities that
-#: exist in one sample and not another. The composer's own defaults pick
-#: sensible activities when the user adds a parameterised widget.
+#: The fallback a log opens with when no suggestion can be computed for it
+#: (see ``_dashboard_suggestions``, whose Overview normally seeds the first
+#: dashboard). Deliberately log-agnostic: every metric here needs no
+#: activity parameter, so it works on any log.
 _DEFAULT_DASHBOARD_SPECS: List[Dict[str, Any]] = [
     {"id": "d-dur", "title": "Case duration", "metric": "duration",
      "agg": "avg", "viz": "kpi"},
@@ -1783,10 +1782,39 @@ _DEFAULT_DASHBOARD_SPECS: List[Dict[str, Any]] = [
 ]
 
 
+@st.cache_data(show_spinner="Grouping cases into behavioural variants...")
+def _behaviour_clustering(log_bytes: bytes, log_kind: str, csv_columns,
+                          noise_threshold: float, filter_spec: Tuple,
+                          _file_hash: str):
+    """The concurrency-aware variant clustering, for the Dashboards view.
+
+    The same call the Scenarios view makes — same cached tree, same shared
+    replay table, default loop coarsening — so a behavioural variant ``v3``
+    on a dashboard is the ``v3`` of the scenario reports. With the replay
+    table already built for the Model view this is a regrouping of parses,
+    not another replay.
+    """
+    log, tree = _log_and_tree(
+        log_bytes, log_kind, csv_columns, noise_threshold, filter_spec,
+        _file_hash,
+    )
+    parses = _parse_table(log_bytes, log_kind, csv_columns, noise_threshold,
+                          filter_spec, _file_hash)
+    return _clustering_mod.cluster(log, tree, parses=parses)
+
+
 @st.cache_data(show_spinner="Preparing dashboard data...")
 def _fact_table(log_bytes: bytes, log_kind: str, csv_columns,
-                log_name: str, filter_spec: Tuple, _file_hash: str):
+                log_name: str, filter_spec: Tuple, _file_hash: str,
+                behaviour_noise: Optional[float] = None):
     """The per-case fact table the Dashboards view computes over.
+
+    ``behaviour_noise`` is the miner's noise threshold when the cases'
+    **behavioural variants** should ride along as a segment axis, else
+    ``None`` (the replay was skipped for this log). It is the threshold and
+    not the clustering itself because the variants are relative to the
+    mined tree: the threshold, with the log and its filter, is what
+    determines them, so it is what belongs in the cache key.
 
     Cached on the log + filter, not on any widget: the browser recomputes
     every widget itself, so this runs once per (log, filter) rather than once
@@ -1797,7 +1825,41 @@ def _fact_table(log_bytes: bytes, log_kind: str, csv_columns,
 
     df = _filtered_log_df(log_bytes, log_kind, csv_columns, filter_spec,
                           _file_hash)
-    return build_fact_table(df, log_name=log_name)
+    behaviour = None
+    if behaviour_noise is not None:
+        try:
+            behaviour = _behaviour_clustering(
+                log_bytes, log_kind, csv_columns, behaviour_noise,
+                filter_spec, _file_hash)
+        except Exception:
+            # The dashboard is still worth having without the extra axis.
+            behaviour = None
+    return build_fact_table(df, log_name=log_name, behaviour=behaviour)
+
+
+@st.cache_data(show_spinner=False)
+def _dashboard_suggestions(log_bytes: bytes, log_kind: str, csv_columns,
+                           log_name: str, filter_spec: Tuple,
+                           _file_hash: str,
+                           behaviour_noise: Optional[float] = None) -> str:
+    """Dashboards proposed from the log itself, as JSON (``"[]"`` if none).
+
+    Takes ``_fact_table``'s own arguments rather than the table, so the key
+    determines the result by construction: the suggestions name this
+    filtered log's activities and attributes, and one served for another
+    filter would propose widgets over things that are no longer there.
+
+    Best-effort: a log the proposer cannot profile still gets a dashboard
+    (the fixed starter), so a failure here must not take the view down.
+    """
+    from pm4py_ucm.algo.dashboards import suggest_dashboards
+
+    try:
+        table = _fact_table(log_bytes, log_kind, csv_columns, log_name,
+                            filter_spec, _file_hash, behaviour_noise)
+        return _json.dumps(suggest_dashboards(table))
+    except Exception:
+        return "[]"
 
 
 @st.cache_data(show_spinner=False)
@@ -1807,7 +1869,9 @@ def _dashboard_html_cached(_table, specs_json: str, name: str,
                            theme: str,
                            model_svg: Tuple[Tuple[str, str], ...],
                            family_report: str = "",
-                           filter_spec: Tuple = ()) -> str:
+                           filter_spec: Tuple = (),
+                           suggestions_json: str = "[]",
+                           behaviour_noise: Optional[float] = None) -> str:
     """The dashboard artifact.
 
     ``_table`` is underscore-prefixed so Streamlit does not try to hash a
@@ -1821,6 +1885,10 @@ def _dashboard_html_cached(_table, specs_json: str, name: str,
     only because ``model_svg`` happens to vary with the data as well (through
     the mined structure and the performer colours); a key should not depend on
     another argument's incidental correlation to be sound.
+
+    ``behaviour_noise`` is in the key for the same reason: the table's
+    behavioural-variant axis depends on the miner's noise threshold (see
+    ``_fact_table``), and nothing else here does.
     """
     from pm4py_ucm.algo.dashboards import dashboard_html
     import json as _json
@@ -1842,6 +1910,8 @@ def _dashboard_html_cached(_table, specs_json: str, name: str,
         # The mined family's statistics report (empty when none), embedded
         # in the session report as a Family section.
         family_report=family_report or None,
+        # Dashboards the page offers behind its Suggest button.
+        suggestions=_json.loads(suggestions_json),
     )
 
 
@@ -6992,15 +7062,20 @@ if _view == "Dashboards":
     st.caption(
         "Build widgets from a metric catalog over this log — filter, "
         "segment by resource / time / case attribute, set targets, and "
-        "drill into any cell. Everything below is computed **in your "
+        "drill into any cell. **✦ Suggest** proposes whole dashboards from "
+        "the log itself, each widget with its reason. Everything below is computed **in your "
         "browser** from a compact snapshot of the log, which is why the "
         "exported HTML stays interactive offline: the export is this "
         "same view."
     )
 
+    # Behavioural variants come from the replay the Model view already
+    # ran; when the user skipped that replay there is nothing to regroup,
+    # and the dashboard simply has no such axis.
+    _bv_noise = float(noise_threshold) if _replay_ok else None
     try:
         _ft = _fact_table(log_bytes, log_kind, csv_columns, log_name,
-                          filter_spec, file_hash)
+                          filter_spec, file_hash, _bv_noise)
     except Exception as exc:
         st.error(
             f"Could not prepare dashboard data: {type(exc).__name__}: {exc}"
@@ -7062,9 +7137,18 @@ if _view == "Dashboards":
         if _fr_bytes is not None:
             _family_report_html = _fr_bytes.decode("utf-8")
 
-    _specs_json = _json.dumps(_DEFAULT_DASHBOARD_SPECS)
+    # The log's first dashboard opens on the proposer's Overview — widgets
+    # chosen for this log — rather than on a fixed starter. It is only a
+    # seed: a dashboard set already saved in the browser, or restored from a
+    # project, wins.
+    _sugg_json = _dashboard_suggestions(log_bytes, log_kind, csv_columns,
+                                        log_name, filter_spec, file_hash,
+                                        _bv_noise)
+    _sugg = _json.loads(_sugg_json)
+    _specs_json = _json.dumps(_sugg[0]["specs"] if _sugg
+                              else _DEFAULT_DASHBOARD_SPECS)
     _html = _dashboard_html_cached(
-        _ft, _specs_json, "Ops overview",
+        _ft, _specs_json, "Overview",
         tuple(sorted(_renders.items())), file_hash, False, _theme,
         tuple(sorted(_model_svgs.items())),
         _family_report_html,
@@ -7072,6 +7156,8 @@ if _view == "Dashboards":
         # only identifies the file. Without this the cache can serve a
         # dashboard built from a different filter's data.
         filter_spec,
+        _sugg_json,
+        _bv_noise,
     )
 
     # A pin carries a fresh id per click, so it must not reach the cache

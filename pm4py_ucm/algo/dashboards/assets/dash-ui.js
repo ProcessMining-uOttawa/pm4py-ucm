@@ -164,6 +164,12 @@ export class Dashboard {
     // no switcher. An export carries the filters it was taken under, so it
     // opens on the question it was sent to answer.
     this._multi = !this.readOnly && !this.headless;
+    // Dashboards the host proposes for this log (suggest.py). Offered, never
+    // applied unasked — and only where a dashboard can be restructured.
+    this.suggestions = this._multi && Array.isArray(opts.suggestions)
+      ? opts.suggestions.filter((s) => s && Array.isArray(s.specs)
+          && s.specs.length)
+      : [];
     this._loadRegistry(opts);
     this._activate();
     this.notation = Object.keys(this.renders)[0] || "ucm";
@@ -531,6 +537,7 @@ export class Dashboard {
       document.getElementById("pm-data").textContent);
     cfg.specs = this.specs;
     cfg.readOnly = true;
+    cfg.suggestions = [];   // a reader cannot add a dashboard
     // Ship the reader the view as filtered, so an export sent to answer
     // a specific question opens on that question rather than on the
     // unfiltered log.
@@ -569,6 +576,7 @@ export class Dashboard {
     cfg.dashboards = JSON.parse(JSON.stringify(this._reg.dashboards));
     cfg.active = this.activeId;
     cfg.readOnly = true;
+    cfg.suggestions = [];
     delete cfg.specs;    // dashboards[] supersedes the single-dashboard config
     delete cfg.filters;
     doc.querySelector("#pm-data").textContent = scriptJson(cfg);
@@ -755,6 +763,102 @@ export class Dashboard {
     });
   }
 
+  // -- suggested dashboards ------------------------------------------
+
+  /**
+   * The gallery of dashboards proposed for this log.
+   *
+   * The list is computed by the host (suggest.py) and arrives in the
+   * config: the island only shows it. So there is nothing here to keep in
+   * parity — a suggestion is a list of ordinary widget specs, each carrying
+   * the sentence (`why`) that justifies it.
+   */
+  _openSuggestions() {
+    let close = () => {};
+    const card = (s) => h("div", { class: "pm-sugg__card" },
+      h("div", { class: "pm-sugg__head" },
+        h("span", { class: "pm-sugg__name" }, s.name),
+        h("span", { class: "pm-sugg__n" },
+          `${s.specs.length} widget${s.specs.length === 1 ? "" : "s"}`),
+        h("button", {
+          class: "pm-btn",
+          onclick: () => { close(); this._addSuggested(s); },
+        }, "Add")),
+      s.why ? h("div", { class: "pm-sugg__why" }, s.why) : null,
+      h("ul", { class: "pm-sugg__list" }, ...s.specs.map((w) =>
+        h("li", {},
+          h("strong", {}, w.title || w.metric),
+          w.why ? h("span", { class: "pm-sugg__reason" }, ` — ${w.why}`)
+            : null))));
+
+    const body = h("div", { class: "pm-sugg" },
+      h("p", { class: "pm-sugg__intro" },
+        "Proposed from the log itself, not from its domain: every widget "
+        + "below is there because of a number in this log, shown beside it. "
+        + (this.specs.length
+          ? "Add creates a new dashboard and leaves yours untouched."
+          : "Add fills this empty dashboard.")
+        + " Targets come prefilled with today’s value but switched off — "
+        + "turn one on in a widget’s editor once you have set its goal."),
+      ...this.suggestions.map(card));
+
+    close = modal({
+      theme: this._theme(),
+      title: "Suggested dashboards",
+      sub: `→ ${this.table.logName}`,
+      body,
+      cancel: "Close",
+    });
+  }
+
+  /**
+   * Add a suggested dashboard: into the current one when it is empty (the
+   * user made a blank dashboard and asked what to put in it), otherwise as
+   * a new named dashboard. An existing dashboard's widgets are never
+   * replaced or merged into.
+   */
+  _addSuggested(s) {
+    const stamp = Date.now().toString(36);
+    const specs = s.specs.map((w, i) => {
+      const c = JSON.parse(JSON.stringify(w));
+      c.id = `w${stamp}${i}`;   // re-minted: reorder and edit key off the id
+      return c;
+    });
+    const taken = new Set(this._reg.dashboards
+      .filter((d) => d.id !== this.activeId || this.specs.length)
+      .map((d) => d.name));
+    let name = s.name || "Dashboard";
+    for (let i = 2; taken.has(name); i++) name = `${s.name} (${i})`;
+
+    if (!this.specs.length) {
+      this.name = name;
+      this.specs = specs;
+      this.filters = (s.filters || []).slice();
+    } else {
+      this._save();              // persist the one we are leaving
+      const id = this._uid();
+      this._reg.dashboards.push(
+        { id, name, specs, filters: (s.filters || []).slice() });
+      this._reg.active = id;
+      this._activate();
+    }
+    this._save();
+    this.render();
+    toast(`Added “${name}” — ${specs.length} widgets`, this._theme());
+  }
+
+  /**
+   * What a segment's short label stands for, as a tooltip line — the
+   * partial-order expression behind a behavioural variant's "v3". Empty
+   * for axes whose labels explain themselves.
+   */
+  _segNote(axis, label) {
+    if (!axis || !axis.startsWith("attr:")) return "";
+    const a = E.attributeOf(this.table, axis.slice(5));
+    const d = a && a.descriptions && a.descriptions[label];
+    return d ? `\n${d}` : "";
+  }
+
   // -- computation ---------------------------------------------------
 
   _compute(spec) {
@@ -882,6 +986,15 @@ export class Dashboard {
              + "this log lacks are reported and shown as “—”.",
         onclick: () => this._pickDefinition(),
       }, "⬆ Load"));
+      if (this.suggestions.length) {
+        kids.push(h("button", {
+          class: "pm-btn pm-btn--ghost",
+          title: "Dashboards proposed from this log itself — its "
+               + "bottlenecks, rework, decision points and the attributes "
+               + "that split its cases — each widget with its reason.",
+          onclick: () => this._openSuggestions(),
+        }, "✦ Suggest"));
+      }
       kids.push(h("button", {
         class: "pm-btn", onclick: () => this._openComposer(),
       }, "+ Add widget"));
@@ -917,7 +1030,11 @@ export class Dashboard {
       return h("div", { class: "pm-grid" },
         h("div", { class: "pm-empty" },
           this.readOnly ? "This dashboard has no widgets."
-            : "No widgets yet — use “+ Add widget” to build one."));
+            : "No widgets yet — use “+ Add widget” to build one.",
+          this.suggestions.length ? h("div", { class: "pm-empty__act" },
+            h("button", {
+              class: "pm-btn", onclick: () => this._openSuggestions(),
+            }, "✦ Suggest dashboards for this log")) : null));
     }
     return h("div", { class: "pm-grid" },
       ...computed.map((w, i) => this._widget(w, this.specs[i], i)));
@@ -1317,7 +1434,8 @@ export class Dashboard {
           class: "pm-pie__slice", fill: hue(i),
         }, svgEl("title", {}, `${p.label}: `
           + `${p.text || E.fmt(p.value, w.unit)} `
-          + `(${(100 * p.value / total).toFixed(1)}%)`)));
+          + `(${(100 * p.value / total).toFixed(1)}%)`
+          + this._segNote(w.axis, p.label))));
         a0 = a1;
       });
     }
@@ -1365,7 +1483,8 @@ export class Dashboard {
       return h("i", {
         style: `height:${Math.round(8 + u * 92)}%;background:${bg}`,
         title: `${p.label}: ${p.text || E.fmt(p.value, w.unit)}` +
-               (p.nCases != null ? ` (${p.nCases.toLocaleString("en-US")} cases)` : ""),
+               (p.nCases != null ? ` (${p.nCases.toLocaleString("en-US")} cases)` : "") +
+               this._segNote(w.axis, p.label),
       });
     }));
     const mid = dropped
@@ -1394,14 +1513,14 @@ export class Dashboard {
     w.cols.forEach((c) => grid.append(
       h("div", {
         class: "pm-table__cell pm-table__cell--head",
-        title: `Filter to ${c}`,
+        title: `Filter to ${c}` + this._segNote(w.colsAxis, c),
         onclick: () => this._drill(w.colsAxis, c),
       }, c)));
 
     w.rows.forEach((r, ri) => {
       grid.append(h("div", {
         class: "pm-table__cell pm-table__cell--row",
-        title: `Filter to ${r}`,
+        title: `Filter to ${r}` + this._segNote(w.rowsAxis, r),
         onclick: () => this._drill(w.rowsAxis, r),
       }, r));
       w.cells[ri].forEach((cell, ci) => {
@@ -2028,8 +2147,16 @@ export class Dashboard {
     const rowsSel = h("select", { class: "pm-select" });
     const colsSel = h("select", { class: "pm-select" });
     const axes = E.segmentAxes(this.table);
+    // The Activity axis is the one that does not partition the cases: it
+    // runs the metric once per activity. So it exists only for metrics
+    // measured per activity, and is disabled (not hidden — the user should
+    // see it is there) for the rest; see syncViz.
+    const activityOpts = [];
     for (const sel of [rowsSel, colsSel]) {
       sel.append(h("option", { value: "" }, "(none)"));
+      const o = h("option", { value: E.ACTIVITY_AXIS }, "Activity (every one)");
+      activityOpts.push(o);
+      sel.append(o);
       for (const a of axes) sel.append(h("option", { value: a.id }, a.label));
     }
     const vizNote = h("span", { class: "pm-row__hint" });
@@ -2125,6 +2252,25 @@ export class Dashboard {
     };
 
     const syncViz = () => {
+      const perActivity = !isCustom() && (metric().params || [])
+        .some((p) => p.name === "activity");
+      for (const o of activityOpts) {
+        o.disabled = !perActivity;
+        o.title = perActivity ? ""
+          : "Only for metrics measured per activity (sojourn, rework, frequency, …)";
+      }
+      for (const sel of [rowsSel, colsSel]) {
+        if (!perActivity && sel.value === E.ACTIVITY_AXIS) sel.value = "";
+      }
+      if (rowsSel.value === E.ACTIVITY_AXIS
+          && colsSel.value === E.ACTIVITY_AXIS) colsSel.value = "";
+      // With the axis on, the widget covers every activity and the single
+      // activity picked under Params no longer applies.
+      const everyActivity = rowsSel.value === E.ACTIVITY_AXIS
+        || colsSel.value === E.ACTIVITY_AXIS;
+      paramsBox.style.opacity = everyActivity ? "0.45" : "";
+      paramsBox.title = everyActivity
+        ? "Not used: the Activity axis covers every activity." : "";
       spec.segment = { rows: rowsSel.value || undefined,
                        cols: colsSel.value || undefined };
       const n = (rowsSel.value ? 1 : 0) + (colsSel.value ? 1 : 0);
@@ -2308,15 +2454,21 @@ export class Dashboard {
     // the composer opens showing exactly what is on the card.
     metricSel.value = spec.metric;
     if (spec.metric === "custom") fxArea.value = (spec.params || {}).formula || "";
+    // Taken BEFORE validateFormula(), which rewrites spec.params to hold
+    // the formula: read after it, an edited widget's own activities were
+    // already gone and the pickers fell back to the log's defaults.
+    const savedParams = isEdit ? spec.params : undefined;
     validateFormula();
-    rebuildParams(isEdit ? spec.params : undefined);
+    rebuildParams(savedParams);
     rebuildAggs(spec.agg);
     rowsSel.value = spec.segment.rows || "";
     colsSel.value = spec.segment.cols || "";
-    // Restore the unsegmented shape when editing a hist/box widget; a
-    // segmented one has no chart choice (the axes decide), so default kpi.
-    chartPick.select((spec.viz === "hist" || spec.viz === "box")
-      ? spec.viz : "kpi");
+    // Restore the widget's own shape when editing. syncViz() then keeps it
+    // only if it is still one the guards offer (a line on a time axis, a
+    // gauge with its target on), and falls back to the first offered
+    // shape otherwise — so a saved line stays a line instead of silently
+    // becoming bars.
+    chartPick.select(isEdit ? spec.viz : "kpi");
     dirSel.value = spec.target.dir;
     valInput.value = spec.target.value;
     warnInput.value = spec.target.warn;
@@ -2357,6 +2509,11 @@ function defaultTitle(spec, metric) {
   const p = spec.params || {};
   const parts = [];
   if (metric.aggs.length > 1 && spec.agg !== "share") parts.push(spec.agg);
+  const seg = spec.segment || {};
+  if (seg.rows === E.ACTIVITY_AXIS || seg.cols === E.ACTIVITY_AXIS) {
+    // Every activity, so naming the one under Params would mislead.
+    return parts.concat(`${metric.label.toLowerCase()} by activity`).join(" ");
+  }
   if (p.from && p.to) parts.push(`${p.from} → ${p.to}`);
   else if (p.activity) parts.push(p.activity);
   else parts.push(metric.label.toLowerCase());
@@ -2374,7 +2531,7 @@ function isDarkColor(color) {
 }
 
 export function axisLabel(axis) {
-  if (!axis) return "";
+  if (!axis || axis === "none") return "";
   if (axis.startsWith("attr:")) return axis.slice(5).replace(/^case:/, "");
   return axis[0].toUpperCase() + axis.slice(1);
 }
