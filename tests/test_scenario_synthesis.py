@@ -2037,3 +2037,53 @@ def test_mined_conditions_do_not_depend_on_case_iteration_order():
     forward = mine(dict(labels))
     backward = mine({k: labels[k] for k in reversed(list(labels))})
     assert forward == backward
+
+
+def _mostly_sequential_log():
+    """95 cases A→B→C→D and 5 cases A→B→D: at a noise threshold of 0 the
+    miner makes C optional; filtered, it keeps the plain sequence and the
+    five that skip C become noise."""
+    import pandas as pd
+
+    rows = []
+    for i in range(100):
+        acts = ["A", "B", "C", "D"] if i < 95 else ["A", "B", "D"]
+        for k, act in enumerate(acts):
+            rows.append({
+                "case:concept:name": f"c{i:03d}", "concept:name": act,
+                "time:timestamp": pd.Timestamp("2026-01-05", tz="UTC")
+                                  + pd.Timedelta(days=i, hours=k),
+            })
+    return pd.DataFrame(rows)
+
+
+def test_discover_scenarios_honours_discovery_parameters():
+    """``discovery_parameters`` reaches the miner, as it does in
+    ``discover_ucm_inductive``; it used to be dropped (with a warning that
+    it was ignored), so a noise threshold needed a pre-mined tree."""
+    import warnings
+
+    log = _mostly_sequential_log()
+    _, unfiltered = pm4py_ucm.discover_scenarios(log)
+    assert len(unfiltered.noise_case_ids) == 0
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        _, filtered = pm4py_ucm.discover_scenarios(
+            log,
+            parameters={"discovery_parameters": {"noise_threshold": 0.2}})
+    assert len(filtered.noise_case_ids) == 5
+    assert filtered.fitness_percentage < 100
+
+
+def test_discover_scenarios_warns_when_a_tree_overrides_discovery_parameters():
+    import pm4py
+    import pytest
+
+    log = _mostly_sequential_log()
+    tree = pm4py.discover_process_tree_inductive(log)
+    with pytest.warns(UserWarning, match="discovery_parameters is ignored"):
+        _, res = pm4py_ucm.discover_scenarios(log, parameters={
+            "process_tree": tree,
+            "discovery_parameters": {"noise_threshold": 0.5}})
+    assert len(res.noise_case_ids) == 0

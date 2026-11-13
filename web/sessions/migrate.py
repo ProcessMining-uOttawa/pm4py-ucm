@@ -21,9 +21,10 @@ def migrate(doc: Dict[str, Any]) -> Dict[str, Any]:
 
     v = int(doc.get("schema_version", SCHEMA_VERSION))
     if v > SCHEMA_VERSION:
-        # A newer file: we keep going (unknown keys are preserved on load), but
-        # flag it so the caller can warn the user their app may be behind.
-        doc.setdefault("_newer_schema", v)
+        # A newer file: we keep going (unknown keys are preserved on load).
+        # Nothing is written into the document — it would be saved back out;
+        # the caller reads ``ProjectDoc.from_newer_app`` to warn the user
+        # their app may be behind.
         return doc
     while v < SCHEMA_VERSION:
         fn = _MIGRATIONS.get(v)

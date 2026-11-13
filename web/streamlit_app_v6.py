@@ -574,10 +574,9 @@ def _mine(
     overlay settings) here rebuilds only the tree→UCM conversion, not the
     tree, while changing a filter re-mines from the filtered log.
 
-    Decomposition is honoured here (the model preview reflects it), but
-    the scenarios tab always re-mines internally with decomposition=None
-    so OR-fork conditions can land on every XOR (see the limitation
-    documented on :func:`pm4py_ucm.discover_scenarios`).
+    Decomposition is honoured here (the model preview reflects it), and
+    the Scenarios view passes the same setting to :func:`_synthesize`, so
+    its scenarios attach to the same decomposed model.
     """
     def _phase(label: str) -> None:
         if _status is not None:
@@ -1081,10 +1080,10 @@ def _synthesize(
 
     ``decomposition_spec`` follows the sidebar's cache-friendly form
     (``"off"`` or a sorted tuple of ``(key, value)`` pairs) and is
-    forwarded to the converter. When decomposition is active, XORs
-    that land in plug-in maps will not receive arc conditions — this
-    is a known limitation of the synthesizer, surfaced as a UI
-    warning before this function is called.
+    forwarded to the converter. Decomposed models are fully supported:
+    the synthesizer walks every map, so XORs and loops that land in
+    plug-in maps receive their conditions and counters there (see
+    :func:`pm4py_ucm.discover_scenarios`).
     """
     def _phase(label: str) -> None:
         if _status is not None:
@@ -3567,6 +3566,12 @@ def _run_dashboards_bridge(fh):
     return st.session_state.get("dashboards_snapshot")
 
 
+#: Shown with the load notes when a project was saved by a newer app.
+_NEWER_PROJECT_NOTE = (
+    "this project was saved by a newer version of the app — settings this "
+    "version does not know were not applied. Update the app to restore "
+    "them.")
+
 # A bundle or sample project attaches its log and applies immediately, here at
 # the top; a settings-only file for an *uploaded* log waits for that upload and
 # is applied just after the log source below.
@@ -3580,17 +3585,20 @@ if "pending_project" in st.session_state:
                 break
     if _pbytes is not None:
         _accept_log_bytes(_pp.get("log_name") or "log.xes", _pbytes)
-        st.session_state["project_notes"] = _apply_project_config(
+        _notes = _apply_project_config(
             _pp.get("config", {}), st.session_state["log_hash"],
             _pp.get("csv_columns"))
+        if _pp.get("newer_schema"):
+            _notes.insert(0, _NEWER_PROJECT_NOTE)
+        st.session_state["project_notes"] = _notes
         _stash_pending_dashboards(
             _pp.get("dashboards"), st.session_state["log_hash"])
         st.session_state.pop("pending_project", None)
         st.rerun()
 
 
-# Sidebar — miner config (decomposition affects the Model tab only; the
-# Scenarios tab always runs flat).
+# Sidebar — miner config (the decomposition applies to the Model view and,
+# through _synthesize, to the model the Scenarios view attaches scenarios to).
 with st.sidebar:
     # Brand at the top of the rail — the app's name (→ repo), the version
     # actually running (→ that release's notes), and the attribution. The
@@ -3657,9 +3665,9 @@ with st.sidebar:
             "Splits the Model tab's UCM into a root map + plug-ins. "
             "**auto** fits the map size to the mined tree's shape; a "
             "**Pre-set** pins fixed max/min activity-leaves per map; "
-            "**Custom** sets max / min / balance by hand. The Scenarios tab "
-            "always runs flat (decomposition=None) so every OR-fork can "
-            "receive a variant_id condition."
+            "**Custom** sets max / min / balance by hand. The Scenarios "
+            "view builds its model with the same setting: scenarios and "
+            "their OR-fork conditions are attached to the plug-in maps too."
         ),
     )
     if decomposition_preset == "off":
@@ -4028,6 +4036,7 @@ if _SESSIONS_OK:
                 "expected_sha": _pdoc.log.sha256,
                 "csv_columns": _pdoc.log.csv_columns,
                 "log_bytes": _plog[1] if _plog is not None else None,
+                "newer_schema": _pdoc.from_newer_app,
             }
             st.session_state["project_loaded_id"] = _lp_id
             st.rerun()
@@ -4159,6 +4168,8 @@ if "pending_project" in st.session_state:
     if _pp.get("expected_sha") and _pp["expected_sha"] != file_hash:
         _notes.insert(0, "the loaded log differs from the one this project "
                       "was saved with — settings were applied anyway.")
+    if _pp.get("newer_schema"):
+        _notes.insert(0, _NEWER_PROJECT_NOTE)
     st.session_state["project_notes"] = _notes
     st.rerun()
 

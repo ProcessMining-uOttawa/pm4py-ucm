@@ -51,7 +51,7 @@ const ARRAY_OF = {
   int32: Int32Array, float64: Float64Array,
 };
 const SENTINEL = {
-  uint8: 0xff, uint16: 0xffff, uint32: 0xffffffff,
+  uint8: 0xff, uint16: 0xffff, uint32: 0xffffffff, int32: 0x7fffffff,
 };
 
 // ---------------------------------------------------------------------
@@ -181,12 +181,19 @@ function prevDt(t, j, i) {
   return j > t.off[i] ? t.dt[j - 1] : NaN;
 }
 
-/** Start-time delta of event j, or NaN when absent/invalid. */
+/**
+ * Start-time delta of event j, or NaN when absent/invalid. Signed: an
+ * event may start before its case's first completion, which is what the
+ * deltas are measured from. (A payload built before the offset was signed
+ * carries it as uint32, with such starts marked missing.)
+ */
 function sdtOf(t, j) {
   const b = t.buffers.sdt;
   if (!b) return NaN;
   const v = b[j];
-  return v === SENTINEL.uint32 ? NaN : v;
+  const missing = b.constructor === Int32Array
+    ? SENTINEL.int32 : SENTINEL.uint32;
+  return v === missing ? NaN : v;
 }
 
 // ---------------------------------------------------------------------
@@ -1432,6 +1439,9 @@ export function computeWidget(spec, t, catalog, dashboardFilters) {
   const rowsAx = (spec.segment && spec.segment.rows) || "none";
   const colsAx = (spec.segment && spec.segment.cols) || "none";
   const target = spec.target;
+  // Every value this widget reports is then a share of cases, whatever
+  // the metric measures: the headline, each bar, each cell.
+  if (shareMode(target)) unit = out.unit = "%";
 
   if (rowsAx === ACTIVITY_AXIS || colsAx === ACTIVITY_AXIS) {
     return Object.assign(out, byActivity(
@@ -1457,9 +1467,18 @@ export function computeWidget(spec, t, catalog, dashboardFilters) {
   return Object.assign(out, grid(t, values, rowsAx, colsAx, aggKind, unit, target));
 }
 
+/**
+ * True when the widget reports the share of cases meeting its target
+ * instead of the aggregated metric: a per_case target that is switched
+ * on. Mirrors engine._share_mode.
+ */
+function shareMode(target) {
+  return !!(target && target.on && target.mode === "per_case");
+}
+
 /** [value, state, distribution] for one group — mirrors engine._score. */
 function score(values, aggKind, target) {
-  if (!target || !target.on || target.mode !== "per_case") {
+  if (!shareMode(target)) {
     const value = aggregate(values, aggKind);
     return [value, targetState(value, target), null];
   }
@@ -1483,9 +1502,9 @@ function score(values, aggKind, target) {
 const g = (x) => (Number.isInteger(x) ? String(x) : String(x));
 
 function kpi(values, aggKind, unit, target, nCases) {
-  const perCase = !!(target && target.mode === "per_case");
+  const perCase = shareMode(target); // computeWidget already set the unit
   const [value, state, dist] = score(values, aggKind, target);
-  const u = perCase ? "%" : unit;
+  const u = unit;
   const out = { value, text: fmt(value, u), state, unit: u };
   if (dist) out.distribution = dist;
   if (target && target.on) {
@@ -1521,7 +1540,8 @@ function seriesBy(t, values, axis, aggKind, unit, target) {
     });
     states.push(state);
   }
-  const overall = aggregate(values, aggKind);
+  // The aggregate, or in per_case mode the share over all the cases.
+  const overall = score(values, aggKind, target)[0];
   return {
     axis, series, state: worstState(states),
     value: overall, text: fmt(overall, unit),
@@ -1567,7 +1587,7 @@ function grid(t, values, rowsAx, colsAx, aggKind, unit, target) {
     }
     cells.push(row);
   }
-  const overall = aggregate(values, aggKind);
+  const overall = score(values, aggKind, target)[0];
   return {
     rowsAxis: rowsAx, colsAxis: colsAx,
     rows: rUsed.map((k) => R.labels[k]),

@@ -338,7 +338,14 @@ def discover_scenarios(
     parameters
         Forwarded to :func:`discover_ucm_inductive` for the UCM build
         phase (e.g. ``resource_attribute``, ``performers``,
-        ``map_name``). Also accepts ``process_tree`` to bypass mining.
+        ``map_name``). Two entries concern the tree: ``process_tree``
+        bypasses mining, and ``discovery_parameters`` is forwarded to
+        :func:`pm4py.discover_process_tree_inductive` exactly as in
+        :func:`discover_ucm_inductive` — e.g.
+        ``{"discovery_parameters": {"noise_threshold": 0.2}}``. The cases
+        a noise-filtered tree cannot replay are reported as noise in the
+        returned clustering. (Supplying both warns: nothing is mined, so
+        the discovery parameters have no effect.)
     decomposition
         Same shape as in :func:`discover_ucm_inductive`. Decomposed
         multi-map UCMs are fully supported: the synthesizer walks
@@ -403,9 +410,21 @@ synthesize_scenarios` for details.
     # builder and the clustering pass. The inductive miner is
     # deterministic on a given log, but going via PM4Py twice and
     # comparing identity would be brittle, so we pin the tree.
+    #
+    # ``discovery_parameters`` is consumed here for the same reason: left
+    # in ``params`` it would reach discover_ucm_inductive alongside the
+    # pinned tree and be reported as ignored — which, before 0.9.1, it was.
     tree = params.pop("process_tree", None)
+    disc_params = dict(params.pop("discovery_parameters", None) or {})
     if tree is None:
-        tree = pm4py.discover_process_tree_inductive(log)
+        tree = pm4py.discover_process_tree_inductive(log, **disc_params)
+    elif disc_params:
+        import warnings
+        warnings.warn(
+            "discovery_parameters is ignored when process_tree is supplied: "
+            f"no mining happens, so {sorted(disc_params)} had no effect.",
+            stacklevel=2,
+        )
 
     ucm = discover_ucm_inductive(
         log,
@@ -616,6 +635,8 @@ def discover_ucm_family(
     parameters: Optional[Dict[str, Any]] = None,
     progress_callback=None,
     validate: bool = True,
+    max_enum_cardinality: Optional[int] = None,
+    numeric_coercion_threshold: Optional[float] = None,
 ):
     """Mine a *family* of UCM models: partition ``log`` by the values
     of 1–2 case-level attributes (e.g. cancer type × age group) and
@@ -638,6 +659,16 @@ def discover_ucm_family(
     values are dropped from the family entirely. Observed combinations
     with fewer than ``min_cases`` cases are skipped (recorded on the
     family, shown grayed in the grid rendering).
+
+    Two settings govern how an attribute is *typed* before it is
+    partitioned; both default to
+    :func:`~pm4py_ucm.algo.discovery.families.partition.partition_log`'s
+    own. ``max_enum_cardinality`` is the most distinct values a string
+    attribute may have and still be offered as an enumeration.
+    ``numeric_coercion_threshold`` is the share of a string column's
+    values that must parse as numbers for it to be typed numeric (and so
+    binned into ranges): pass a value above ``1.0`` to keep a column of
+    numeric strings — codes, say — categorical.
 
     ``validate=True`` (the default) checks each cell's model as it is mined
     and raises :class:`ValueError` if one is malformed, naming the cell. The
@@ -667,6 +698,8 @@ def discover_ucm_family(
         parameters=parameters,
         progress_callback=progress_callback,
         validate=validate,
+        max_enum_cardinality=max_enum_cardinality,
+        numeric_coercion_threshold=numeric_coercion_threshold,
     )
 
 
@@ -856,7 +889,7 @@ def view_ucm_family(
 
 
 def compute_family_stats(family, parameters: Optional[Dict[str, Any]] = None,
-                         progress_callback=None):
+                         progress_callback=None, coarsen_loops: bool = True):
     """Comparative statistics for every cell of a mined family — the
     data layer behind :func:`write_family_report` and the web app's
     Compare tab.
@@ -875,18 +908,25 @@ def compute_family_stats(family, parameters: Optional[Dict[str, Any]] = None,
     :func:`discover_ucm_family` (the result carries no DataFrames and
     stays small). ``parameters`` may override the column names
     (``case_id_col``, ``activity_col``, ``timestamp_col``,
-    ``start_timestamp_col``). Returns a
+    ``start_timestamp_col``); the case-id column defaults to the one the
+    family was mined with. ``coarsen_loops`` (default ``True``) counts
+    behavioural variants with loop iterations collapsed to
+    ``{0, 1, >=2}``, as :func:`discover_scenarios` does; pass ``False`` to
+    tell every iteration count apart. Returns a
     :class:`~pm4py_ucm.algo.discovery.families.stats.FamilyStats`
     with pandas helpers (``process_frame``, ``activity_frame``,
     ``choice_share_frame``) and a JSON-ready ``to_dict``."""
     params = dict(parameters or {})
     return _families.compute_family_stats(
         family,
-        case_id_col=params.get("case_id_col", "case:concept:name"),
+        case_id_col=params.get(
+            "case_id_col",
+            getattr(family, "case_id_col", "case:concept:name")),
         activity_col=params.get("activity_col", "concept:name"),
         timestamp_col=params.get("timestamp_col", "time:timestamp"),
         start_timestamp_col=params.get(
             "start_timestamp_col", "start_timestamp"),
+        coarsen_loops=coarsen_loops,
         progress_callback=progress_callback,
     )
 

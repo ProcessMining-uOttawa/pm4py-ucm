@@ -278,3 +278,30 @@ def test_the_release_tooling_is_present_and_runnable():
                        "web/sessions/registry.py"):
         assert referenced in text, f"skill no longer mentions {referenced}"
         assert (_ROOT / referenced).exists(), f"{referenced} does not exist"
+
+
+def test_the_devcontainer_installs_from_a_requirements_file_that_exists():
+    """A Codespace must get the app's dependencies. The command used to
+    name a root ``requirements.txt`` that does not exist, guarded by
+    ``[ -f … ]``, so it silently installed Streamlit and nothing else."""
+    text = (_ROOT / ".devcontainer" / "devcontainer.json").read_text(
+        encoding="utf8")
+    named = re.findall(r"-r\s+([\w./-]+)", text)
+    assert named, "the devcontainer installs no requirements file"
+    for rel in named:
+        assert (_ROOT / rel).is_file(), f"{rel} does not exist"
+    assert "web/requirements.txt" in named
+
+
+def test_the_app_does_not_claim_the_scenarios_view_runs_flat():
+    """The Scenarios view attaches scenarios to a model built with the
+    sidebar's decomposition; the help text and comments said it "always
+    runs flat (decomposition=None)". Guard the fact, then the wording."""
+    src = (_WEB / _shimmed_app()).read_text(encoding="utf8")
+    synth = src[src.index("def _synthesize("):]
+    synth = synth[:synth.index("\ndef ", 1)]
+    assert "decomposition=decomp_arg" in synth, (
+        "the Scenarios view no longer forwards the decomposition; "
+        "re-check the sidebar help text against the code")
+    assert "always runs flat" not in src
+    assert "always re-mines internally with decomposition=None" not in src

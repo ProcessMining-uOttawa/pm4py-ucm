@@ -214,7 +214,7 @@ def _cell_sub_log(family: ModelFamily, cells: List[FamilyCell]):
     case_ids: set = set()
     for cell in cells:
         case_ids.update(cell.case_ids)
-    series = family.log_df["case:concept:name"].astype(str)
+    series = family.log_df[family.case_id_col].astype(str)
     return family.log_df[series.isin(case_ids)]
 
 
@@ -246,6 +246,7 @@ def _annotate_maps(
         container, sub_log,
         node_metrics=node_metrics, edge_metrics=edge_metrics,
         maps=maps, traversal=traversal, tree=tree,
+        parameters={"case_id_col": family.case_id_col},
     )
 
 

@@ -30,7 +30,9 @@ IssueTracker         2.94 MB / 7.9 s      0.92 MB / 0.1 s
 
 so the payload is **columnar**: activity names and resources are
 dictionary-encoded to integer codes, event timestamps are delta-encoded
-against their case's start, and the per-case event lists are flattened
+against their case's start (its first *completion*; an event's start
+timestamp, on an interval log, may precede it, so that one offset is
+signed), and the per-case event lists are flattened
 into one array addressed by CSR-style offsets. Each buffer is a typed
 little-endian array, base64-encoded. The JS side decodes straight into
 ``TypedArray`` views.
@@ -648,11 +650,20 @@ def build_fact_table(
         # A start after its own completion is meaningless — mark it
         # missing rather than clamp it to a fake zero-length service time
         # that would quietly drag every mean down. Same for a start that
-        # did not parse, and for one before its own case's start.
-        bad = ~sts_valid | (sts > ts) | (sts < np.repeat(starts, counts))
-        sdt = np.clip(sts - np.repeat(starts, counts), 0, None).astype(
-            np.uint32)
-        sdt[bad] = np.iinfo(np.uint32).max
+        # did not parse.
+        #
+        # A start *before the case start* is valid and common: the case
+        # start is the first completion, so the first event of a case
+        # starts before it whenever it has a duration, and a later event
+        # can too when activities overlap. The offset is therefore signed.
+        # (It used to be unsigned, with such starts marked missing, which
+        # dropped the first event of nearly every case from the service
+        # time.)
+        bad = ~sts_valid | (sts > ts)
+        top = np.iinfo(np.int32).max
+        sdt = np.clip(sts - np.repeat(starts, counts),
+                      np.iinfo(np.int32).min, top - 1).astype(np.int32)
+        sdt[bad] = top
         buffers["sdt"] = sdt
 
     attrs, attr_buffers = _build_attributes(
