@@ -693,7 +693,10 @@ computation, not two. Every result carries `id`, `title`, `viz`, `unit`,
 `sampled`, then by shape:
 
 * no axis — `value`, `text`, `state`, `sub` (the caption), plus
-  `distribution` in `per_case` mode and `hist` / `box` for those shapes;
+  `distribution` in `per_case` mode and `hist` / `box` for those shapes.
+  A `hist` or `box` result also carries `valueUnit`, the unit of its bins
+  and quartiles: the metric's own, which under a `per_case` target is not
+  the widget's `unit` (a share in `%`);
 * one axis — `axis` and `series`: `[{label, value, text, state, nCases}]`,
   with the unsegmented `value` / `text` alongside (in `per_case` mode, the
   share over all the widget's cases);

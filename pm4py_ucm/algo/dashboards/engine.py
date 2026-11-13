@@ -1178,10 +1178,15 @@ def compute_widget(spec: Dict[str, Any], table: FactTable, *,
         res = {**out, **_kpi(values, agg_kind, unit, target, n_cases)}
         # hist/box keep the KPI headline and add the distribution's shape;
         # both are only meaningful for an unsegmented per-case metric.
+        # The shape is of the metric's own values, so it carries their
+        # unit: under a per_case target the headline (``unit``) is a share
+        # in % while the bins and quartiles are still, say, days.
         if out["viz"] == "hist":
             res["hist"] = _histogram(values)
+            res["valueUnit"] = UNIT_BY_TYPE[metric.result_type]
         elif out["viz"] == "box":
             res["box"] = _box_stats(values)
+            res["valueUnit"] = UNIT_BY_TYPE[metric.result_type]
         return res
 
     if cols_ax == "none" or rows_ax == "none":

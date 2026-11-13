@@ -9,7 +9,7 @@
 // The export sets `readOnly` so the reader can filter and drill down but
 // not restructure someone else's dashboard.
 //
-// State lives in the browser. `components.html` is one-way, so specs
+// State lives in the browser. The embedding iframe is one-way, so specs
 // persist to localStorage keyed by the log, and travel in and out as
 // JSON. See view.py.
 
@@ -130,6 +130,14 @@ export function axisTicks(max, unit) {
 //: Width of one character of the 9px mono axis label, in SVG user units —
 //: sizes the left gutter of a chart to its longest tick label.
 const TICK_CHAR = 5.5;
+
+/**
+ * The unit of a histogram's bins or a box plot's quartiles. They are the
+ * metric's own values, so this is not always the widget's unit: under a
+ * per-case target the headline is a share in %, the distribution still
+ * in days.
+ */
+function distUnit(w) { return w.valueUnit || w.unit; }
 
 export const STATE_LABEL = { met: "MET", risk: "AT RISK", missed: "MISSED" };
 
@@ -253,8 +261,8 @@ export class Dashboard {
    * Add a widget the host asked for — "Pin to dashboard" on the Model
    * view.
    *
-   * The host cannot reach in and do this itself: `components.html` is
-   * one-way, and the widgets live in this browser. So the host puts the
+   * The host cannot reach in and do this itself: the embedding iframe
+   * is one-way, and the widgets live in this browser. So the host puts the
    * request in the config and reruns, and the island applies it here.
    *
    * That makes the request arrive on EVERY rerun, not once, so it has to
@@ -380,8 +388,8 @@ export class Dashboard {
   _theme() { return this.dark ? "dark" : "light"; }
 
   // -- persistence ---------------------------------------------------
-  // localStorage, not the server: components.html cannot send state back
-  // to Python, and the export has no server at all. Same code, so a
+  // localStorage, not the server: the embedding iframe cannot send state
+  // back to Python, and the export has no server at all. Same code, so a
   // dashboard built in the app survives into the exported file via the
   // specs baked into view.py's payload.
 
@@ -579,8 +587,8 @@ export class Dashboard {
    * fact table with no external reference, so a copy of it with the
    * config swapped IS the export. It also fixes a problem the server
    * cannot solve: the widgets being exported live in this browser, and
-   * `components.html` is one-way, so Python does not know what the user
-   * built. An export produced server-side would confidently ship the
+   * the embedding iframe is one-way, so Python does not know what the
+   * user built. An export produced server-side would confidently ship the
    * *default* dashboard instead of theirs.
    */
   exportHtml() {
@@ -1252,7 +1260,7 @@ export class Dashboard {
     // the card width — otherwise a tall chart overflows the card, which
     // clips its baseline and axis labels.
     out.push(hh && hh.bins.length
-      ? h("div", { class: "pm-w__chart" }, this._histSvg(hh, w.unit))
+      ? h("div", { class: "pm-w__chart" }, this._histSvg(hh, distUnit(w)))
       : h("div", { class: "pm-chart__empty" }, "No data to plot."));
     return out;
   }
@@ -1296,7 +1304,7 @@ export class Dashboard {
     const out = this._distHead(w);
     const bx = w.box;
     out.push(bx && bx.n
-      ? h("div", { class: "pm-w__chart" }, this._boxSvg(bx, w.unit))
+      ? h("div", { class: "pm-w__chart" }, this._boxSvg(bx, distUnit(w)))
       : h("div", { class: "pm-chart__empty" }, "No data to plot."));
     return out;
   }
@@ -2476,9 +2484,9 @@ export class Dashboard {
       // the same renderers the card does.
       const chart = h("div", { class: "pm-preview__chart" });
       if (w.viz === "hist" && w.hist && w.hist.bins.length) {
-        chart.append(this._histSvg(w.hist, w.unit));
+        chart.append(this._histSvg(w.hist, distUnit(w)));
       } else if (w.viz === "box" && w.box && w.box.n) {
-        chart.append(this._boxSvg(w.box, w.unit));
+        chart.append(this._boxSvg(w.box, distUnit(w)));
       } else if (w.viz === "line" && (w.series || []).length) {
         chart.append(this._lineSvg(w.series, w));
       } else if (w.viz === "gauge" && w.value != null) {

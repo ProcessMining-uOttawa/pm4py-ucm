@@ -96,6 +96,11 @@ Code defects reported by the documentation audit, each now held by a test.
   `%` for every shape, including the Activity axis. Also, a target that
   is switched off but remembers its per-case mode no longer turns a KPI's
   unit into `%`.
+- **Dashboards: a histogram or box plot under a per-case target labelled
+  its axis in `%`.** The headline of such a widget is a share, but its
+  bins and quartiles are the metric's values ("3.0%–8.0%" for 3 to 8
+  days). Both engines now report the distribution's own unit
+  (`valueUnit`) and the charts use it.
 - **`discover_scenarios` ignored `parameters["discovery_parameters"]`**
   (and warned that it did), so a noise threshold needed a pre-mined
   `process_tree`. It is forwarded to the inductive miner, as in

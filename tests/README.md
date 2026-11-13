@@ -1,6 +1,6 @@
 # Test suite
 
-**1537 tests** across **42 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
+**1550 tests** across **42 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
 
 > Regenerate this file with `python tests/gen_readme.py` after adding or removing tests. Purposes are the first sentence of each module's docstring; edit the docstring, not this table.
 
@@ -51,8 +51,8 @@
 |  | [`test_visualization.py`](test_visualization.py) | Tests for the graphviz-based UCM visualiser. | 35 |
 | | _Visualization subtotal_ | | **71** |
 | **Dashboards** | [`test_dashboard_suggestions.py`](test_dashboard_suggestions.py) | Tests for dashboard suggestions (``docs/dashboard_suggestions.md`` §2). | 86 |
-|  | [`test_dashboards.py`](test_dashboards.py) | Tests for user-defined dashboards: the client contract, the metric engine, and the parity of the Python engine with its JS counterpart. | 546 |
-| | _Dashboards subtotal_ | | **632** |
+|  | [`test_dashboards.py`](test_dashboards.py) | Tests for user-defined dashboards: the client contract, the metric engine, and the parity of the Python engine with its JS counterpart. | 559 |
+| | _Dashboards subtotal_ | | **645** |
 | **Sessions (save / share / resume)** | [`test_sessions.py`](test_sessions.py) | Tests for the project save/share/resume core (``web/sessions``). | 15 |
 |  | [`test_sessions_codegen.py`](test_sessions_codegen.py) | Tests for the Python code exporter (``web/sessions/codegen.py``). | 36 |
 |  | [`test_sessions_registry.py`](test_sessions_registry.py) | Tests for the Session Parameter Registry (``web/sessions/registry.py``). | 17 |
@@ -60,6 +60,6 @@
 | **Progress / infrastructure** | [`test_progress.py`](test_progress.py) | Tests for the progress-reporting layer and the vectorized DataFrame resource miner. | 15 |
 |  | [`test_release_consistency.py`](test_release_consistency.py) | Drift guards for the things a release has to keep true. | 11 |
 | | _Progress / infrastructure subtotal_ | | **26** |
-| | **Total** | | **1537** |
+| | **Total** | | **1550** |
 
 See the repository [`README.md`](../README.md#testing) for how to run the suite, and [`docs/metrics.md`](../docs/metrics.md) for the metric definitions the validation tests enforce.

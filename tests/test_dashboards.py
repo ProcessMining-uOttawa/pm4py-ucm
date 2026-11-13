@@ -771,6 +771,30 @@ class TestWidgets:
         assert row["goal"] == "≥ 90% of cases"
         assert row["actual"] == "50.0%"
 
+    @pytest.mark.parametrize("viz", ["hist", "box"])
+    def test_distribution_under_a_per_case_target_keeps_its_own_unit(
+            self, table, viz):
+        """The headline of such a widget is a share ("50.0%"), but the
+        histogram's bins and the box plot's quartiles are still the
+        metric's values, in days. Formatting them with the widget's unit
+        printed "3.0%–8.0%" on the axis."""
+        w = compute_widget({"id": "w", "metric": "duration", "viz": viz,
+                            "target": self._PER_CASE}, table)
+        assert w["unit"] == "%" and w["text"] == "50.0%"
+        assert w["valueUnit"] == "d"
+        assert (w[viz]["min"], w[viz]["max"]) == (3.0, 8.0)
+        plain = compute_widget({"id": "w", "metric": "duration",
+                                "viz": viz}, table)
+        assert plain["valueUnit"] == plain["unit"] == "d"
+
+    def test_the_ui_formats_distributions_with_their_own_unit(self):
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        assert "_histSvg(hh, w.unit)" not in ui
+        assert "_boxSvg(bx, w.unit)" not in ui
+        assert "_histSvg(w.hist, w.unit)" not in ui
+        assert "_boxSvg(w.box, w.unit)" not in ui
+        assert ui.count("distUnit(w)") >= 4
+
     def test_per_case_mode_on_a_switched_off_target_changes_nothing(self, table):
         """The mode is remembered when a target is switched off; the value
         is then the plain aggregate and must keep the metric's unit."""
@@ -1832,6 +1856,10 @@ _PARITY_SPECS = [
      "agg": "avg", "params": {},
      "segment": {"rows": "activity", "cols": "attr:case:country"},
      "target": {"on": True, "dir": "<=", "value": 2, "mode": "per_case"}},
+    {"id": "hist-percase", "metric": "duration", "viz": "hist",
+     "target": {"on": True, "dir": "<=", "value": 4, "mode": "per_case"}},
+    {"id": "box-percase", "metric": "duration", "viz": "box",
+     "target": {"on": True, "dir": "<=", "value": 4, "mode": "per_case"}},
     {"id": "kpi-percase-off", "metric": "duration", "viz": "kpi",
      "agg": "avg",
      "target": {"on": False, "dir": "<=", "value": 4, "mode": "per_case"}},
@@ -1938,8 +1966,9 @@ class TestJsParity:
         assert "error" not in js, f"JS raised: {js.get('error')}"
 
         label = f"{py['id']} (filter set {i // len(_PARITY_SPECS)})"
-        for key in ("id", "viz", "unit", "resultType", "nCases", "agg",
-                    "state", "text", "sub", "rows", "cols", "axis"):
+        for key in ("id", "viz", "unit", "valueUnit", "resultType",
+                    "nCases", "agg", "state", "text", "sub", "rows", "cols",
+                    "axis"):
             if key in py or key in js:
                 assert js.get(key) == py.get(key), f"{label}: {key}"
 

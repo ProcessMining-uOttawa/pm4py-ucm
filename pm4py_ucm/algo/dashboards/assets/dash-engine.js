@@ -1451,8 +1451,14 @@ export function computeWidget(spec, t, catalog, dashboardFilters) {
     Object.assign(out, kpi(values, aggKind, unit, target, nCases));
     // hist/box keep the KPI headline (aggregate + sub) and add the shape
     // of the distribution beneath it — only meaningful unsegmented.
+    // The shape is of the metric's own values, so it carries their unit:
+    // under a per_case target the headline (unit) is a share in % while
+    // the bins and quartiles are still, say, days.
     if (out.viz === "hist") out.hist = histogram(values);
     else if (out.viz === "box") out.box = boxStats(values);
+    if (out.viz === "hist" || out.viz === "box") {
+      out.valueUnit = UNIT_BY_TYPE[metric.resultType];
+    }
     return out;
   }
   if (rowsAx === "none" || colsAx === "none") {

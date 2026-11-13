@@ -45,7 +45,7 @@ tooling described below.
   implemented" headers since before they shipped; a design note's status
   line is prose, so nothing guards it — update it in the PR that ships the
   feature.
-- Suite: **1537 passed, 0 failed, 0 skipped** (~3 min locally); CI
+- Suite: **1550 passed, 0 failed, 0 skipped** (~3 min locally); CI
   green on Python 3.10–3.14. `requires-python` is `>=3.10`.
 - **One deployment.** https://pm4py-ucm.streamlit.app/ serves V6 through the
   `streamlit_app.py` shim. The second deployment
@@ -119,6 +119,12 @@ each with a test that failed first. What is worth knowing:
   it pins the tree before calling `discover_ucm_inductive`; left in
   `params` they reach that function beside a `process_tree` and are
   reported as ignored.
+- **A distribution has its own unit.** A `hist` or `box` result carries
+  `valueUnit` beside `unit`, because under a per-case target the headline
+  is a share while the bins are still the metric's values; `dash-ui.js`
+  reads it through `distUnit(w)`. The UI has no DOM test: the engines'
+  field is checked through parity, the UI's use of it only by a source
+  assertion.
 - **A custom case-id column is only partly supported in families.**
   Mining, statistics and the combined assembly's frequency/time overlay
   now follow `ModelFamily.case_id_col`. The default tree miner, the
@@ -467,24 +473,22 @@ events; ~10 min to mine after reduction).
 
 ## Open items, by value
 
-A. **What is left of the documentation audit's code findings.** The
-   defects themselves are fixed (see "The audit's code defects, fixed").
+A. **The documentation audit's code findings are closed.** The defects
+   are fixed (see "The audit's code defects, fixed"); what the fixes
+   turned up was put to the maintainer, who decided (2026-11-13):
    - **A project from a newer schema is re-saved with this app's
      `schema_version`** (`ProjectDoc.to_dict` always writes the current
-     one), so the file then claims an older schema than its content.
-     Harmless while the schema is at version 1; decide before version 2.
-     Whether the *app's* save path preserves a newer file's unknown keys
-     at all (it rebuilds the document from the collected settings) was
-     not checked.
-   - **A histogram or box plot under a per-case target is probably drawn
-     with a `%` axis**: the KPI's unit is `%` in that mode and `dash-ui.js`
-     passes `w.unit` to `_histSvg` / `_boxSvg`, whose values are the raw
-     metric. Read from the code, not reproduced in the browser.
-   - **A custom case-id column in families** stops at the default tree
-     miner, the traversal counts and the path scenarios (see above).
-   - Comments in `dash-ui.js` still name `components.html`; the app embeds
-     through `st.iframe`. Cosmetic; left because the file is a shipped
-     asset.
+     one). *Accepted as it is*: very few projects have been saved. Revisit
+     only if the schema ever reaches version 2.
+   - **A custom case-id column in families is partly supported**: mining,
+     statistics and the combined assembly's overlay follow
+     `ModelFamily.case_id_col`; the default tree miner, the traversal
+     counts and the path scenarios assume `case:concept:name`. *Left like
+     this by decision*; rename the column first.
+   - The comments in `dash-ui.js` and `dash-report.js` that named
+     `components.html` now say "the embedding iframe".
+   - The histogram / box plot axis under a per-case target is fixed
+     (`valueUnit`).
 
 B. **One decision is the maintainer's.** `docs/ai_insights.md` §3 specifies
    an *in-tool* LLM provider seam; the stance settled for dashboards is an
