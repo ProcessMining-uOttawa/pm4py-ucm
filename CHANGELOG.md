@@ -7,7 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-> **Upgrade notes.**
+## [0.9.1] — 2026-11-13
+
+> **Upgrade notes.** This is a patch release that changes numbers you
+> see, because the numbers were wrong or inconsistent.
 > - **Case duration is longer on dashboards for interval logs.** On a log
 >   with start timestamps, a case now starts when its earliest event
 >   *starts*, not when its first event completes, so `duration` includes

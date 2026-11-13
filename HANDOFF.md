@@ -1,10 +1,19 @@
-# Handoff — after 0.9.0
+# Handoff — after 0.9.1
 
-**0.9.0 is released.** It makes the Dashboards view start itself:
-**dashboards suggested from the log**, an **Activity axis**, a per-activity
-**rework rate**, the concurrency-aware **behavioural variants** as a segment
-axis, and **value axes** on the charts (PRs #139–#141). It is a minor
-release because it **drops Python 3.9** and claims 3.13 and 3.14. Design and
+**0.9.1 is released.** It is a correction release: a **documentation
+audit** of every prose file against the code (PR #145), and the **fixes
+for the code defects that audit found** (PR #146). The one with reach is
+that **case duration now has a single definition**, earliest start to
+latest completion, in the dashboards, the partition advisor, the family
+statistics and the app's cycle-time filter. It ships at patch level at the
+maintainer's request although it changes numbers users see; the changelog
+section opens with the upgrade notes.
+
+Before it, 0.9.0 made the Dashboards view start itself: **dashboards
+suggested from the log**, an **Activity axis**, a per-activity **rework
+rate**, the concurrency-aware **behavioural variants** as a segment axis,
+and **value axes** on the charts (PRs #139–#141). It was a minor release
+because it **dropped Python 3.9** and claimed 3.13 and 3.14. Design and
 rules in [`docs/dashboard_suggestions.md`](docs/dashboard_suggestions.md).
 
 Before it, 0.8.5 added the standard **BPMN 2.0 export**: design in
@@ -20,23 +29,24 @@ tooling described below.
 
 ## State on arrival
 
-- `main` carries 0.9.0, tagged `v0.9.0`, published to PyPI on 2026-11-13
-  and **verified installable** (`pip install "pm4py-ucm==0.9.0" --dry-run
-  --no-cache-dir`). The maintainer confirmed the README images render on
-  PyPI and that the deployed app runs 0.9.0.
-- Since `v0.9.0`: the `docs/` index (PR #143), a **documentation audit**
-  of every prose file against the code (PR #145, see below), and the
-  **fixes for the code defects that audit reported** (branch
-  `fix/audit-code-defects`, see below). The fixes change two numbers a
-  user sees on dashboards, so the next release carries upgrade notes.
-- All three version sites read **0.9.0** and are kept in lock-step by a test:
+- `main` carries 0.9.1 (release PR #147). **Check the tag and PyPI
+  before assuming it is live**: `git tag --sort=-v:refname | head -1` and
+  `pip index versions pm4py-ucm`. The upload waits at the `pypi`
+  environment gate for the maintainer's approval, so `main` can read
+  0.9.1 while PyPI still serves 0.9.0 (published 2026-11-13).
+- 0.9.1 holds the `docs/` index (PR #143), the documentation audit
+  (PR #145) and the fixes for the code defects it reported (PR #146).
+- All three version sites read **0.9.1** and are kept in lock-step by a test:
   `pyproject.toml`, `pm4py_ucm/__init__.py`, `web/sessions/codegen.py`
   (`GENERATOR_VERSION`).
-- `CHANGELOG.md`'s `[Unreleased]` holds the `docs/` index, the audit and
-  the fixes, with upgrade notes. The fixes are worth a patch release; the
-  three small additions (`max_enum_cardinality` /
-  `numeric_coercion_threshold` on `discover_ucm_family`, `coarsen_loops`
-  on `compute_family_stats`, `ModelFamily.case_id_col`) are additive.
+- `CHANGELOG.md`'s `[Unreleased]` is empty.
+- **The fixes were checked in the running app** on the claims sample
+  before the release: average case duration 15.1 d, service time of
+  *Register Claim* 3.5 h, a histogram and a box plot under a per-case
+  target with their axes in days, a segmented per-case widget in `%`, the
+  reworded Decomposition help, and the cycle-time filter (band 0–10 keeps
+  560 of 5,600 cases). **Not checked there**: the load note for a project
+  saved by a newer app, which needs such a file to be uploaded.
 - **[`docs/README.md`](docs/README.md) indexes the documents** (PR #143):
   each by the question it answers, its kind (contract, design note,
   measurements, proposal), whether it is built, and the test that holds it
@@ -53,7 +63,7 @@ tooling described below.
   the SAM 2026 paper that required it was accepted and its final version
   points at the main app. That URL now 404s; do not link it.
 
-## The documentation audit (after 0.9.0)
+## What 0.9.1 did: the documentation audit (PR #145)
 
 Every prose file was checked against the code, corrected, and filled in:
 the root README, `web/`, `demo/` and `tests/` READMEs, all of `docs/`, the
@@ -78,9 +88,9 @@ docstrings the audit found stale, and a new
 - `CONTRIBUTING.md` is now in the link guard
   (`tests/test_release_consistency.py`).
 
-## The audit's code defects, fixed (after 0.9.0)
+## What 0.9.1 did: the audit's code defects, fixed (PR #146)
 
-The audit listed defects it deliberately left alone. They are fixed,
+The audit listed defects it deliberately left alone. PR #146 fixed them,
 each with a test that failed first. What is worth knowing:
 
 - **One definition of case duration: earliest start to latest
@@ -474,7 +484,7 @@ events; ~10 min to mine after reduction).
 ## Open items, by value
 
 A. **The documentation audit's code findings are closed.** The defects
-   are fixed (see "The audit's code defects, fixed"); what the fixes
+   are fixed (PR #146, see "the audit's code defects, fixed"); what the fixes
    turned up was put to the maintainer, who decided (2026-11-13):
    - **A project from a newer schema is re-saved with this app's
      `schema_version`** (`ProjectDoc.to_dict` always writes the current
