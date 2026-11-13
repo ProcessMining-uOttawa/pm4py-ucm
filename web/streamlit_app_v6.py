@@ -151,7 +151,7 @@ _SAMPLES_DIR = Path(__file__).resolve().parent / "samples"
 _SAMPLE_DESCRIPTIONS = {
     "ClaimsPaymentLog": "synthetic insurance claims-payment process (XES)",
     "IssueTrackerSyntheticLog": "synthetic software issue-tracking workflow (XES)",
-    "devlog": "real AI-assisted developer-activity log, rich case attributes (CSV)",
+    "devlog": "real AI-assisted developer-activity log over two periods, rich case attributes (CSV)",
 }
 _LOGO_PATH = Path(__file__).resolve().parent / "assets" / "logo.png"
 _DISPLAY_WIDTH_PX = 1100

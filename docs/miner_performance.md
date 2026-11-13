@@ -40,6 +40,9 @@ diagnosis is identified, and no log content left the machine.
 | Clinical C | 50 403 | 3 544 | 46 | 1 137 | 0.32 | 0.17 | 1.16 |
 | Invenio SDLC | 23 998 | 2 455 | 30 | 1 745 | 0.71 | 0.39 | 1.64 |
 | Clinical D | 160 590 | 4 572 | 37 | 2 797 | 0.61 | 0.45 | 1.42 |
+
+The Devlog rows in this document were measured on the earlier 285-case version of
+the bundled sample; the sample has since grown to 410 cases (two periods).
 | BPI 2012 | 262 200 | 13 087 | 24 | 4 366 | 0.33 | 0.22 | 2.10 |
 | Registry A | 543 283 | 7 734 | **274** | 7 665 | 0.99 | 0.04 | 1.11 |
 
