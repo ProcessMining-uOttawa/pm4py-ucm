@@ -6,7 +6,7 @@
 
 [![tests](https://github.com/ProcessMining-uOttawa/pm4py-ucm/actions/workflows/tests.yml/badge.svg)](https://github.com/ProcessMining-uOttawa/pm4py-ucm/actions/workflows/tests.yml)
 [![docs](https://github.com/ProcessMining-uOttawa/pm4py-ucm/actions/workflows/docs.yml/badge.svg)](https://processmining-uottawa.github.io/pm4py-ucm/)
-[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue)](https://www.python.org/)
 [![License: GPL v3+](https://img.shields.io/badge/license-GPLv3%2B-blue.svg)](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/LICENSE)
 [![Streamlit V6](https://img.shields.io/badge/Streamlit-V6%20workspace-FF4B4B?logo=streamlit&logoColor=white)](https://pm4py-ucm.streamlit.app/)
 
