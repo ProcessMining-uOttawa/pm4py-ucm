@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-11-13
+
+> **Upgrade notes.**
+> - **Python 3.10 or later is required.** Python 3.9 is no longer
+>   supported; on 3.9, pip keeps installing 0.8.5. Python 3.13 and 3.14 are
+>   now supported.
+> - **Dashboard bar charts are drawn differently.** Bars are proportional
+>   from zero to a labelled value axis. They used to start from an 8% floor,
+>   so the same data now draws shorter small bars; the numbers are
+>   unchanged.
+> - **A log's first dashboard opens on a proposed Overview** rather than
+>   the fixed six-widget starter. Dashboards already saved in the browser
+>   or in a project are untouched.
+>
+> Everything else is additive: no existing API changed its behaviour.
+
 ### Added
 
 - **Dashboard suggestions.** `suggest_dashboards(table)` (in

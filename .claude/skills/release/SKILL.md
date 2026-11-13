@@ -81,7 +81,7 @@ hand and only touch what the release actually changed:
 
 ## 5. PR, and merge
 
-Open the PR, wait for CI on 3.9–3.12, merge. Two notes:
+Open the PR, wait for CI on every Python in the `tests.yml` matrix, merge. Two notes:
 
 - The `pull_request` trigger has been running minutes late on this repo. If no
   run appears, `gh workflow run tests.yml --ref <branch>` dispatches one.
