@@ -9,11 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Python 3.9 is no longer supported; 3.13 is.** `requires-python` is now
-  `>=3.10`. Python 3.9 reached end of life in October 2025 and GitHub's
-  current runner image no longer provides it, so it could not be tested.
-  The suite runs on 3.10–3.13; 3.14 is tested in CI without being claimed
-  yet. **Upgrade note:** on Python 3.9, pip keeps installing the last
+- **Python 3.9 is no longer supported; 3.13 and 3.14 are.**
+  `requires-python` is now `>=3.10`. Python 3.9 reached end of life in
+  October 2025 and GitHub's current runner image no longer provides it, so
+  it could not be tested. The suite runs on 3.10–3.14. **Upgrade note:** on Python 3.9, pip keeps installing the last
   release that supported it (0.8.5). Because this drops a supported
   version, the next release should be a minor bump, not a patch.
 
