@@ -19,16 +19,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wheel now scrolls the diagram and, at its end, carries on down the page.
   Touch scrolling passes through the viewer the same way (not tested on a
   touch device).
-- **The page can be scrolled to its end again in Chrome 157.** After a
-  rerun added content to a view already on screen — synthesized scenarios,
-  an A/B comparison, a mined family, a diagram — Chrome kept the scroll
-  range of the shorter page for real input: the scrollbar, a two-finger
-  scroll and the End key all stopped where the old page ended, and the new
-  content could only be reached by zooming the browser out. The web app now
-  makes Chrome rebuild the range whenever the page has grown, by taking the
-  main block out of layout for a frame (a brief flicker) and restoring the
-  scroll position and focus. This works around a browser defect and is
-  active in Chromium browsers only.
 
 ### Changed
 

@@ -94,7 +94,6 @@ AREAS: dict[str, list[str]] = {
         "test_visualization.py",
         "test_ucm_svg.py",
         "test_svg_viewer_scroll.py",
-        "test_scroll_guard.py",
         "test_heatmap.py",
     ],
     "Dashboards": [
