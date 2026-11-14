@@ -62,8 +62,9 @@ tooling described below.
   implemented" headers since before they shipped; a design note's status
   line is prose, so nothing guards it — update it in the PR that ships the
   feature.
-- Suite: **1553 collected** (~3 min locally; 1 skips where its sample
-  file is absent); CI
+- Suite: **1552 passed, 0 failed, 1 skipped** in a fresh worktree (~3 min;
+  the skip needs the untracked `demo/ClaimsPaymentLog.xes`, so the main
+  checkout runs all 1553); CI
   green on Python 3.10–3.14. `requires-python` is `>=3.10`.
 - **One deployment.** https://pm4py-ucm.streamlit.app/ serves V6 through the
   `streamlit_app.py` shim. The second deployment
