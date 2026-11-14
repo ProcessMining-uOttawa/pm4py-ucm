@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Dashboards: *Add all* in the suggestion gallery.** The gallery behind
+  **✦ Suggest** gets one button that adds every suggested dashboard not
+  already present, in the gallery's order, and shows the first one added.
+  It never makes a duplicate: the Overview a log opens on is skipped, as is
+  anything added before, so a second press adds nothing, and the button is
+  disabled with a line saying so once nothing is left. Cards whose
+  suggestion is present read **✓ added** and offer **Add again** (the
+  numbered copy *Add* always made). A dashboard that came from a suggestion
+  now carries that suggestion's key, so it is still recognised after being
+  renamed or edited; **Clear** and **⬆ Load** drop the mark. Dashboard sets
+  saved earlier carry no marks and are matched by name, or by the Overview's
+  original widget ids. See `docs/dashboard_suggestions.md` §2.4.
+
 ### Fixed
 
 - **The mouse wheel no longer gets stuck on a model diagram.** In the web

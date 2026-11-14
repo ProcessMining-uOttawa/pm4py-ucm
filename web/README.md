@@ -509,7 +509,10 @@ the server only when you save a project (step 10).
 gallery of further dashboards the log supports — *Bottlenecks*, *Rework and
 flow*, *Segments* — each widget with the sentence and the number that
 justify it. **Add** creates a new named dashboard (or fills the current one
-if it is empty); nothing you built is replaced. Suggested KPIs carry a
+if it is empty); nothing you built is replaced. **Add all** adds every
+suggestion you do not have yet in one click and skips the ones you do, the
+Overview included, even after you renamed or edited them, so it never
+leaves a duplicate. Suggested KPIs carry a
 target prefilled with today's value but switched off: turn it on in the
 widget's editor once you have decided the goal. Each proposed dashboard
 follows its headline KPIs with the whole picture — sojourn for **every

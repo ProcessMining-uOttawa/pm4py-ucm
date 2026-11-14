@@ -267,6 +267,30 @@ keep in parity.
   otherwise creates a *new* named dashboard and switches to it. It never
   replaces or merges into a dashboard that has widgets; a name already taken
   gets a numeric suffix.
+* **Add all.** One button at the top of the gallery adds every suggestion
+  that no dashboard stands for yet, in the list's order, and shows the first
+  one it added. It never adds a second copy: the Overview a log opens on is
+  skipped, and so is anything added earlier, so pressing it twice adds
+  nothing the second time. When nothing is left the button is disabled and
+  the line beside it says so. A card whose suggestion is already present
+  reads **✓ added**, and its button becomes **Add again**, which still makes
+  a numbered copy for whoever wants one.
+
+  *Present* is one rule (`suggestionPresent` in `dash-ui.js`), used for the
+  card's mark and for Add all alike. A dashboard added from the gallery, or
+  seeded from the Overview, is **marked** with the suggestion's `key` (a
+  `from` field on its entry in the dashboard set). A marked dashboard stands
+  for that suggestion whatever it is later renamed to and however its
+  widgets are edited: it is the user's version of it. An **unmarked**
+  dashboard (built by hand, loaded from a file, or saved before marks
+  existed) stands for a suggestion when it has the suggestion's name or
+  still holds one of its original widget ids (`s-<key>-<i>`, which the
+  seeded Overview keeps). A dashboard with no widgets stands for nothing.
+  **Clear** and **⬆ Load** replace a dashboard's widgets wholesale and so
+  drop its mark. The mark travels with the dashboard set into a saved
+  project. One case is not recognised: a dashboard added from the gallery
+  before marks existed and renamed since. Add all adds that suggestion
+  again.
 * **Exports.** Read-only pages cannot restructure a dashboard, so the
   suggestions are stripped from an export rather than shipped as dead weight.
 
@@ -377,5 +401,9 @@ free) or the tier 2 route, with the goal model appended to the brief.
   computes without error, binds (`unboundRefs` is empty in JS), and satisfies
   the visualisation guards of `dashboards.md` §6.
 * Suggestions are deterministic: two calls return equal lists.
+* Add all runs the island's own dashboard-set code under Node: it adds the
+  missing suggestions in order, adds nothing when pressed again, and skips a
+  suggestion whose dashboard was renamed, edited or saved before marks
+  existed.
 * Tier 2, when built: a corpus of malformed definitions, one per row of the
   §3.2 table, each asserting its handling.

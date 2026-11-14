@@ -409,11 +409,18 @@ export class Dashboard {
   _loadRegistry(opts) {
     const seed = () => {
       const id = this._uid();
-      return { active: id, dashboards: [{
+      const d = {
         id, name: opts.name || "Dashboard",
         specs: (opts.specs || []).slice(),
         filters: (opts.filters || []).slice(),
-      }] };
+      };
+      // The host seeds a log's first dashboard with a suggestion's own
+      // specs (the Overview). Say so on the entry, so "Add all" still
+      // knows where it came from once its widgets have been replaced.
+      const src = (this.suggestions || []).find((s) =>
+        suggestionPresent(s, [{ specs: d.specs }]));
+      if (src) d.from = src.key;
+      return { active: id, dashboards: [d] };
     };
     // An "export all" bundle carries the whole set in the config; the
     // read-only viewer switches between them but cannot edit. This wins
@@ -521,7 +528,10 @@ export class Dashboard {
         : `Delete “${gone}” and its widgets? This cannot be undone.`),
       confirm: only ? "Clear" : "Delete",
       onConfirm: () => {
-        if (only) { this.specs = []; this.filters = []; }
+        if (only) {
+          this.specs = []; this.filters = [];
+          this._unmarkSuggested();
+        }
         else {
           this._reg.dashboards =
             this._reg.dashboards.filter((d) => d.id !== this.activeId);
@@ -774,6 +784,7 @@ export class Dashboard {
     }
     this.specs = specs;
     this.filters = filters;
+    this._unmarkSuggested();   // a loaded file is not the suggestion
     this._save();
     this.render();
 
@@ -842,21 +853,49 @@ export class Dashboard {
    */
   _openSuggestions() {
     let close = () => {};
-    const card = (s) => h("div", { class: "pm-sugg__card" },
-      h("div", { class: "pm-sugg__head" },
-        h("span", { class: "pm-sugg__name" }, s.name),
-        h("span", { class: "pm-sugg__n" },
-          `${s.specs.length} widget${s.specs.length === 1 ? "" : "s"}`),
-        h("button", {
-          class: "pm-btn",
-          onclick: () => { close(); this._addSuggested(s); },
-        }, "Add")),
-      s.why ? h("div", { class: "pm-sugg__why" }, s.why) : null,
-      h("ul", { class: "pm-sugg__list" }, ...s.specs.map((w) =>
-        h("li", {},
-          h("strong", {}, w.title || w.metric),
-          w.why ? h("span", { class: "pm-sugg__reason" }, ` — ${w.why}`)
-            : null))));
+    // One rule decides both the "added" mark on a card and what "Add all"
+    // skips, so the two cannot disagree.
+    const missing = this._missingSuggestions();
+    const total = this.suggestions.length;
+    const card = (s) => {
+      const added = !missing.includes(s);
+      return h("div", { class: "pm-sugg__card" },
+        h("div", { class: "pm-sugg__head" },
+          h("span", { class: "pm-sugg__name" }, s.name),
+          h("span", { class: "pm-sugg__n" },
+            `${s.specs.length} widget${s.specs.length === 1 ? "" : "s"}`),
+          added ? h("span", {
+            class: "pm-sugg__added",
+            title: "A dashboard made from this suggestion already exists",
+          }, "✓ added") : null,
+          h("button", {
+            class: "pm-btn",
+            title: added ? "Add a second copy under a numbered name"
+              : "Add this dashboard",
+            onclick: () => { close(); this._addSuggested(s); },
+          }, added ? "Add again" : "Add")),
+        s.why ? h("div", { class: "pm-sugg__why" }, s.why) : null,
+        h("ul", { class: "pm-sugg__list" }, ...s.specs.map((w) =>
+          h("li", {},
+            h("strong", {}, w.title || w.metric),
+            w.why ? h("span", { class: "pm-sugg__reason" }, ` — ${w.why}`)
+              : null))));
+    };
+
+    const allBtn = h("button", {
+      class: "pm-btn pm-btn--solid",
+      title: missing.length
+        ? "Add every suggestion that is not already a dashboard"
+        : "Nothing left to add",
+      onclick: () => { close(); this._addAllSuggested(); },
+    }, missing.length ? `Add all (${missing.length})` : "Add all");
+    allBtn.disabled = !missing.length;
+    const allBar = h("div", { class: "pm-sugg__all" },
+      h("span", { class: "pm-sugg__allnote" }, missing.length
+        ? `${missing.length} of ${total} not added yet`
+        : (total === 1 ? "The suggested dashboard is already added"
+          : `All ${total} suggested dashboards are already added`)),
+      allBtn);
 
     const body = h("div", { class: "pm-sugg" },
       h("p", { class: "pm-sugg__intro" },
@@ -865,8 +904,11 @@ export class Dashboard {
         + (this.specs.length
           ? "Add creates a new dashboard and leaves yours untouched."
           : "Add fills this empty dashboard.")
+        + " Add all adds every suggestion you do not have yet, and never "
+        + "a second copy."
         + " Targets come prefilled with today’s value but switched off — "
         + "turn one on in a widget’s editor once you have set its goal."),
+      allBar,
       ...this.suggestions.map(card));
 
     close = modal({
@@ -879,13 +921,39 @@ export class Dashboard {
   }
 
   /**
-   * Add a suggested dashboard: into the current one when it is empty (the
-   * user made a blank dashboard and asked what to put in it), otherwise as
-   * a new named dashboard. An existing dashboard's widgets are never
-   * replaced or merged into.
+   * The registry as "Add all" must see it: the active dashboard's live
+   * name and widgets stand in for its stored entry.
    */
-  _addSuggested(s) {
-    const stamp = Date.now().toString(36);
+  _liveDashboards() {
+    return this._reg.dashboards.map((d) => (d.id === this.activeId
+      ? { ...d, name: this.name, specs: this.specs } : d));
+  }
+
+  /** The suggestions no dashboard stands for yet, in the host's order. */
+  _missingSuggestions() {
+    return missingSuggestions(this.suggestions, this._liveDashboards());
+  }
+
+  /** Forget that the active dashboard came from a suggestion. */
+  _unmarkSuggested() {
+    const d = this._reg.dashboards.find((x) => x.id === this.activeId);
+    if (d) delete d.from;
+  }
+
+  /**
+   * Put a suggested dashboard in the registry: into the current one when
+   * it is empty (the user made a blank dashboard and asked what to put in
+   * it), otherwise as a new named dashboard, which becomes the active one.
+   * An existing dashboard's widgets are never replaced or merged into.
+   *
+   * The entry is marked with the suggestion's key (`from`), which is what
+   * `suggestionPresent` reads: the mark survives renaming the dashboard
+   * and editing its widgets. Returns the name it was given. Does not
+   * render or persist the result: the callers do, once.
+   */
+  _placeSuggested(s) {
+    const stamp = Date.now().toString(36)
+      + Math.random().toString(36).slice(2, 5);
     const specs = s.specs.map((w, i) => {
       const c = JSON.parse(JSON.stringify(w));
       c.id = `w${stamp}${i}`;   // re-minted: reorder and edit key off the id
@@ -893,7 +961,7 @@ export class Dashboard {
     });
     const taken = new Set(this._reg.dashboards
       .filter((d) => d.id !== this.activeId || this.specs.length)
-      .map((d) => d.name));
+      .map((d) => (d.id === this.activeId ? this.name : d.name)));
     let name = s.name || "Dashboard";
     for (let i = 2; taken.has(name); i++) name = `${s.name} (${i})`;
 
@@ -901,17 +969,56 @@ export class Dashboard {
       this.name = name;
       this.specs = specs;
       this.filters = (s.filters || []).slice();
+      const d = this._reg.dashboards.find((x) => x.id === this.activeId);
+      if (d) d.from = s.key;
     } else {
       this._save();              // persist the one we are leaving
       const id = this._uid();
-      this._reg.dashboards.push(
-        { id, name, specs, filters: (s.filters || []).slice() });
+      this._reg.dashboards.push({ id, name, specs,
+        filters: (s.filters || []).slice(), from: s.key });
       this._reg.active = id;
       this._activate();
     }
+    return name;
+  }
+
+  /** Add one suggested dashboard and show it. */
+  _addSuggested(s) {
+    const name = this._placeSuggested(s);
     this._save();
     this.render();
-    toast(`Added “${name}” — ${specs.length} widgets`, this._theme());
+    toast(`Added “${name}” — ${s.specs.length} widgets`, this._theme());
+  }
+
+  /**
+   * Add every suggestion that no dashboard stands for yet, in the
+   * suggestions' order, and show the first one added. A second call adds
+   * nothing: each dashboard it made is marked with its suggestion.
+   * Returns the names added.
+   */
+  _addAllSuggested() {
+    const names = [];
+    let first = null;
+    for (const s of this._missingSuggestions()) {
+      names.push(this._placeSuggested(s));
+      if (first == null) first = this.activeId;
+    }
+    if (!names.length) {
+      toast("Nothing to add: every suggested dashboard is already here",
+        this._theme());
+      return names;
+    }
+    this._save();
+    if (first !== this.activeId) {
+      this._reg.active = first;
+      this._activate();
+      this._save();
+    }
+    this.render();
+    toast(names.length === 1 ? `Added “${names[0]}”`
+      : `Added ${names.length} dashboards: ${names.join(", ")}`,
+      this._theme());
+    return names;
   }
 
   /**
@@ -2650,6 +2757,37 @@ function isDarkColor(color) {
   const [r, g, b] = m.map(Number);
   // Rec. 601 luma; < 0.5 of 255 reads as a dark surface.
   return (0.299 * r + 0.587 * g + 0.114 * b) < 128;
+}
+
+/**
+ * Whether a dashboard in `dashboards` (registry entries: `{name, specs,
+ * from}`) stands for the suggestion `s`. The one rule behind the gallery's
+ * "added" mark and "Add all".
+ *
+ * A dashboard with no widgets stands for nothing. Otherwise:
+ *
+ * * a dashboard **marked** with a suggestion's key (`from`, set when it was
+ *   added or seeded) stands for that suggestion and no other, whatever it
+ *   has since been renamed to and however its widgets were edited;
+ * * an **unmarked** dashboard (built by hand, loaded from a file, or saved
+ *   before marks existed) stands for `s` when it still holds one of the
+ *   suggestion's own widget ids (`s-<key>-<i>`: the seeded Overview keeps
+ *   them) or carries the suggestion's name.
+ */
+export function suggestionPresent(s, dashboards) {
+  const prefix = `s-${s.key}-`;
+  return (dashboards || []).some((d) => {
+    if (!d || !Array.isArray(d.specs) || !d.specs.length) return false;
+    if (typeof d.from === "string") return d.from === s.key;
+    return d.name === s.name || d.specs.some((w) => w
+      && typeof w.id === "string" && w.id.startsWith(prefix)
+      && /^[0-9]+$/.test(w.id.slice(prefix.length)));
+  });
+}
+
+/** The suggestions no dashboard stands for, in the order given. */
+export function missingSuggestions(suggestions, dashboards) {
+  return (suggestions || []).filter((s) => !suggestionPresent(s, dashboards));
 }
 
 export function axisLabel(axis) {
