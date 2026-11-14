@@ -1,6 +1,11 @@
-# Handoff — after 0.9.1
+# Handoff — after 0.9.2
 
-**0.9.1 is released.** It is a correction release: a **documentation
+**0.9.2 is released.** It is a samples release (PR #148): the bundled
+`devlog` sample now covers **two development periods** (410 cases, with a
+`case:period` attribute), and two CSV samples are added, **Procure-to-Pay**
+and **RefundProcess**. No library or app behaviour changes.
+
+Before it, 0.9.1 was a correction release: a **documentation
 audit** of every prose file against the code (PR #145), and the **fixes
 for the code defects that audit found** (PR #146). The one with reach is
 that **case duration now has a single definition**, earliest start to
@@ -29,14 +34,16 @@ tooling described below.
 
 ## State on arrival
 
-- `main` carries 0.9.1 (release PR #147). **Check the tag and PyPI
+- `main` carries 0.9.2 (release PR #149). **Check the tag and PyPI
   before assuming it is live**: `git tag --sort=-v:refname | head -1` and
   `pip index versions pm4py-ucm`. The upload waits at the `pypi`
   environment gate for the maintainer's approval, so `main` can read
-  0.9.1 while PyPI still serves 0.9.0 (published 2026-11-13).
+  0.9.2 while PyPI still serves 0.9.1 (published 2026-11-13).
+- 0.9.2 holds the sample logs (PR #148) and a `.gitattributes` that pins
+  `tests/fixtures/*.jucm` to LF.
 - 0.9.1 holds the `docs/` index (PR #143), the documentation audit
   (PR #145) and the fixes for the code defects it reported (PR #146).
-- All three version sites read **0.9.1** and are kept in lock-step by a test:
+- All three version sites read **0.9.2** and are kept in lock-step by a test:
   `pyproject.toml`, `pm4py_ucm/__init__.py`, `web/sessions/codegen.py`
   (`GENERATOR_VERSION`).
 - `CHANGELOG.md`'s `[Unreleased]` is empty.
@@ -55,13 +62,37 @@ tooling described below.
   implemented" headers since before they shipped; a design note's status
   line is prose, so nothing guards it — update it in the PR that ships the
   feature.
-- Suite: **1550 passed, 0 failed, 0 skipped** (~3 min locally); CI
+- Suite: **1553 collected** (~3 min locally; 1 skips where its sample
+  file is absent); CI
   green on Python 3.10–3.14. `requires-python` is `>=3.10`.
 - **One deployment.** https://pm4py-ucm.streamlit.app/ serves V6 through the
   `streamlit_app.py` shim. The second deployment
   (`pm4py-ucm-scenarios`, which served the frozen V2) has been **deleted** —
   the SAM 2026 paper that required it was accepted and its final version
   points at the main app. That URL now 404s; do not link it.
+
+## What 0.9.2 did: sample logs (PR #148)
+
+- **`web/samples/devlog.csv` is now the two-period log** from
+  pm4py-ucm-devmining (`results_period2/devlog_all.csv`): 410 cases,
+  12,053 events, `case:period` 1 or 2. The Devlog rows in
+  [`docs/miner_performance.md`](docs/miner_performance.md) were measured on
+  the earlier 285-case file and were **not re-run**; a note there says so.
+- **A CSV sample must auto-detect its columns.** *Load sample* seeds the
+  mapping from `_CSV_AUTOPICK`, by exact header name, then by **position**
+  (case, activity, timestamp = columns 0, 1, 2). RefundProcess's original
+  headers (`Order Nr., Status, Employee, Complete Timestamp`) matched
+  nothing, so the timestamp landed on the employee column. The bundled copy
+  has standard headers and ISO dates. `tests/test_bundled_csv_samples.py`
+  pins the mapping of each CSV sample and fails if a new one is not
+  registered there.
+- **Byte-compared fixtures need LF.** A fresh Windows worktree checked
+  `tests/fixtures/*.jucm` out as CRLF and two `RegressionGuardTests`
+  failed; the long-lived main checkout never showed it. `.gitattributes`
+  now pins them. A new byte-compared fixture of another type needs a line
+  there too.
+- **Not checked:** the tutorial notebooks' stored outputs against the new
+  devlog sample, and the new samples in the running app.
 
 ## What 0.9.1 did: the documentation audit (PR #145)
 

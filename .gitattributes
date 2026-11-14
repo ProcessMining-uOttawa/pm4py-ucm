@@ -1,0 +1,4 @@
+# Fixtures compared byte for byte by the tests: keep LF on every platform.
+# Without this, a fresh Windows checkout with core.autocrlf=true writes them
+# as CRLF and tests/test_decomposition.py::RegressionGuardTests fails.
+tests/fixtures/*.jucm text eol=lf
