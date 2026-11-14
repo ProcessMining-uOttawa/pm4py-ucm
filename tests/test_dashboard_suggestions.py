@@ -777,7 +777,8 @@ class TestView:
         """Add fills the current dashboard only when it is empty; otherwise
         it creates a new one."""
         ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
-        body = ui.split("  _addSuggested(s) {", 1)[1].split("\n  }\n", 1)[0]
+        assert "this._placeSuggested(s)" in ui
+        body = ui.split("  _placeSuggested(s) {", 1)[1].split("\n  }\n", 1)[0]
         assert "if (!this.specs.length)" in body
         assert "this._reg.dashboards.push(" in body
 
@@ -832,3 +833,286 @@ class TestEditingASuggestedWidget:
         reopened as the first shape offered and saved back as bars."""
         body = self._init_block()
         assert 'chartPick.select(isEdit ? spec.viz : "kpi")' in body
+
+
+# ---------------------------------------------------------------------------
+# The gallery's "Add all"
+# ---------------------------------------------------------------------------
+
+#: Drives the island's own registry code under Node: the real
+#: ``_loadRegistry`` / ``_placeSuggested`` / ``_addAllSuggested`` on an object
+#: with the ``Dashboard`` prototype, a Map for ``localStorage`` and an inert
+#: ``document`` for the toast. Each scenario is a list of steps; the registry
+#: is reported at the start and after each one.
+_ADD_ALL_RUNNER = r"""
+import { Dashboard, suggestionPresent, missingSuggestions } from %(ui)s;
+import { readFileSync } from 'node:fs';
+
+const inp = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+const el = () => ({ setAttribute() {}, append() {}, textContent: '',
+  classList: { add() {}, remove() {} } });
+globalThis.document = { querySelector: () => null, createElement: el,
+  createTextNode: el, body: el() };
+
+function run(sc) {
+  const store = new Map();
+  globalThis.localStorage = {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => { store.set(k, String(v)); },
+  };
+  const make = () => {
+    const d = Object.create(Dashboard.prototype);
+    d.opts = { storageKey: 'log' };
+    d.table = { logName: 'log' };
+    d._multi = true;
+    d.dark = false;
+    d.suggestions = inp.suggestions;
+    d.render = () => {};
+    d._loadRegistry({ name: 'Overview', specs: sc.seed });
+    d._activate();
+    return d;
+  };
+  if (sc.stored) store.set('pm4py-ucm:dash:log:set', JSON.stringify(sc.stored));
+  let d = make();
+  const state = (ret) => ({
+    ret,
+    active: d.name,
+    missing: d._missingSuggestions().map((s) => s.key),
+    dashboards: d._reg.dashboards.map((x) => ({
+      name: x.name, from: x.from === undefined ? null : x.from,
+      n: x.specs.length, ids: x.specs.map((w) => w.id) })),
+  });
+  const out = [state(null)];
+  for (const [op, arg] of sc.steps) {
+    let ret = null;
+    if (op === 'addAll') ret = d._addAllSuggested();
+    else if (op === 'add') d._addSuggested(
+      inp.suggestions.find((s) => s.key === arg));
+    else if (op === 'rename') { d.name = arg; d._save(); }
+    else if (op === 'rebuild') {
+      d.specs = [{ id: 'wmine0', title: 'mine', metric: 'duration',
+        agg: 'avg', viz: 'kpi' }];
+      d._save();
+    }
+    else if (op === 'blank') {
+      d._save();
+      d._reg.dashboards.push({ id: 'blank', name: arg, specs: [],
+        filters: [] });
+      d._reg.active = 'blank';
+      d._activate();
+      d._save();
+    }
+    else if (op === 'unmark') { d._unmarkSuggested(); d._save(); }
+    else if (op === 'reload') d = make();
+    else throw new Error('unknown step ' + op);
+    out.push(state(ret));
+  }
+  return out;
+}
+
+const result = {
+  scenarios: inp.scenarios.map(run),
+  present: inp.present.map(([s, ds]) => suggestionPresent(s, ds)),
+  missing: missingSuggestions(inp.suggestions, []).map((s) => s.key),
+};
+process.stdout.write(JSON.stringify(result), () => process.exit(0));
+"""
+
+
+def _add_all(suggestions, scenarios, tmp_path, present=()):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not available")
+    inp = tmp_path / "addall.json"
+    inp.write_text(json.dumps({"suggestions": suggestions,
+                               "scenarios": scenarios,
+                               "present": list(present)}), encoding="utf8")
+    runner = tmp_path / "addall.mjs"
+    runner.write_text(
+        _ADD_ALL_RUNNER
+        % {"ui": json.dumps((ASSETS / "dash-ui.js").resolve().as_uri())},
+        encoding="utf8")
+    proc = subprocess.run([node, str(runner), str(inp)], capture_output=True,
+                          text=True, encoding="utf8", timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+def _names(state):
+    return [d["name"] for d in state["dashboards"]]
+
+
+class TestAddAll:
+    """**Add all** in the gallery adds every suggestion no dashboard stands
+    for yet, in the suggestions' order, and never a second copy
+    (``docs/dashboard_suggestions.md`` §2.4)."""
+
+    @pytest.fixture(scope="class")
+    def sugg(self, claims_bv):
+        out = suggest_dashboards(claims_bv)
+        assert len(out) == 5 and out[0]["key"] == "overview"
+        return out
+
+    def _one(self, sugg, tmp_path, steps, *, stored=None, seed=None):
+        return _add_all(sugg, [{
+            "seed": sugg[0]["specs"] if seed is None else seed,
+            "stored": stored, "steps": steps}], tmp_path)["scenarios"][0]
+
+    def test_adds_the_rest_once_and_never_a_second_overview(
+            self, sugg, tmp_path):
+        start, first, second = self._one(
+            sugg, tmp_path, [["addAll", None], ["addAll", None]])
+        names = [d["name"] for d in sugg]
+        # The log opens on the seeded Overview, which is marked as such.
+        assert start["dashboards"] == [{
+            "name": "Overview", "from": "overview",
+            "n": len(sugg[0]["specs"]),
+            "ids": [s["id"] for s in sugg[0]["specs"]]}]
+        assert start["missing"] == [d["key"] for d in sugg[1:]]
+        # Everything but the Overview, in the suggestions' order.
+        assert first["ret"] == names[1:]
+        assert _names(first) == names
+        assert [d["from"] for d in first["dashboards"]] == [
+            d["key"] for d in sugg]
+        assert [d["n"] for d in first["dashboards"]] == [
+            len(d["specs"]) for d in sugg]
+        assert first["missing"] == []
+        # The first one added is the one shown.
+        assert first["active"] == names[1]
+        # Pressing it again adds nothing.
+        assert second["ret"] == []
+        assert second["dashboards"] == first["dashboards"]
+
+    def test_widget_ids_are_unique_across_the_added_dashboards(
+            self, sugg, tmp_path):
+        """Reorder and edit key off the id, and one time stamp per press
+        would mint the same ids for every dashboard."""
+        _, after = self._one(sugg, tmp_path, [["addAll", None]])
+        ids = [i for d in after["dashboards"] for i in d["ids"]]
+        assert len(ids) == len(set(ids))
+
+    def test_a_renamed_and_rebuilt_overview_is_still_the_overview(
+            self, sugg, tmp_path):
+        """The mark, not the name or the widgets, says where a dashboard
+        came from."""
+        *_, after = self._one(sugg, tmp_path, [
+            ["rename", "My start page"], ["rebuild", None],
+            ["addAll", None]])
+        assert _names(after) == ["My start page"] + [
+            d["name"] for d in sugg[1:]]
+
+    def test_a_suggestion_added_one_at_a_time_is_skipped(
+            self, sugg, tmp_path):
+        *_, after = self._one(sugg, tmp_path, [
+            ["add", sugg[3]["key"]], ["rename", "By channel"],
+            ["addAll", None]])
+        rest = [sugg[i]["name"] for i in (1, 2, 4)]
+        assert after["ret"] == rest
+        assert _names(after) == ["Overview", "By channel"] + rest
+
+    def test_add_again_still_makes_a_numbered_copy(self, sugg, tmp_path):
+        """The single Add is unchanged: asked twice, it adds twice."""
+        key, name = sugg[1]["key"], sugg[1]["name"]
+        *_, after = self._one(sugg, tmp_path, [["add", key], ["add", key]])
+        assert _names(after) == ["Overview", name, f"{name} (2)"]
+
+    def test_an_empty_current_dashboard_takes_the_first(self, sugg, tmp_path):
+        """As the single Add does: a blank dashboard is filled, not left
+        beside a new one."""
+        *_, after = self._one(sugg, tmp_path, [
+            ["blank", "Scratch"], ["addAll", None]])
+        assert _names(after) == [d["name"] for d in sugg]
+        assert after["active"] == sugg[1]["name"]
+        assert after["dashboards"][1]["from"] == sugg[1]["key"]
+
+    def test_the_marks_survive_a_reload(self, sugg, tmp_path):
+        *_, added, reloaded, again = self._one(sugg, tmp_path, [
+            ["addAll", None], ["reload", None], ["addAll", None]])
+        assert reloaded["dashboards"] == added["dashboards"]
+        assert again["ret"] == []
+
+    def test_a_dashboard_set_saved_before_marks_existed(self, sugg, tmp_path):
+        """No ``from`` anywhere: the seeded Overview is known by its widget
+        ids even when renamed, an added one by its name."""
+        stored = {"active": "a", "dashboards": [
+            {"id": "a", "name": "Start", "filters": [],
+             "specs": sugg[0]["specs"][:2]},
+            {"id": "b", "name": sugg[1]["name"], "filters": [],
+             "specs": [dict(sugg[1]["specs"][0], id="wold0")]},
+        ]}
+        start, after = self._one(sugg, tmp_path, [["addAll", None]],
+                                 stored=stored)
+        assert start["missing"] == [d["key"] for d in sugg[2:]]
+        assert _names(after) == ["Start", sugg[1]["name"]] + [
+            d["name"] for d in sugg[2:]]
+
+    def test_an_unmarked_dashboard_is_matched_by_name_only(
+            self, sugg, tmp_path):
+        """Clearing or loading a file drops the mark; what is left is an
+        ordinary dashboard."""
+        *_, unmarked, renamed = self._one(sugg, tmp_path, [
+            ["rebuild", None], ["unmark", None], ["rename", "Other"]])
+        assert "overview" not in unmarked["missing"]
+        assert renamed["missing"][0] == "overview"
+
+    def test_the_fallback_seed_carries_no_mark(self, sugg, tmp_path):
+        """A first dashboard that was not seeded from a suggestion is the
+        Overview by name alone."""
+        start, = self._one(sugg, tmp_path, [], seed=[
+            {"id": "d-dur", "title": "Case duration", "metric": "duration",
+             "agg": "avg", "viz": "kpi"}])
+        assert start["dashboards"][0]["from"] is None
+        assert "overview" not in start["missing"]
+
+    def test_the_presence_rule(self, sugg, tmp_path):
+        s = {"key": "rework", "name": "Rework and flow"}
+        w = {"id": "w1"}
+        cases = [
+            ([], False),
+            # A dashboard with no widgets stands for nothing.
+            ([{"name": "x", "from": "rework", "specs": []}], False),
+            ([{"name": "x", "from": "rework", "specs": [w]}], True),
+            # A mark for another suggestion wins over the name.
+            ([{"name": "Rework and flow", "from": "segments",
+               "specs": [w]}], False),
+            ([{"name": "Rework and flow", "specs": [w]}], True),
+            ([{"name": "x", "specs": [{"id": "s-rework-3"}]}], True),
+            # Another suggestion's ids, whose key merely starts the same.
+            ([{"name": "x", "specs": [{"id": "s-rework-flow-3"}]}], False),
+            ([{"name": "x", "specs": [w]}], False),
+        ]
+        out = _add_all(sugg, [], tmp_path,
+                       present=[[s, ds] for ds, _ in cases])
+        assert out["present"] == [want for _, want in cases]
+        assert out["missing"] == [d["key"] for d in sugg]
+
+    def test_gallery_is_wired(self):
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        body = ui.split("  _openSuggestions() {", 1)[1].split("\n  }\n", 1)[0]
+        assert "this._addAllSuggested()" in body
+        # One list decides the card's mark and what Add all will add.
+        assert body.count("this._missingSuggestions()") == 1
+        assert "!missing.includes(s)" in body
+        # Nothing left to add: the button is disabled and says so.
+        assert "allBtn.disabled = !missing.length" in body
+        assert "already added" in body
+        css = (ASSETS / "dash-styles.css").read_text(encoding="utf8")
+        assert ".pm-sugg__all {" in css and ".pm-sugg__added {" in css
+
+    def test_replacing_the_widgets_wholesale_drops_the_mark(self):
+        """Clear and Load put something else in the dashboard."""
+        ui = (ASSETS / "dash-ui.js").read_text(encoding="utf8")
+        load = ui.split("  _applyDefinition(def) {", 1)[1].split(
+            "\n  }\n", 1)[0]
+        clear = ui.split("  _deleteDashboard() {", 1)[1].split(
+            "\n  }\n", 1)[0]
+        assert "this._unmarkSuggested()" in load
+        assert "this._unmarkSuggested()" in clear
+
+    def test_the_mark_survives_a_saved_project(self):
+        """A project stores the island's registry as it is."""
+        sessions = pytest.importorskip("web.sessions.dashboards")
+        reg = {"active": "a", "dashboards": [
+            {"id": "a", "name": "Mine", "specs": [{"id": "w1"}],
+             "filters": [], "from": "overview"}]}
+        assert sessions.unwrap_registry(sessions.wrap_registry(reg)) == reg

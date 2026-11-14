@@ -122,7 +122,8 @@ log before the miner is started. The full walkthrough is in
   **behavioural variants** are a segment axis and filter like any case
   attribute. **✦ Suggest** proposes whole dashboards from the log itself —
   its bottlenecks, rework, decision points and the attributes that split
-  its cases — each widget with the number that justifies it. A log can hold
+  its cases — each widget with the number that justifies it, added one at a
+  time or all at once (**Add all** skips those already there). A log can hold
   several named dashboards, exported one at a time or all in one
   self-contained interactive HTML file. See
   [`docs/dashboards.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/dashboards.md) and

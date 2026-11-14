@@ -15,6 +15,9 @@ The island's registry shape (see ``dash-ui.js`` ``_loadRegistry``) is::
 
     {"active": "<dashboard id>", "dashboards": [{id, name, specs, filters}, ...]}
 
+(a dashboard made from a suggestion also carries ``from``, the suggestion's
+key; entries pass through here untouched, so it round-trips)
+
 and the project stores it wrapped as ``{"version": N, "registry": {...}}`` so a
 future breaking change to that shape can be migrated rather than misread.
 """
