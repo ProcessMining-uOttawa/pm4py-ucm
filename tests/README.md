@@ -1,6 +1,6 @@
 # Test suite
 
-**1562 tests** across **44 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
+**1574 tests** across **45 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
 
 > Regenerate this file with `python tests/gen_readme.py` after adding or removing tests. Purposes are the first sentence of each module's docstring; edit the docstring, not this table.
 
@@ -50,8 +50,9 @@
 | **Visualization** | [`test_heatmap.py`](test_heatmap.py) | Tests for the performance heat-map (render-time emphasis) in `pm4py_ucm.visualization.ucm.variants.classic`. | 19 |
 |  | [`test_ucm_svg.py`](test_ucm_svg.py) | Tests for inline-SVG rendering of UCM models (`pm4py_ucm.visualization.ucm.svg`). | 17 |
 |  | [`test_svg_viewer_scroll.py`](test_svg_viewer_scroll.py) | The inline SVG viewer must not trap the mouse wheel. | 9 |
+|  | [`test_scroll_guard.py`](test_scroll_guard.py) | The page must stay scrollable to its end after a rerun adds content. | 12 |
 |  | [`test_visualization.py`](test_visualization.py) | Tests for the graphviz-based UCM visualiser. | 35 |
-| | _Visualization subtotal_ | | **80** |
+| | _Visualization subtotal_ | | **92** |
 | **Dashboards** | [`test_dashboard_suggestions.py`](test_dashboard_suggestions.py) | Tests for dashboard suggestions (``docs/dashboard_suggestions.md`` §2). | 86 |
 |  | [`test_dashboards.py`](test_dashboards.py) | Tests for user-defined dashboards: the client contract, the metric engine, and the parity of the Python engine with its JS counterpart. | 559 |
 | | _Dashboards subtotal_ | | **645** |
@@ -62,6 +63,6 @@
 | **Progress / infrastructure** | [`test_progress.py`](test_progress.py) | Tests for the progress-reporting layer and the vectorized DataFrame resource miner. | 15 |
 |  | [`test_release_consistency.py`](test_release_consistency.py) | Drift guards for the things a release has to keep true. | 11 |
 | | _Progress / infrastructure subtotal_ | | **26** |
-| | **Total** | | **1562** |
+| | **Total** | | **1574** |
 
 See the repository [`README.md`](../README.md#testing) for how to run the suite, and [`docs/metrics.md`](../docs/metrics.md) for the metric definitions the validation tests enforce.

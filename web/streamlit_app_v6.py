@@ -3113,10 +3113,95 @@ st.markdown(
          working while taking no space. */
       [data-testid="stElementContainer"]:has(
         iframe[src*="ucm_dashboards_bridge"]) { display: none !important; }
+      /* Same for the scroll guard below: a script carrier, nothing to see. */
+      [data-testid="stElementContainer"]:has(.pm-scroll-guard) {
+        display: none !important; }
     </style>
     """,
     unsafe_allow_html=True,
 )
+
+
+#: Keeps the page scrollable to its end in Chrome.
+#:
+#: Seen in Chrome 157 (not in 156, not with synthetic input): when a rerun
+#: appends content to a view that was already on screen — synthesis results
+#: under the Scenarios form, the family grid under the Family form, a diagram
+#: under its controls — the main area's scroll range *for real input* stays
+#: that of the shorter page. ``scrollHeight`` is right and a script can
+#: scroll to the bottom, but the scrollbar, a two-finger scroll and the End
+#: key all stop where the old page ended, so the new content cannot be
+#: reached without zooming the browser out.
+#:
+#: Nothing gentler was found to clear it: changing the content's height,
+#: toggling ``overflow`` on the scroller and promoting it to its own layer
+#: all left it stuck. Taking the main block out of layout for a frame and
+#: putting it back makes Chrome rebuild the range. So the guard polls the
+#: main area's ``scrollHeight`` and, once it has GROWN and then held still
+#: for one more poll, does exactly that, restoring the scroll position and
+#: the focus. It waits while a pointer button is down (a slider drag, a text
+#: selection) or a pop-over / dialog is open, since those would be
+#: interrupted.
+#:
+#: The script is installed once per page — the window flag makes the copies
+#: that later reruns deliver do nothing — and only in Chromium browsers. It
+#: is a workaround for a browser defect: when Chrome no longer needs it,
+#: delete this block and ``tests/test_scroll_guard.py``.
+_SCROLL_GUARD_HTML = r"""
+<span class="pm-scroll-guard"></span>
+<script>
+(() => {
+  if (window.__pm4pyScrollGuard || !window.chrome) return;
+  window.__pm4pyScrollGuard = true;
+  const POLL_MS = 400;
+  let settled = 0;      // the height the range was last rebuilt for
+  let seen = 0;         // the height at the previous poll
+  let busy = false, down = false;
+  addEventListener("pointerdown", () => { down = true; }, true);
+  addEventListener("pointerup", () => { down = false; }, true);
+  addEventListener("pointercancel", () => { down = false; }, true);
+  const rebuild = (main, block) => {
+    busy = true;
+    const y = main.scrollTop, active = document.activeElement;
+    block.style.display = "none";
+    void main.offsetHeight;
+    // Two frames: the empty state has to reach the compositor. The timer
+    // is a backstop for a throttled tab, so the page is never left blank.
+    let restored = false;
+    const restore = () => {
+      if (restored) return;
+      restored = true;
+      block.style.display = "";
+      main.scrollTop = y;
+      if (active && active.isConnected && active !== document.activeElement
+          && typeof active.focus === "function") {
+        try { active.focus({ preventScroll: true }); } catch (e) {}
+      }
+      settled = seen = main.scrollHeight;
+      busy = false;
+    };
+    requestAnimationFrame(() => requestAnimationFrame(restore));
+    setTimeout(restore, 250);
+  };
+  setInterval(() => {
+    if (busy || document.hidden) return;
+    const main = document.querySelector('[data-testid="stMain"]');
+    const block = main && main.firstElementChild;
+    if (!block) return;
+    const h = main.scrollHeight;
+    const steady = h === seen;
+    seen = h;
+    if (h <= settled) { settled = h; return; }   // same, or shrank: fine
+    if (!steady || down) return;                  // still growing / in use
+    if (document.querySelector(
+        '[data-baseweb="popover"], [role="dialog"]')) return;
+    rebuild(main, block);
+  }, POLL_MS);
+})();
+</script>
+"""
+
+st.html(_SCROLL_GUARD_HTML, unsafe_allow_javascript=True)
 
 # Show the ACTUAL running package version (not the latest GitHub
 # release): the deployment imports the checkout's ``pm4py_ucm``, so this
