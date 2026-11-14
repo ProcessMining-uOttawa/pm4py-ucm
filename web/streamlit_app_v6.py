@@ -2634,10 +2634,22 @@ def _open_image_in_tab_button(png_b64: str, label: str = "Open image "
 #: replaced at call time) rather than an f-string, so the CSS/JS braces need
 #: no doubling. The diagram is sized in real pixels and the stage scrolls
 #: (``overflow: auto``): the scrollbars therefore reflect the diagram's
-#: actual size and grow / shrink as the wheel zooms it — a plain CSS
+#: actual size and grow / shrink as the diagram is zoomed — a plain CSS
 #: ``transform: scale`` would leave the scrollbars stuck at the unzoomed
-#: size. Wheel zooms toward the cursor, dragging pans, and a stub click
-#: scrolls to its plug-in.
+#: size. Ctrl/Cmd + wheel (which is also what a trackpad pinch sends) zooms
+#: toward the cursor, as do the − / + / Fit buttons; dragging pans, and a
+#: stub click scrolls to its plug-in.
+#:
+#: A PLAIN wheel must stay the browser's: it scrolls the stage and, at the
+#: stage's end, chains to the Streamlit page. The viewer is routinely as
+#: tall as the window (the height slider goes to 1600 px), so a viewer that
+#: swallows the plain wheel — as this one did up to 0.9.2, zooming on every
+#: notch — leaves no wheel route to the rest of the diagram or to the
+#: download row under it. Hence no ``preventDefault`` without Ctrl/Cmd, no
+#: ``overscroll-behavior: contain`` (it stops the chain to the page), and
+#: ``touch-action: pan-x pan-y`` rather than ``none`` so a finger can still
+#: scroll the page through the viewer. ``tests/test_svg_viewer_scroll.py``
+#: pins all three.
 _SVG_VIEWER_TEMPLATE = r"""
 <style>
   /* The host iframe (st.iframe) hardcodes scrolling — suppress the root's
@@ -2645,12 +2657,22 @@ _SVG_VIEWER_TEMPLATE = r"""
      pair. box-sizing keeps the 1px border inside width:100% so the stage
      never spills past the iframe and forces those outer bars. */
   html, body { margin: 0; height: 100%; overflow: hidden; }
+  #wrap { position: relative; width: 100%; height: __HEIGHT__px; }
   #stage {
     position: relative; box-sizing: border-box;
-    width: 100%; height: __HEIGHT__px; overflow: auto;
+    width: 100%; height: 100%; overflow: auto;
     border: 1px solid #e2dfd8; border-radius: 8px; background: #fff;
-    cursor: grab; touch-action: none; overscroll-behavior: contain;
+    cursor: grab; touch-action: pan-x pan-y;
   }
+  /* Zoom controls: outside #stage so they do not scroll with the diagram;
+     inset from the right so they clear the vertical scrollbar. */
+  #tools { position: absolute; top: 8px; right: 26px; z-index: 30;
+    display: flex; gap: 4px; opacity: .55; transition: opacity .15s; }
+  #wrap:hover #tools { opacity: 1; }
+  #tools button { font: 600 13px/1 Arial, sans-serif; color: #4a453d;
+    min-width: 28px; height: 26px; padding: 0 7px; cursor: pointer;
+    background: #fff; border: 1px solid #cfc9bf; border-radius: 6px; }
+  #tools button:hover { background: #f4f1ea; }
   #canvas { position: relative; width: max-content; }
   #canvas svg { display: block; user-select: none; max-width: none; }
   /* Dynamic-stub picker: a plug-in chooser shown at the click. */
@@ -2670,7 +2692,14 @@ _SVG_VIEWER_TEMPLATE = r"""
     font-family: ui-monospace, Menlo, Consolas, monospace;
     white-space: pre-wrap; word-break: break-word; }
 </style>
-<div id="stage"><div id="canvas"></div></div>
+<div id="wrap">
+  <div id="stage"><div id="canvas"></div></div>
+  <div id="tools">
+    <button id="zout" title="Zoom out (or Ctrl + wheel)">&minus;</button>
+    <button id="zin" title="Zoom in (or Ctrl + wheel)">+</button>
+    <button id="zfit" title="Fit the width">Fit</button>
+  </div>
+</div>
 <script>
 (() => {
   const stage = document.getElementById("stage");
@@ -2757,23 +2786,45 @@ _SVG_VIEWER_TEMPLATE = r"""
     canvas.appendChild(el);
     menuEl = el;
   };
-  // Wheel zooms toward the cursor: resize the diagram, then adjust the scroll
-  // offset so the point under the cursor stays put.
-  stage.addEventListener("wheel", (e) => {
-    e.preventDefault(); closeMenu();
-    const r = stage.getBoundingClientRect();
-    const ox = e.clientX - r.left + stage.scrollLeft;
-    const oy = e.clientY - r.top + stage.scrollTop;
+  // Zoom about a point (cx, cy, in the stage's own viewport): resize the
+  // diagram, then adjust the scroll offset so that point stays put.
+  const zoomAt = (factor, cx, cy) => {
+    closeMenu();
+    const ox = cx + stage.scrollLeft, oy = cy + stage.scrollTop;
     const old = zoom;
-    zoom = clampZoom(zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
+    zoom = clampZoom(zoom * factor);
     applyZoom();
     const f = zoom / old;
-    stage.scrollLeft = ox * f - (e.clientX - r.left);
-    stage.scrollTop = oy * f - (e.clientY - r.top);
+    stage.scrollLeft = ox * f - cx;
+    stage.scrollTop = oy * f - cy;
+  };
+  // Ctrl/Cmd + wheel (and a trackpad pinch, which arrives as ctrl+wheel)
+  // zooms toward the cursor. A plain wheel is left to the browser, so it
+  // scrolls the stage and then the page — see the template's comment.
+  stage.addEventListener("wheel", (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    const r = stage.getBoundingClientRect();
+    zoomAt(e.deltaY < 0 ? 1.1 : 1 / 1.1,
+           e.clientX - r.left, e.clientY - r.top);
   }, { passive: false });
+  // The buttons zoom about the centre of what is showing.
+  const zoomCentre = (factor) =>
+    zoomAt(factor, stage.clientWidth / 2, stage.clientHeight / 2);
+  document.getElementById("zin").addEventListener(
+    "click", () => zoomCentre(1.25));
+  document.getElementById("zout").addEventListener(
+    "click", () => zoomCentre(1 / 1.25));
+  document.getElementById("zfit").addEventListener("click", () => {
+    closeMenu(); zoom = 1; applyZoom();
+    stage.scrollLeft = 0; stage.scrollTop = 0;
+  });
   // Drag pans by scrolling — so the native scrollbars and the drag agree.
+  // Mouse / pen only: a finger pans natively (touch-action: pan-x pan-y),
+  // which also lets it scroll the page past the viewer.
   let drag = false, px = 0, py = 0, moved = 0;
   stage.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "touch") return;
     if (e.target.closest && e.target.closest(".pm-menu")) return;
     closeMenu();
     drag = true; moved = 0; px = e.clientX; py = e.clientY;
@@ -2789,6 +2840,7 @@ _SVG_VIEWER_TEMPLATE = r"""
   const stop = () => { drag = false; stage.style.cursor = "grab"; };
   stage.addEventListener("pointerup", stop);
   stage.addEventListener("pointerleave", stop);
+  stage.addEventListener("pointercancel", stop);
   // Click a stub / sub-process to navigate. graphviz emits an SVG anchor; a
   // static stub links #pm-map-N (scroll to that panel), a dynamic stub links
   // #pm-stub-menu-N (open the plug-in picker). Suppressed after a drag so
@@ -2816,16 +2868,17 @@ _SVG_VIEWER_TEMPLATE = r"""
 
 def _svg_viewer(svg: str, *, height: int = 620, key: str = "svgview",
                 resizable: bool = True) -> None:
-    """Show an SVG model inline with scrollbars, wheel-zoom and drag-to-pan.
+    """Show an SVG model inline with scrollbars, zoom and drag-to-pan.
 
     SVG is the on-screen default: it stays crisp at any zoom and its text
     is selectable. It is embedded through ``st.iframe`` (Streamlit's
     markdown sanitiser strips raw ``<svg>``) and carried base64-encoded so
     nothing in the diagram — a stray ``</script>`` in a label, a non-ASCII
     map name — can break the surrounding HTML. The SVG fits the width on
-    load; the wheel zooms, dragging pans, and the stage scrolls, so the
-    scrollbars track the zoomed diagram's real size (see
-    :data:`_SVG_VIEWER_TEMPLATE`).
+    load; Ctrl/Cmd + wheel or the − / + / Fit buttons zoom, dragging pans,
+    and the stage scrolls, so the scrollbars track the zoomed diagram's real
+    size. A plain wheel scrolls the stage and then the page (see
+    :data:`_SVG_VIEWER_TEMPLATE` for why it must).
 
     ``resizable`` adds a slim height control so the viewer window can be made
     taller or shorter. The chosen height persists (keyed on ``key``) so it
@@ -5438,8 +5491,9 @@ if _view == "Model":
             )
         st.caption(
             f"Mined model ({notation}, "
-            f"decomposition={decomposition_preset}) — vector SVG; scroll "
-            "to zoom, drag to pan. Download SVG or a raster PNG below."
+            f"decomposition={decomposition_preset}) — vector SVG; "
+            "Ctrl + scroll (or pinch, or the − / + buttons) to zoom, drag "
+            "to pan. Download SVG or a raster PNG below."
             + _count_caption + _heat_caption
         )
     else:
@@ -6459,7 +6513,7 @@ if _view == "Family":
                     st.caption(
                         "One panel per combination (rows × columns) — "
                         "captions show each cell's case count and share of "
-                        "the log. Vector SVG: scroll to zoom, drag to pan; "
+                        "the log. Vector SVG: Ctrl + scroll to zoom, drag to pan; "
                         "for a decomposed member, click a stub to jump to "
                         "its sub-map. Download SVG or a raster PNG below."
                         + _fam_heat

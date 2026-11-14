@@ -362,8 +362,10 @@ Switching notation re-renders the diagram but does **not** re-run the miner.
 
 Once mining completes, the **Model** view shows a metrics row (activities,
 cases, events and variants — selected/total when filtered — plus maps and
-nodes) and the diagram as a **vector SVG** in a zoom / pan viewer — scroll
-to zoom, drag to pan, and for a decomposed model **click a stub** to jump to
+nodes) and the diagram as a **vector SVG** in a zoom / pan viewer — Ctrl +
+scroll (or pinch, or the − / + / Fit buttons) to zoom, drag to pan, plain
+scroll to move through the diagram and on down the page, and for a
+decomposed model **click a stub** to jump to
 its plug-in map (a dynamic stub opens a picker of its preconditioned
 plug-ins), and click a plug-in map's **end point to jump back to its
 parent**.

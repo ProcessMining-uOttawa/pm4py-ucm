@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The mouse wheel no longer gets stuck on a model diagram.** In the web
+  app's SVG viewer (Model, Scenarios, Family and Compare views) every wheel
+  notch over the diagram zoomed it and was withheld from the browser, so
+  nothing scrolled. The viewer is usually as tall as the window — 620 px by
+  default, up to 1600 px on the *Diagram height* slider — which left no
+  wheel route to the lower part of the diagram or to the download / export
+  / pin row under it; only the page's own scrollbar still worked. A plain
+  wheel now scrolls the diagram and, at its end, carries on down the page.
+  Touch scrolling passes through the viewer the same way (not tested on a
+  touch device).
+
+### Changed
+
+- **Zooming a model diagram is now Ctrl + wheel** (Cmd on macOS; a trackpad
+  pinch works too), or the new **− / + / Fit** buttons in the viewer's top
+  right corner. Dragging still pans. The diagrams embedded in the
+  Dashboards view and in exported reports are separate viewers and still
+  zoom on a plain wheel.
+
 ## [0.9.2] — 2026-11-14
 
 ### Added
