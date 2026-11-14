@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] — 2026-11-14
+
 ### Added
 
 - **Two more bundled sample logs**, both CSV, in `web/samples/`:
@@ -25,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `agent_model` now spanning six model versions. The first 285 cases are
   unchanged. Source: `results_period2/devlog_all.csv` in
   [pm4py-ucm-devmining](https://github.com/damyot/pm4py-ucm-devmining).
+
+### Fixed
+
+- **Two regression tests failed on a fresh Windows checkout.** With
+  `core.autocrlf=true`, git wrote `tests/fixtures/*.jucm` with CRLF line
+  endings, and `RegressionGuardTests` in `tests/test_decomposition.py`
+  compares the exporter's output with a fixture byte for byte. A
+  `.gitattributes` now pins those fixtures to LF. Development only: no
+  packaged code changes.
 
 ## [0.9.1] — 2026-11-13
 
