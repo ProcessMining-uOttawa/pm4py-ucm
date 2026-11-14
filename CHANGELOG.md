@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Two more bundled sample logs**, both CSV, in `web/samples/`:
+  `Procure-to-Pay` (608 cases, 9,119 events, 24 activities, with start and
+  complete timestamps, roles and resources) and `RefundProcess` (1,338
+  cases, 9,032 events, 32 activities, with a `Channel` case attribute to
+  partition on). Their columns are auto-detected, so *Load sample* mines
+  them without touching the column mapping.
+
+### Changed
+
+- **`devlog` sample log now covers two development periods.** The bundled
+  `web/samples/devlog.csv` grows from 285 cases / 8,739 events (v0.2.0 →
+  v0.7.4) to 410 cases / 12,053 events (through v0.9.1), with a new
+  `case:period` attribute (1 or 2) to partition or filter on, and
+  `agent_model` now spanning six model versions. The first 285 cases are
+  unchanged. Source: `results_period2/devlog_all.csv` in
+  [pm4py-ucm-devmining](https://github.com/damyot/pm4py-ucm-devmining).
+
 ## [0.9.1] — 2026-11-13
 
 > **Upgrade notes.** This is a patch release that changes numbers you
