@@ -122,8 +122,12 @@ of his decisions; the code has not been reviewed beyond that.
 - **The budget scales with each model** in families and splits (the
   maintainer's choice over a fixed 15 s, 2026-11-17):
   `scaled_repair_budget`, one second per 50 distinct sequences, 10 s to
-  120 s, the formula the app already used for a single model. Measured on
-  that log with pruning, two runs each:
+  60 s. It is the formula the app already used for a single model, with
+  the maintainer's lower ceiling (60 s, not 120 s; same day). The app's
+  pruning pass (`_pruned_tree`) calls the same function. `_mine`'s own
+  replay of a single model keeps its released 120 s ceiling: it was not
+  part of that decision. Measured on that log with pruning, two runs each
+  (the largest model gets 26 s, so the ceiling plays no part in them):
 
   | Budget per model | Total | Uncounted | Paths removed |
   |---|---|---|---|

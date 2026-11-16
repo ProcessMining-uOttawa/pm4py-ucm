@@ -630,14 +630,17 @@ def _pruned_tree(
     )
     parses = _parse_table(log_bytes, log_kind, csv_columns, noise_threshold,
                           filter_spec, _file_hash, prune_spec=())
-    # Same proportionate alignment budget as _mine (see the note there).
+    # An alignment budget in proportion to the log (see the note in
+    # _mine), from the library's own rule so the pruning pass is budgeted
+    # the same way for one model, a split or a family.
+    from pm4py_ucm.algo.traversal import scaled_repair_budget
     profile, _ = _screen_log(log_bytes, log_kind, csv_columns, filter_spec,
                              _file_hash)
-    budget = min(120.0, max(10.0, profile.seq_variants / 50.0))
+    budget, per_sequence = scaled_repair_budget(profile.seq_variants)
     stats = pm4py_ucm.compute_traversal_stats(
         tree, log, parses=parses,
         max_repair_seconds=budget,
-        max_repair_seconds_per_sequence=max(1.0, budget / 20.0),
+        max_repair_seconds_per_sequence=per_sequence,
     )
     min_cases, min_share, drop_cases = prune_spec
     res = pm4py_ucm.prune_infrequent_paths(

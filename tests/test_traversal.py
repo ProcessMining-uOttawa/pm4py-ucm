@@ -748,7 +748,8 @@ def test_scaled_repair_budget_has_a_floor_a_slope_and_a_ceiling():
     assert tv.scaled_repair_budget(0) == (10.0, 1.0)
     assert tv.scaled_repair_budget(500) == (10.0, 1.0)      # still the floor
     assert tv.scaled_repair_budget(1300) == (26.0, 1.3)
-    assert tv.scaled_repair_budget(10 ** 6) == (120.0, 6.0)
+    assert tv.scaled_repair_budget(2500) == (50.0, 2.5)
+    assert tv.scaled_repair_budget(10 ** 6) == (60.0, 3.0)
 
 
 def test_auto_budget_is_resolved_from_the_distinct_sequences(monkeypatch):

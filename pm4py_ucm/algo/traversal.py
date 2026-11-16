@@ -532,7 +532,7 @@ def _aligned_paths_petri(
 
 #: Bounds of the size-scaled alignment budget, in seconds.
 REPAIR_BUDGET_MIN = 10.0
-REPAIR_BUDGET_MAX = 120.0
+REPAIR_BUDGET_MAX = 60.0
 #: Distinct sequences that buy one second of it.
 REPAIR_SEQUENCES_PER_SECOND = 50.0
 
@@ -545,7 +545,7 @@ def scaled_repair_budget(n_sequences: int) -> Tuple[float, float]:
     A fixed budget is generous on a small log and stingy on a large one:
     alignment works through the sequences that did not fit, so its work
     grows with them. One second per 50 distinct sequences, never under
-    10 s (the fixed default) nor over 120 s, with a twentieth of it, at
+    10 s (the fixed default) nor over 60 s, with a twentieth of it, at
     least 1 s, for any single sequence.
 
     Measured on an 11-model split of a 10,004-case log, where most models

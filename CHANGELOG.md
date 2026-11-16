@@ -23,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   net-based search remains the fallback for a tree that is not a PM4Py
   `ProcessTree`.
 - **Family and split models scale the alignment budget to each model**
-  (one second per 50 distinct activity sequences, between 10 s and 120 s)
+  (one second per 50 distinct activity sequences, between 10 s and 60 s)
   instead of a fixed 10 s per model, in the pruning pass and in the
   replay. Small models are unaffected; large ones get the time they need.
   On the same log: about 134 s in all, about 93 cases uncounted.
