@@ -83,8 +83,22 @@ of his decisions; the code has not been reviewed beyond that.
   log + filter + noise threshold in a session** (`_prune_warm_fp`), not on
   every rerun: as a cache hit it still unpickles the whole table. Measured
   on the claims sample a rerun costs about 0.6 s with or without pruning,
-  so this is a precaution for large logs; the maintainer's report of a
-  slow rerun after changing the diagram height was not reproduced.
+  so this is a precaution for large logs.
+- **The maintainer's slow refresh after changing the diagram height**
+  (his journey log: 10,004 cases, 4,474 variants, split on an 11-value
+  attribute, 2% and 5 cases) was measured with temporary timing markers.
+  A height change costs about 0.4 s server-side while the mine is cached,
+  eight times out of eight, with identical mining arguments. The split
+  mine itself costs about 150 s with pruning and 92 s without. So a slow
+  refresh there is a re-mine, and nothing in a height change triggers
+  one; the likely trigger is the cache being invalidated by the code
+  edits and server restarts of this session (Streamlit re-runs a cached
+  function whose source changed). Not proven.
+- **Pruning with repaired counts is not deterministic.** On that log the
+  same settings removed 173 paths in one mine and 172 in the next,
+  because the alignment repair is bounded by wall-clock time and the
+  repaired counts feed the thresholds. Open: prune from fitting cases
+  only, or give the repair a budget that does not depend on the clock.
 - Three registry parameters (`prune_min_cases`, `prune_min_share`,
   `prune_drop_cases`), restored in `_apply_project_config`, emitted by the
   code export (`prune_tree`, `prune_arg`).
