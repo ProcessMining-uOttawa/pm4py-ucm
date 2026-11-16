@@ -616,10 +616,13 @@ def _pruned_tree(
     then reuses: moving a control re-prunes, it does not replay the
     unpruned tree again.
 
-    Returns ``(tree, summary, dropped_case_ids)``; the last is empty
-    unless the spec asks to drop the cases that walked a removed path.
-    Only the tree, a few numbers and those ids are cached here, never the
-    log (see :func:`_model_tree`).
+    Returns ``(tree, summary, dropped_case_ids, repair_hints)``. The ids
+    are empty unless the spec asks to drop the cases that walked a removed
+    path. The hints are the nearest paths found for the non-fitting
+    sequences on the unpruned tree, which the replay on the pruned tree
+    reuses instead of aligning those sequences a second time. Only the
+    tree, a few numbers, those ids and those paths are cached here, never
+    the log (see :func:`_model_tree`).
     """
     log, tree = _log_and_tree(
         log_bytes, log_kind, csv_columns, noise_threshold, filter_spec,
@@ -643,7 +646,7 @@ def _pruned_tree(
     dropped = tuple(res.dropped_case_ids(log)) if drop_cases else ()
     summary = _prune_summary(prune_spec, [res], stats.total_cases,
                              len(dropped))
-    return res.tree, summary, dropped
+    return res.tree, summary, dropped, res.repair_hints
 
 
 def _model_tree(log_bytes: bytes, log_kind: str, csv_columns,
@@ -667,7 +670,7 @@ def _model_tree(log_bytes: bytes, log_kind: str, csv_columns,
     if prune_spec:
         if _status is not None:
             _status.update(label="Removing infrequent paths...")
-        tree, _, dropped = _pruned_tree(
+        tree, _, dropped, _ = _pruned_tree(
             log_bytes, log_kind, csv_columns, noise_threshold, filter_spec,
             prune_spec, file_hash)
         log = _without_cases(log, dropped)
@@ -932,6 +935,12 @@ def _mine(
             tree, log, progress_callback=_progress, parses=_parses,
             max_repair_seconds=_repair_budget,
             max_repair_seconds_per_sequence=_repair_per_seq,
+            # After a pruning, most non-fitting sequences were already
+            # aligned on the unpruned tree; a cache hit, see _model_tree.
+            repair_hints=(_pruned_tree(
+                log_bytes, log_kind, csv_columns, noise_threshold,
+                filter_spec, prune_spec, _file_hash)[3]
+                if prune_spec else None),
         )
 
     if overlay_nodes or overlay_edges:
@@ -991,7 +1000,7 @@ def _mine(
         }
     if prune_spec:
         # A cache hit: _model_tree above has just computed it.
-        _, out["prune"], out["dropped_case_ids"] = _pruned_tree(
+        _, out["prune"], out["dropped_case_ids"], _ = _pruned_tree(
             log_bytes, log_kind, csv_columns, noise_threshold, filter_spec,
             prune_spec, _file_hash)
     return out

@@ -133,6 +133,13 @@ class TraversalStats:
     #: model — see :mod:`pm4py_ucm.algo.pruning`.
     sequence_nodes: Dict[Tuple[str, ...], frozenset] = field(
         default_factory=dict)
+    #: ``{activity_sequence: repaired path}`` for every non-fitting
+    #: sequence that was counted along an aligned path. Reusable as
+    #: ``repair_hints`` on a tree whose language is a subset of this
+    #: one's (a pruned copy), where a path that still replays is still a
+    #: nearest one.
+    repaired_paths: Dict[Tuple[str, ...], Tuple[str, ...]] = field(
+        default_factory=dict)
 
     @property
     def counted_cases(self) -> int:
@@ -252,6 +259,120 @@ def _replay_sequence(tree, node_ids, seq: Sequence[str], **kwargs):
 # Alignment repair
 # ---------------------------------------------------------------------------
 
+class _AlignTimeout(Exception):
+    """One sequence used up its share of the alignment budget."""
+
+
+class _HeapqWithDeadline:
+    """Stand-in for the ``heapq`` module inside PM4Py's tree aligner.
+
+    That aligner is a plain search loop with no time limit, and a search
+    cannot be interrupted from outside. Its loop pops a heap on every
+    iteration, so a ``heappop`` that looks at a per-thread deadline is a
+    safe place to stop it. With no deadline set (any other caller of the
+    aligner) it behaves exactly like ``heapq``.
+    """
+
+    def __init__(self, real):
+        import threading
+        self._real = real
+        self._local = threading.local()
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+    def set_deadline(self, deadline: Optional[float]) -> None:
+        self._local.deadline = deadline
+
+    def heappop(self, heap):
+        deadline = getattr(self._local, "deadline", None)
+        if deadline is not None and _time.perf_counter() > deadline:
+            raise _AlignTimeout()
+        return self._real.heappop(heap)
+
+
+def _aligned_paths_tree(
+    tree, sequences: List[Tuple[str, ...]],
+    seconds_per_sequence: Optional[float],
+    seconds_total: Optional[float],
+    ticker=None,
+) -> Optional[Dict[Tuple[str, ...], Tuple[str, ...]]]:
+    """:func:`_aligned_paths` with PM4Py's aligner for process trees.
+
+    The tree was mined as a tree, so searching it directly avoids the
+    Petri net and its state-equation heuristic, whose linear program is
+    solved at every search state. On a tree with wide parallel blocks the
+    difference is not marginal: measured on an 11-model split of a
+    10,000-case log, the net-based search aligned 2 to 18 sequences per
+    model before a 10 s budget ran out, and this one aligned all of them
+    at 30 to 95 ms each. The result is an optimal alignment either way.
+
+    Returns ``None`` when it cannot be used at all (PM4Py without this
+    aligner, or a tree that is not a PM4Py ``ProcessTree``), so the
+    caller falls back to the net-based search.
+    """
+    try:
+        from pm4py.algo.conformance.alignments.process_tree.variants import (
+            search_graph_pt as _sg,
+        )
+        from pm4py.objects.process_tree.obj import ProcessTree
+        from pm4py.objects.process_tree.utils import generic as _pt_util
+    except Exception:
+        return None
+    if not isinstance(tree, ProcessTree):
+        return None
+    try:
+        leaves = frozenset(_pt_util.get_leaves_as_tuples(tree))
+    except Exception:
+        return None
+
+    # The per-sequence limit needs the deadline-aware heap (see
+    # _HeapqWithDeadline). If PM4Py's loop ever stops using ``heapq`` the
+    # limit is simply not enforced; the overall budget below still is,
+    # between sequences.
+    guard = getattr(_sg, "heapq", None)
+    if guard is not None and not isinstance(guard, _HeapqWithDeadline):
+        guard = _sg.heapq = _HeapqWithDeadline(guard)
+
+    out: Dict[Tuple[str, ...], Tuple[str, ...]] = {}
+    started = _time.perf_counter()
+    for seq in sequences:
+        now = _time.perf_counter()
+        if seconds_total is not None and now - started >= seconds_total:
+            if ticker is not None:
+                ticker.finish()
+            break
+        if ticker is not None:
+            ticker.tick()
+        if guard is not None:
+            guard.set_deadline(None if seconds_per_sequence is None
+                               else now + float(seconds_per_sequence))
+        try:
+            result = _sg.align_variant(seq, leaves, tree)
+        except _AlignTimeout:
+            continue
+        except Exception:
+            continue
+        finally:
+            if guard is not None:
+                guard.set_deadline(None)
+        moves = (result or {}).get("alignment") or []
+        # The model side of a move is the tree leaf it fires (``label``
+        # is None for a silent one), or ``>>`` for a log-only move.
+        path = []
+        for move in moves:
+            if not (isinstance(move, (tuple, list)) and len(move) == 2):
+                continue
+            model = move[1]
+            if model is None or isinstance(model, str):
+                continue
+            label = getattr(model, "label", None)
+            if label is not None:
+                path.append(label)
+        out[seq] = tuple(path)
+    return out
+
+
 def _aligned_paths(
     tree, sequences: List[Tuple[str, ...]],
     weights: Optional[Dict[Tuple[str, ...], int]] = None,
@@ -261,6 +382,39 @@ def _aligned_paths(
 ) -> Dict[Tuple[str, ...], Tuple[str, ...]]:
     """Align each non-fitting sequence to its nearest path through the
     model, returning ``{original_sequence: repaired_sequence}``.
+
+    Searches the process tree directly (:func:`_aligned_paths_tree`) and
+    falls back to the Petri-net search (:func:`_aligned_paths_petri`)
+    only where that is not available. Both honour the same two limits
+    and the same ordering, described there.
+    """
+    sequences = [s for s in sequences if s]
+    if not sequences:
+        return {}
+    if weights:
+        # Heaviest first: if the budget runs out, it has bought the most
+        # cases it could.
+        sequences = sorted(sequences, key=lambda s: -weights.get(s, 0))
+    out = _aligned_paths_tree(tree, sequences, seconds_per_sequence,
+                              seconds_total, ticker)
+    if out is not None:
+        return out
+    return _aligned_paths_petri(
+        tree, sequences, weights=weights,
+        seconds_per_sequence=seconds_per_sequence,
+        seconds_total=seconds_total, ticker=ticker)
+
+
+def _aligned_paths_petri(
+    tree, sequences: List[Tuple[str, ...]],
+    weights: Optional[Dict[Tuple[str, ...], int]] = None,
+    seconds_per_sequence: Optional[float] = 1.0,
+    seconds_total: Optional[float] = 10.0,
+    ticker=None,
+) -> Dict[Tuple[str, ...], Tuple[str, ...]]:
+    """Align each non-fitting sequence to its nearest path through the
+    model **via its Petri net**, returning ``{original_sequence:
+    repaired_sequence}``. The fallback of :func:`_aligned_paths`.
 
     Repaired paths contain only the *model*'s moves, so replaying one is
     guaranteed to fit. Sequences that cannot be aligned are omitted
@@ -387,6 +541,7 @@ def compute_traversal_stats(
     coarsen_loops: bool = True,
     progress_callback=None,
     parses: "Optional[_parses.ParseTable]" = None,
+    repair_hints: Optional[Dict[Tuple[str, ...], Tuple[str, ...]]] = None,
 ) -> TraversalStats:
     """Count how often each part of ``tree`` is traversed by ``log``.
 
@@ -429,6 +584,16 @@ def compute_traversal_stats(
         Variant clustering needs exactly the same parses, so a caller
         doing both can replay the log once and share the table instead of
         paying the dominant cost twice. Must come from the same tree.
+    repair_hints
+        ``{activity_sequence: repaired path}`` from an earlier call
+        (:attr:`TraversalStats.repaired_paths`) on a tree **whose language
+        contains this tree's** — the tree this one was pruned from. A
+        non-fitting sequence whose hinted path still replays here is
+        counted along it without being aligned again: a nearest path of
+        the larger model that the smaller one still allows is a nearest
+        path of the smaller one too. Hints that no longer replay are
+        ignored and the sequence is aligned as usual. Do not pass hints
+        from an unrelated tree.
 
     Returns
     -------
@@ -492,8 +657,22 @@ def compute_traversal_stats(
             )
 
     # Repair the rest, unless switched off or too expensive to be worth
-    # blocking on.
+    # blocking on. A hinted path that still replays needs no search.
     repaired_paths: Dict[Tuple[str, ...], Tuple[str, ...]] = {}
+    hinted: Dict[Tuple[str, ...], Any] = {}
+    if repair and repair_hints and nofit:
+        still: List[Tuple[str, ...]] = []
+        for seq in nofit:
+            hint = repair_hints.get(seq)
+            result = (_replay_sequence(tree, node_ids, hint,
+                                       coarsen_loops=coarsen_loops)
+                      if hint is not None else None)
+            if result is None:
+                still.append(seq)
+            else:
+                repaired_paths[seq] = tuple(hint)
+                hinted[seq] = result
+        nofit = still
     if repair and nofit and (max_repair_sequences is None
                              or len(nofit) <= max_repair_sequences):
         # Name the budget in the stage label: on a big log this phase can
@@ -503,12 +682,12 @@ def compute_traversal_stats(
         if max_repair_seconds is not None:
             stage += f" (≤{max_repair_seconds:g}s)"
         r_ticker = Ticker(progress_callback, stage, len(nofit))
-        repaired_paths = _aligned_paths(
+        repaired_paths.update(_aligned_paths(
             tree, nofit, weights=sequence_cases,
             seconds_per_sequence=max_repair_seconds_per_sequence,
             seconds_total=max_repair_seconds,
             ticker=r_ticker,
-        )
+        ))
         r_ticker.finish()
 
     # Aggregate. Counts are keyed on the signature, so sequences that
@@ -523,8 +702,8 @@ def compute_traversal_stats(
             if path is None:
                 stats.unexplained_cases += weight
                 continue
-            result = _replay_sequence(tree, node_ids, path,
-                                      coarsen_loops=coarsen_loops)
+            result = hinted.get(seq) or _replay_sequence(
+                tree, node_ids, path, coarsen_loops=coarsen_loops)
             if result is None:
                 # A model path that will not replay would be a bug in the
                 # aligner or the tree; treat it as uncounted rather than
@@ -532,6 +711,7 @@ def compute_traversal_stats(
                 stats.unexplained_cases += weight
                 continue
             stats.repaired_cases += weight
+            stats.repaired_paths[seq] = tuple(path)
         else:
             stats.fitting_cases += weight
 

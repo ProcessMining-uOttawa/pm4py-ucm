@@ -99,6 +99,26 @@ of his decisions; the code has not been reviewed beyond that.
   because the alignment repair is bounded by wall-clock time and the
   repaired counts feed the thresholds. Open: prune from fitting cases
   only, or give the repair a budget that does not depend on the clock.
+  (After the aligner change below: 166 and 169. Fewer cells exhaust the
+  budget, so it is rarer, not gone.)
+- **Where a split's time goes, and the aligner change.** The maintainer
+  asked why "Assembling the split model" was slow. Profiled on that log:
+  mining the 11 trees takes 3 s; the rest was alignment repair, about
+  64 s in the pruning pass and about 57 s again in the assembly's replay.
+  The pruning decision itself costs nothing measurable. The Petri-net A*
+  aligned 2 to 18 sequences per cell before its 10 s budget ran out (each
+  hit the 1 s per-sequence cap). `_aligned_paths` now searches the tree
+  with PM4Py's `search_graph_pt` (30 to 95 ms per sequence, all aligned
+  in most cells), keeps the Petri search as `_aligned_paths_petri` for
+  non-PM4Py trees, and bounds a single sequence through a deadline-aware
+  stand-in for `heapq` in PM4Py's module (`_HeapqWithDeadline`), since
+  that search has no time limit of its own. The pruning pass's alignments
+  are reused in the next replay (`repair_hints`). Result on that log with
+  pruning: about 146 s to about 110 s, uncounted cases about 1,520 to
+  about 470. **This changes traversal numbers on any poorly fitting
+  model**, pruning or not; the changelog says so. What is left is real
+  search time: two cells still exhaust the 10 s budget. Going further
+  means parallel alignment across processes, not tried here.
 - Three registry parameters (`prune_min_cases`, `prune_min_share`,
   `prune_drop_cases`), restored in `_apply_project_config`, emitted by the
   code export (`prune_tree`, `prune_arg`).

@@ -180,6 +180,17 @@ right after it is mined. The dict takes `min_cases`, `min_share`,
 - **Pruning needs a replay of the unpruned tree**, which is the costly
   step on a large log (see [`miner_performance.md`](miner_performance.md)).
   Pass `stats=` to reuse traversal counts you already have for that tree.
+  The costly part of that replay is aligning the cases that do not fit.
+  Those alignments are kept (`PruneResult.repair_hints`) and reused when
+  the log is replayed on the pruned tree: a nearest path that avoided the
+  removed branches is still a nearest path. Only the sequences whose path
+  walked a removed branch, and those the first pass ran out of time for,
+  are aligned again.
+- **The same settings can remove a slightly different set of paths from
+  one run to the next** on a log that fits poorly, because the alignment
+  is bounded by wall-clock time and what it does not reach is not counted.
+  Seen on a 10,004-case log split 11 ways: 166 paths in one run, 169 in
+  the next. It only happens where the budget is exhausted.
 - **Counts on a poorly fitting tree are partly repaired counts.** On a
   model mined with a high noise threshold many cases do not fit, and their
   traversals are those of the nearest path. The pruning decisions are only

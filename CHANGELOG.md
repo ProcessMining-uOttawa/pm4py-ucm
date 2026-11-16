@@ -7,7 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Non-fitting cases are aligned on the process tree itself**, with
+  PM4Py's tree aligner, instead of on the Petri net converted from it. On
+  a tree with wide parallel blocks the net-based search spent its time
+  budget on a handful of sequences; the tree search aligns each in tens
+  of milliseconds. **Numbers change where a model does not fit its log
+  well**: far more cases are counted on their nearest path and far fewer
+  are left uncounted, so traversal counts and the "counted on their
+  closest path" figure rise. Measured on an 11-model split of a
+  10,004-case log: uncounted cases went from about 1,520 to about 470,
+  while the whole run went from about 146 s to about 110 s. Both searches
+  are optimal; they may pick different paths among equally near ones. The
+  net-based search remains the fallback for a tree that is not a PM4Py
+  `ProcessTree`.
+- A split model reports the replay of each value's cases as its own
+  progress stage, instead of sitting on "Assembling the split model" for
+  the whole of it.
+
 ### Added
+
+- `compute_traversal_stats(..., repair_hints=...)` and
+  `TraversalStats.repaired_paths`: the nearest paths found on a tree can
+  be reused on a tree pruned from it. The family and split assemblies and
+  the web app do this after a pruning, so a non-fitting sequence is
+  aligned once, not twice.
 
 - **Removing infrequent paths.** `pm4py_ucm.prune_infrequent_paths(tree,
   log, min_cases=…, min_share=…)` removes from a process tree the branches

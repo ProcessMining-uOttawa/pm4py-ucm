@@ -140,6 +140,12 @@ class PruneResult:
     affected_sequences: Optional[frozenset] = None
     #: Exact number of cases carrying those sequences, or ``None``.
     affected_case_count: Optional[int] = None
+    #: The repaired paths of the traversal counts the pruning was decided
+    #: on. Pass them as ``repair_hints`` when replaying the log on
+    #: :attr:`tree`: every non-fitting sequence whose nearest path avoided
+    #: the removed branches is then counted without a second alignment.
+    repair_hints: Dict[Tuple[str, ...], Tuple[str, ...]] = field(
+        default_factory=dict)
     #: Set by :func:`pm4py_ucm.prune_infrequent_paths`: the log to go on
     #: with — the one passed in, or, with ``drop_cases=True``, that log
     #: without the cases that walked a removed branch.
@@ -479,4 +485,5 @@ def prune_infrequent_paths(
         counted_cases=stats.counted_cases,
         affected_sequences=affected,
         affected_case_count=n_affected,
+        repair_hints=dict(getattr(stats, "repaired_paths", None) or {}),
     )

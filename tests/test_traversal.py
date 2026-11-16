@@ -638,3 +638,103 @@ def test_traversal_metrics_are_absent_without_the_stats():
             assert not any("traversal" in k for k in md)
             if isinstance(n, UCM.RespRef):
                 assert md.get("perf_frequency") == "1"
+
+
+# ---------------------------------------------------------------------------
+# Alignment repair searches the process tree itself
+# ---------------------------------------------------------------------------
+
+def _pm4py_tree():
+    pytest.importorskip("pm4py")
+    from pm4py.objects.process_tree.obj import Operator, ProcessTree
+
+    def node(op=None, label=None, children=()):
+        n = ProcessTree(operator=op, label=label)
+        for c in children:
+            c.parent = n
+        n.children = list(children)
+        return n
+
+    # S ; (A || (B | tau)) ; (C | D) ; E
+    return node(Operator.SEQUENCE, children=[
+        node(label="S"),
+        node(Operator.PARALLEL, children=[
+            node(label="A"),
+            node(Operator.XOR, children=[node(label="B"), node()]),
+        ]),
+        node(Operator.XOR, children=[node(label="C"), node(label="D")]),
+        node(label="E"),
+    ])
+
+
+def test_tree_aligner_repairs_and_agrees_with_the_petri_net_search():
+    tree = _pm4py_tree()
+    nofit = [("S", "A", "E"),            # the C | D choice is missing
+             ("S", "B", "C", "E"),       # A is missing
+             ("S", "A", "X", "C", "E"),  # X is unknown to the model
+             ("A", "S", "D", "E")]       # S and A swapped
+    by_tree = tv._aligned_paths_tree(tree, nofit, 5.0, 60.0)
+    assert by_tree is not None and set(by_tree) == set(nofit)
+    ids = cs.assign_node_ids(tree)
+    for seq, path in by_tree.items():
+        assert tv._replay_sequence(tree, ids, path) is not None, (seq, path)
+    # Same distance from the trace as the net-based optimum: the two may
+    # pick different paths among equally near ones, never a farther one.
+    by_net = tv._aligned_paths_petri(tree, nofit, seconds_total=60.0,
+                                     seconds_per_sequence=10.0)
+    assert set(by_net) == set(nofit)
+
+    def distance(seq, path):
+        # insertions + deletions between the trace and the model path
+        a, b = list(seq), list(path)
+        lcs = [[0] * (len(b) + 1) for _ in range(len(a) + 1)]
+        for i, x in enumerate(a):
+            for j, y in enumerate(b):
+                lcs[i + 1][j + 1] = (lcs[i][j] + 1 if x == y
+                                     else max(lcs[i][j + 1], lcs[i + 1][j]))
+        return len(a) + len(b) - 2 * lcs[-1][-1]
+
+    for seq in nofit:
+        assert distance(seq, by_tree[seq]) == distance(seq, by_net[seq]), seq
+
+
+def test_duck_typed_tree_falls_back_from_the_tree_aligner():
+    tree = _seq(_leaf("A"), _leaf("B"))
+    assert tv._aligned_paths_tree(tree, [("A",)], 1.0, 10.0) is None
+
+
+def test_tree_aligner_honours_the_per_sequence_limit():
+    tree = _pm4py_tree()
+    # A limit that has already passed when the search starts: nothing is
+    # repaired, nothing raises, and the guard is left disarmed.
+    out = tv._aligned_paths_tree(tree, [("S", "A", "E")], -1.0, 60.0)
+    assert out == {}
+    again = tv._aligned_paths_tree(tree, [("S", "A", "E")], 5.0, 60.0)
+    assert set(again) == {("S", "A", "E")}
+
+
+def test_repaired_paths_are_reported_and_reused_as_hints(monkeypatch):
+    tree = _pm4py_tree()
+    log = [["S", "A", "C", "E"]] * 5 + [["S", "A", "E"]] * 2
+    first = tv.compute_traversal_stats(tree, log)
+    assert first.repaired_cases == 2
+    hint = first.repaired_paths[("S", "A", "E")]
+    assert tv._replay_sequence(tree, cs.assign_node_ids(tree), hint)
+
+    # With the hints, the second count needs no alignment at all.
+    def boom(*a, **k):
+        raise AssertionError("aligned again despite a valid hint")
+    monkeypatch.setattr(tv, "_aligned_paths", boom)
+    second = tv.compute_traversal_stats(
+        tree, log, repair_hints=first.repaired_paths)
+    assert second.node_counts == first.node_counts
+    assert second.repaired_cases == 2
+
+
+def test_a_hint_that_no_longer_replays_is_ignored():
+    tree = _pm4py_tree()
+    log = [["S", "A", "C", "E"]] * 5 + [["S", "A", "E"]] * 2
+    stale = {("S", "A", "E"): ("S", "A", "Z", "E")}
+    stats = tv.compute_traversal_stats(tree, log, repair_hints=stale)
+    assert stats.repaired_cases == 2
+    assert stats.repaired_paths[("S", "A", "E")] != ("S", "A", "Z", "E")

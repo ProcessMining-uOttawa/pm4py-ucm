@@ -519,3 +519,43 @@ def test_split_model_is_pruned_per_value():
               for s in ucm.maps[0].nodes if isinstance(s, UCM.Stub)}
     assert counts == {"north": "38", "south": "40"}
     assert fit["fitting_cases"] == fit["total_cases"] == 78
+
+
+def test_pruning_hands_its_alignments_to_the_next_replay(monkeypatch):
+    """A family cell is aligned once: the replay on the pruned tree
+    reuses the paths found when the pruning was decided."""
+    pd = pytest.importorskip("pandas")
+    pytest.importorskip("pm4py")
+    import pm4py_ucm
+
+    rows, t = [], pd.Timestamp("2024-01-01", tz="UTC")
+    traces = ([["a", "b", "d"]] * 40 + [["a", "c", "d"]] * 2
+              + [["a", "d"]] * 3)          # "a d" fits neither branch
+    for region in ("north", "south"):
+        for n, trace in enumerate(traces):
+            for step in trace:
+                t += pd.Timedelta(minutes=5)
+                rows.append({"case:concept:name": f"{region}{n}",
+                             "concept:name": step, "time:timestamp": t,
+                             "region": region})
+    df = pd.DataFrame(rows)
+    fam = pm4py_ucm.discover_ucm_family(
+        df, ["region"], min_cases=1, noise_threshold=0.2,
+        prune={"min_share": 0.1})
+    cell = fam.cells[0]
+    if not cell.prune.repair_hints:
+        pytest.skip("the miner made every trace fit; nothing to reuse")
+    calls = []
+    real = tv._aligned_paths
+
+    def spy(tree, sequences, **kw):
+        calls.append(list(sequences))
+        return real(tree, sequences, **kw)
+    monkeypatch.setattr(tv, "_aligned_paths", spy)
+    pm4py_ucm.assemble_ucm_family(
+        fam, mode="split", node_metrics=["traversal_frequency"],
+        edge_metrics=["traversal_frequency"])
+    realigned = {s for batch in calls for s in batch}
+    reusable = {s for s, p in cell.prune.repair_hints.items()
+                if s not in cell.prune.affected_sequences}
+    assert not (realigned & reusable)
