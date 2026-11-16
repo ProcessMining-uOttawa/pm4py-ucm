@@ -1,6 +1,6 @@
 # Removing infrequent paths
 
-*Design note. Built, unreleased: `pm4py_ucm.prune_infrequent_paths`, and
+*Design note. Built in 0.9.4: `pm4py_ucm.prune_infrequent_paths`, and
 the web app's **Infrequent paths** controls.*
 
 Log filters, decomposition and the split model all reduce what a model has

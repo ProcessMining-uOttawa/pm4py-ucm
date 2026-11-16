@@ -1,6 +1,16 @@
-# Handoff — after 0.9.3
+# Handoff — after 0.9.4
 
-**0.9.3 is released.** It adds the **split model** (one model per value of
+**0.9.4 is released.** It adds the **removal of infrequent paths**
+(`prune_infrequent_paths`, and the web app's *Infrequent paths* section:
+PR #156), in one model, a split model and a family, with the choice of
+keeping or dropping the cases concerned. It also changes how non-fitting
+cases are aligned (on the process tree, with PM4Py's tree aligner) and
+scales the alignment budget of split and family models to their size. It
+ships at patch level at the maintainer's request although it adds a
+public function and changes traversal numbers on poorly fitting models;
+the changelog section opens with the upgrade notes.
+
+Before it, 0.9.3 added the **split model** (one model per value of
 a case attribute, under a root map with one stub per value, issue #152),
 the **CSV start timestamp** (a CSV can be an interval log, #153), a
 **Graphviz fallback** for maps `dot` cannot lay out, *Add all* in the
@@ -41,11 +51,11 @@ parse), and 0.8.0–0.8.3 delivered scenario simulation, coverage and A/B compar
 the validation gates, the variant-filtered log export, and the release
 tooling described below.
 
-## In progress: removing infrequent paths (unreleased)
+## What 0.9.4 did: removing infrequent paths (PR #156)
 
-On the branch `feature/prune-infrequent-paths`, in a pull request. Built
-in one session (2026-11-16) from the maintainer's request and two rounds
-of his decisions; the code has not been reviewed beyond that.
+Built in one session (2026-11-16 and 17) from the maintainer's request and
+several rounds of his decisions; the code has not been reviewed beyond
+that.
 
 - `pm4py_ucm/algo/pruning.py` and `pm4py_ucm.prune_infrequent_paths`
   prune the **process tree** from the traversal counts; the conversion is
@@ -163,17 +173,18 @@ of his decisions; the code has not been reviewed beyond that.
 
 ## State on arrival
 
-- `main` carries 0.9.3. **Check the tag and PyPI
+- `main` carries 0.9.4. **Check the tag and PyPI
   before assuming it is live**: `git tag --sort=-v:refname | head -1` and
   `pip index versions pm4py-ucm`. The upload waits at the `pypi`
   environment gate for the maintainer's approval, so `main` can read
-  0.9.3 while PyPI still serves 0.9.2.
+  0.9.4 while PyPI still serves 0.9.3.
+- 0.9.4 holds PR #156 (see "What 0.9.4 did").
 - 0.9.3 holds PRs #150, #151 and #154 (see "What 0.9.3 did").
 - 0.9.2 holds the sample logs (PR #148) and a `.gitattributes` that pins
   `tests/fixtures/*.jucm` to LF.
 - 0.9.1 holds the `docs/` index (PR #143), the documentation audit
   (PR #145) and the fixes for the code defects it reported (PR #146).
-- All three version sites read **0.9.3** and are kept in lock-step by a test:
+- All three version sites read **0.9.4** and are kept in lock-step by a test:
   `pyproject.toml`, `pm4py_ucm/__init__.py`, `web/sessions/codegen.py`
   (`GENERATOR_VERSION`).
 - `CHANGELOG.md`'s `[Unreleased]` is empty.
@@ -691,6 +702,12 @@ Carried forward because each one bit during development:
   with itself.
 - **Point drift guards at the app people actually run.** The "every registry
   parameter is saved and restored" tests parsed V5 long after V6 replaced it.
+- **Graphviz does not render one source to the same bytes twice.** 8.0.3
+  on Windows emits a graph's clusters in a varying order, and their
+  `clustN` ids follow. A test comparing two renders byte for byte failed
+  two runs in three on the maintainer's machine while CI stayed green; it
+  held up the 0.9.4 release until the comparison was made order-insensitive
+  (`_drawing` in `tests/test_dot_fallback.py`).
 - **Merging two PRs that both edit `CHANGELOG.md` under `[Unreleased]`
   conflicts**, however disjoint the code is.
 - Docs-only merges can skip CI with `[skip ci]` in the **merge commit** subject

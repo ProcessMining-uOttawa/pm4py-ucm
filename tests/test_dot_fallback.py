@@ -117,6 +117,16 @@ def test_a_missing_graphviz_is_not_a_layout_failure():
         _dot._retry(_Graph(), run)
 
 
+def _drawing(svg: bytes):
+    """An SVG as the sorted list of its lines, with Graphviz's running
+    element numbers blanked: equal for two renders of one drawing, even
+    when the elements were emitted in a different order."""
+    import re
+    text = re.sub(r'id="(clust|node|edge)\d+"', r'id="\1"',
+                  svg.decode("utf-8"))
+    return sorted(text.splitlines())
+
+
 @pytest.mark.skipif(shutil.which("dot") is None, reason="needs Graphviz")
 def test_the_declustered_picture_of_a_real_model_still_draws():
     import pandas as pd
@@ -137,5 +147,10 @@ def test_the_declustered_picture_of_a_real_model_still_draws():
     svg = flat.pipe(format="svg").decode("utf-8")
     assert svg.rstrip().endswith("</svg>")
     assert "Component boxes are omitted" in svg
-    # And the ordinary path is unchanged: same bytes as a direct pipe.
-    assert _dot.pipe(gviz, "svg") == gviz.pipe(format="svg")
+    # And the ordinary path is unchanged: the same drawing as a direct
+    # pipe. Not the same bytes: Graphviz does not emit the clusters of one
+    # source in a fixed order (8.0.3 on Windows gave two outputs for eight
+    # renders), and their ``clustN`` ids follow that order. So compare the
+    # elements, whatever order and numbering they came out in.
+    assert (_drawing(_dot.pipe(gviz, "svg"))
+            == _drawing(gviz.pipe(format="svg")))

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.4] — 2026-11-17
+
+**Upgrade notes.** This is a patch release that adds a feature and changes
+numbers you may see:
+
+- **Traversal counts change on a model that fits its log poorly.** The
+  cases that do not fit are now aligned on the process tree itself, which
+  reaches far more of them inside the same time budget: more cases are
+  counted on their nearest path, fewer are left uncounted, and the
+  traversal metrics and the "counted on their closest path" figure rise
+  accordingly. A model that fits its log well shows the same numbers as
+  before. There is no switch back to the previous search for a PM4Py
+  tree.
+- **Split and family models may take longer on a large cell**, and count
+  more of it: the alignment budget of each model now scales with its
+  number of distinct activity sequences (10 s to 60 s) instead of a fixed
+  10 s.
+- **The replay prompts of the web app are reworded** ("Run the replay",
+  "Skip the replay"), since the replay now serves the removal of
+  infrequent paths as well as the metrics.
+
 ### Changed
 
 - **Non-fitting cases are aligned on the process tree itself**, with

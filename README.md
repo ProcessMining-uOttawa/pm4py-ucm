@@ -992,6 +992,25 @@ cases; the root map shows the number of cases per value. The same model
 is `assemble_ucm_family(family, mode="split")` on a family mined on that
 one attribute.
 
+A model that stays hard to read because of **branches few cases take** can
+be pruned. This works on the process tree, from the replay-based traversal
+counts, and removes whole regions so that forks and joins left with one
+branch disappear:
+
+```python
+tree = pm4py.discover_process_tree_inductive(log, noise_threshold=0.0)
+result = pm4py_ucm.prune_infrequent_paths(
+    tree, log, min_share=0.05, min_cases=5)
+ucm = pm4py_ucm.convert_to_ucm(result.tree, decomposition="auto")
+```
+
+`result.removed` lists what went and why. The cases that took a removed
+path are kept by default; `drop_cases=True` returns the log without them
+as `result.log`. `discover_ucm_family` and `discover_ucm_by_attribute`
+take `prune={"min_share": 0.05, ...}` and prune every model from its own
+cases. See
+[`docs/infrequent_paths.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/infrequent_paths.md).
+
 Full documentation — partitioning policy, skeleton merge rules, the split
 model, dedup/conditions, path scenarios, grid resolution, value filtering —
 in [`docs/model_families.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/model_families.md). The web app's
