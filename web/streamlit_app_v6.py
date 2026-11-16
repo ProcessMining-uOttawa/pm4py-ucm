@@ -3958,13 +3958,20 @@ def _apply_project_config(cfg, fh, csv_columns=None):
         ss["cfg_min_support"] = float(cfg["min_support"])
     # Same reason: the Infrequent paths controls sit in the sidebar above
     # the log gate. A project saved before they existed leaves them off.
-    if "prune_min_share" in cfg:
-        ss["cfg_prune_share"] = int(round(
-            max(0.0, min(0.5, float(cfg["prune_min_share"] or 0))) * 100))
-    if "prune_min_cases" in cfg:
-        ss["cfg_prune_cases"] = max(0, int(cfg["prune_min_cases"] or 0))
-    if "prune_drop_cases" in cfg:
-        ss["cfg_prune_drop"] = bool(cfg["prune_drop_cases"])
+    # The section is a toggle: open (and on) exactly when the project has a
+    # threshold. Its three settings are rendered only while it is open, so
+    # each is written both to its widget key (in case it is open now) and
+    # to the durable mirror _sticky reads when it opens later.
+    _pr_share = int(round(max(0.0, min(
+        0.5, float(cfg.get("prune_min_share") or 0))) * 100))
+    _pr_cases = max(0, int(cfg.get("prune_min_cases") or 0))
+    _pr_drop = bool(cfg.get("prune_drop_cases"))
+    for _pk, _pv in (("cfg_prune_share", _pr_share),
+                     ("cfg_prune_cases", _pr_cases),
+                     ("cfg_prune_drop", _pr_drop)):
+        ss[_pk] = _pv
+        _sticky_seed(_pk, _pv)
+    ss["cfg_prune_on"] = bool(_pr_share or _pr_cases)
     if "notation" in cfg:
         ss["cfg_notation"] = "BPMN" if cfg["notation"] == "bpmn" else "UCM"
     if "decomposition" in cfg:
@@ -4264,50 +4271,72 @@ with st.sidebar:
     # A container reserves the position now and is filled in below.
     _transforms_slot = st.container()
 
-    st.subheader(":material/content_cut: Infrequent paths")
-    st.session_state.setdefault("cfg_prune_share", 0)
-    st.session_state.setdefault("cfg_prune_cases", 0)
-    _prune_share_pct = st.slider(
-        "Minimum branch share (%)", min_value=0, max_value=50, step=1,
-        key="cfg_prune_share",
-        help=(
-            "Removes from the mined model every branch taken less often "
-            "than this at its decision point: a branch of a choice, a "
-            "rarely taken skip, or a rarely taken repeat of a loop. Forks "
-            "and joins left with one branch disappear, and so does an "
-            "optional parallel branch that is almost never taken. The most "
-            "frequent branch of a choice is always kept. 0 = off.\n\n"
-            "Unlike the noise threshold, this acts on the finished model, "
-            "using how often the log actually walks each branch, so the "
-            "structure of what remains does not change. In a split model "
-            "and in the Family and Compare views, every model is judged on "
-            "its own cases."
-        ),
+    # One control that both discloses the section and switches it on, as
+    # for Log filters (see the note there): shut and off, or open and on.
+    # The three settings are only rendered while it is open, and Streamlit
+    # drops the state of a widget it does not render, so they are mirrored
+    # with _sticky: closing the section and opening it again brings back
+    # the thresholds that were set.
+    st.session_state.setdefault("cfg_prune_on", False)
+    _prune_on = st.checkbox(
+        ":material/content_cut: Infrequent paths", key="cfg_prune_on",
+        help="Remove from the mined model the paths few cases take. "
+             "Opening this shows the thresholds; closing it switches the "
+             "removal off and remembers them. It applies to every view "
+             "(Model, Scenarios, Family, Compare, Dashboards).",
     )
-    _prune_min_cases = st.number_input(
-        "Minimum cases per branch", min_value=0, step=1,
-        key="cfg_prune_cases",
-        help=(
-            "Also removes a branch that fewer than this many cases take, "
-            "whatever its share. Useful against a branch that is half of "
-            "a decision only a handful of cases ever reach. 0 = off."
-        ),
-    )
-    st.session_state.setdefault("cfg_prune_drop", False)
-    _prune_drop = st.checkbox(
-        "Drop the cases on removed paths", key="cfg_prune_drop",
-        disabled=not (_prune_min_cases or _prune_share_pct),
-        help=(
-            "What happens to the cases that took a removed path.\n\n"
-            "**Off (keep):** they stay in the log. They no longer fit the "
-            "model exactly, which the fit note reports, and their counts "
-            "land on the closest remaining path.\n\n"
-            "**On (drop):** they are left out, as a log filter would do. "
-            "The removal then makes no remaining case non-fitting, "
-            "percentages add up over them, and the counts, times, "
-            "scenarios and dashboards all describe that smaller set."
-        ),
-    )
+    _prune_share_pct, _prune_min_cases = 0, 0
+    _prune_drop = bool(_sticky_get("cfg_prune_drop", False))
+    if _prune_on:
+        _sticky("cfg_prune_share", lambda: 0)
+        _prune_share_pct = st.slider(
+            "Minimum branch share (%)", min_value=0, max_value=50, step=1,
+            key="cfg_prune_share",
+            help=(
+                "Removes from the mined model every branch taken less often "
+                "than this at its decision point: a branch of a choice, a "
+                "rarely taken skip, or a rarely taken repeat of a loop. Forks "
+                "and joins left with one branch disappear, and so does an "
+                "optional parallel branch that is almost never taken. The most "
+                "frequent branch of a choice is always kept. 0 = off.\n\n"
+                "Unlike the noise threshold, this acts on the finished model, "
+                "using how often the log actually walks each branch, so the "
+                "structure of what remains does not change. In a split model "
+                "and in the Family and Compare views, every model is judged on "
+                "its own cases."
+            ),
+        )
+        _sticky_save("cfg_prune_share")
+        _sticky("cfg_prune_cases", lambda: 0)
+        _prune_min_cases = st.number_input(
+            "Minimum cases per branch", min_value=0, step=1,
+            key="cfg_prune_cases",
+            help=(
+                "Also removes a branch that fewer than this many cases take, "
+                "whatever its share. Useful against a branch that is half of "
+                "a decision only a handful of cases ever reach. 0 = off."
+            ),
+        )
+        _sticky_save("cfg_prune_cases")
+        _sticky("cfg_prune_drop", lambda: False)
+        _prune_drop = st.checkbox(
+            "Drop the cases on removed paths", key="cfg_prune_drop",
+            disabled=not (_prune_min_cases or _prune_share_pct),
+            help=(
+                "What happens to the cases that took a removed path.\n\n"
+                "**Off (keep):** they stay in the log. They no longer fit the "
+                "model exactly, which the fit note reports, and their counts "
+                "land on the closest remaining path.\n\n"
+                "**On (drop):** they are left out, as a log filter would do. "
+                "The removal then makes no remaining case non-fitting, "
+                "percentages add up over them, and the counts, times, "
+                "scenarios and dashboards all describe that smaller set."
+            ),
+        )
+        _sticky_save("cfg_prune_drop")
+        if not (_prune_min_cases or _prune_share_pct):
+            st.caption("Set a threshold above to remove paths.")
+
     prune_spec_wanted = _prune_spec(_prune_min_cases, _prune_share_pct,
                                     _prune_drop)
 

@@ -28,9 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ModelFamily.pruned_cases` / `pruned_case_ids` report it.
 - `TraversalStats` records, per distinct activity sequence, its number of
   cases (`sequence_cases`) and the tree nodes it walks (`sequence_nodes`).
-- **Web app: *Infrequent paths* controls** in the sidebar (*Minimum branch
-  share (%)*, *Minimum cases per branch*, *Drop the cases on removed
-  paths*). Every view uses them: the Model, Scenarios and Dashboards
+- **Web app: *Infrequent paths* controls** in the sidebar, a section that
+  opens and switches on with one checkbox, as *Log filters* does (*Minimum
+  branch share (%)*, *Minimum cases per branch*, *Drop the cases on
+  removed paths*). Every view uses them: the Model, Scenarios and Dashboards
   views, a split model, and the Family and Compare views, where each model
   is judged on its own cases. The Model, Family and Compare views say what
   was removed. Saved with a project (`prune_min_cases`, `prune_min_share`,

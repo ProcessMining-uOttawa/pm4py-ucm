@@ -192,9 +192,12 @@ right after it is mined. The dict takes `min_cases`, `min_share`,
 
 ## 7. In the web app
 
-The sidebar's **Infrequent paths** section, under the miner settings, has
-*Minimum branch share (%)*, *Minimum cases per branch* and the checkbox
-*Drop the cases on removed paths*. Both thresholds at 0 is off.
+The sidebar's **Infrequent paths** checkbox, under the miner settings,
+works like *Log filters*: ticking it opens the section and switches the
+removal on, unticking it closes the section and switches it off. Inside
+are *Minimum branch share (%)*, *Minimum cases per branch* and the
+checkbox *Drop the cases on removed paths*; both thresholds at 0 removes
+nothing. Closing the section remembers its settings for the session.
 
 - **Every view uses it.** The Model, Scenarios and Dashboards views use
   the pruned tree, so scenarios, behavioural variants and the fitness
@@ -216,6 +219,8 @@ The sidebar's **Infrequent paths** section, under the miner settings, has
 - A saved project stores `prune_min_cases`, `prune_min_share` (the share
   as a fraction) and `prune_drop_cases`, and the exported script
   reproduces the pruning through its `prune_tree` and `prune_arg` helpers.
+  Saved while the section is closed, the thresholds are stored as 0; a
+  project opens the section exactly when it has a threshold.
 
 ## 8. Not built
 

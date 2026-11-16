@@ -71,6 +71,10 @@ of his decisions; the code has not been reviewed beyond that.
   on, the cells and `family.log_df` lose the dropped cases; the app's
   download-only assemblies re-attach the log through
   `_attach_family_log`, which removes them again.
+- The sidebar section is a disclosure checkbox (`cfg_prune_on`), like
+  *Log filters*, at the maintainer's request: its three widgets render
+  only while it is open, so they use the `_sticky` mirror, and a project
+  restore writes both the widget keys and the mirror.
 - Three registry parameters (`prune_min_cases`, `prune_min_share`,
   `prune_drop_cases`), restored in `_apply_project_config`, emitted by the
   code export (`prune_tree`, `prune_arg`).
