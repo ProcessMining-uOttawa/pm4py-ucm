@@ -114,6 +114,7 @@ from pm4py_ucm.algo.discovery.scenarios import synthesis as _scenarios
 from pm4py_ucm.algo.discovery.variants import clustering as _clustering_mod
 from pm4py_ucm.visualization.ucm import visualizer as _visualizer
 from pm4py_ucm.visualization.ucm import stacked as _stacked
+from pm4py_ucm.visualization.ucm import dot as _dotmod
 from pm4py_ucm.visualization.ucm import svg as _svgmod
 
 # Pillow's default decompression-bomb guard (~178M px) rejects very
@@ -168,13 +169,19 @@ _NONE_OPT = "(none)"
 _SIM_MODES = {"coverage": "Coverage", "compare": "Compare A vs B"}
 
 # (session key, candidate names, include_none flag). Used by the CSV
-# column auto-detection.
+# column auto-detection. The first five rows are, in order, the first five
+# elements of ``csv_columns``; the start timestamp is the optional seventh
+# (see ``_csv_mapping_tuple``).
 _CSV_AUTOPICK = [
     ("csv_case",      ("case:concept:name", "case_id", "case", "caseid"),            False),
     ("csv_activity",  ("concept:name", "activity", "activityname", "event", "task"), False),
-    ("csv_timestamp", ("time:timestamp", "timestamp", "time", "datetime", "date"),   False),
+    ("csv_timestamp", ("time:timestamp", "timestamp", "time", "datetime", "date",
+                       "complete timestamp", "complete_timestamp",
+                       "end_timestamp", "end timestamp", "end_time", "end"),         False),
     ("csv_role",      ("org:role", "role"),                                          True),
     ("csv_resource",  ("org:resource", "resource", "user", "performer"),             True),
+    ("csv_start",     ("start_timestamp", "start timestamp", "start_time",
+                       "start time", "starttime", "start"),                          True),
 ]
 
 
@@ -260,7 +267,38 @@ def _seed_csv_selectors(columns):
         st.session_state[key] = _autopick_column(
             columns, cands, include_none=with_none, fallback_index=i,
         )
+    # The completion timestamp falls back to a position when no name
+    # matches, and that position can be the start column itself.
+    if st.session_state["csv_start"] == st.session_state["csv_timestamp"]:
+        st.session_state["csv_start"] = _NONE_OPT
     st.session_state["csv_dayfirst"] = False
+
+
+def _csv_mapping_tuple(case_col, activity_col, ts_col, role_col, resource_col,
+                       dayfirst=False, start_col=""):
+    """The ``csv_columns`` value for a mapping, in its shortest form.
+
+    Five names; a sixth element (``True``) only when dates are read
+    day-first; a seventh (the start-timestamp column) only when one is
+    mapped, the sixth then being the day-first flag either way. The optional
+    tail keeps a mapping saved before either option existed equal to the one
+    the panel rebuilds for it, so an old project does not reopen on
+    "unapplied changes", and an older app reading a newer project still
+    finds what it knows at the positions it knows.
+    """
+    cols = (case_col, activity_col, ts_col, role_col or "", resource_col or "")
+    if start_col:
+        return cols + (bool(dayfirst), start_col)
+    if dayfirst:
+        return cols + (True,)
+    return cols
+
+
+def _csv_start_col(csv_columns) -> str:
+    """The start-timestamp column of a ``csv_columns`` mapping, or ``""``."""
+    if csv_columns and len(csv_columns) > 6 and csv_columns[6]:
+        return str(csv_columns[6])
+    return ""
 
 
 def _csv_read_options(csv_bytes: bytes) -> Dict[str, str]:
@@ -372,6 +410,33 @@ def _csv_mapping_problem(csv_bytes: bytes, csv_columns, _file_hash: str):
     return None
 
 
+def _csv_start_caption(csv_columns) -> str:
+    """`` · start: `col` `` for the "Read from" captions, or nothing."""
+    start = _csv_start_col(csv_columns)
+    return f" · start: `{start}`" if start else ""
+
+
+@st.cache_data(show_spinner=False)
+def _csv_late_starts(csv_bytes: bytes, csv_columns, _file_hash: str):
+    """``(late, checked)``: rows whose start is after their completion.
+
+    Counted on the rows :func:`_csv_mapping_problem` checks. A mapping where
+    *most* starts are late is refused there (the two columns are swapped);
+    the odd late start is kept and said aloud, because the time metrics then
+    count that event from its completion.
+    """
+    if not _csv_start_col(csv_columns):
+        return (0, 0)
+    try:
+        head = _format_csv_df(_read_csv_bytes(csv_bytes, nrows=5000),
+                              *csv_columns)
+        start = head["start_timestamp"]
+        late = start.notna() & (start > head["time:timestamp"])
+        return (int(late.sum()), int(len(head)))
+    except Exception:
+        return (0, 0)
+
+
 def _html_escape_min(text: str) -> str:
     """Escape text bound for the rail's raw-HTML markup.
 
@@ -427,6 +492,7 @@ def _log_and_tree(
                 raise ValueError("CSV column mapping is required.")
             case_col, activity_col, ts_col, role_col, resource_col = csv_columns[:5]
             dayfirst = bool(csv_columns[5]) if len(csv_columns) > 5 else False
+            start_col = _csv_start_col(csv_columns)
             if not (case_col and activity_col and ts_col):
                 raise ValueError(
                     "Case, activity, and timestamp columns are required "
@@ -437,7 +503,7 @@ def _log_and_tree(
             _phase(f"Formatting {len(df):,} events...")
             log = _format_csv_df(
                 df, case_col, activity_col, ts_col, role_col, resource_col,
-                dayfirst)
+                dayfirst, start_col)
         else:
             _phase("Unpacking XES...")
             xes_bytes = _plain_xes_bytes(log_bytes, log_kind)
@@ -716,6 +782,117 @@ def _mine(
     return out
 
 
+#: Most values an attribute may have to be offered as a split.
+_SPLIT_MAX_VALUES = 200
+
+
+@st.cache_data(show_spinner=False)
+def _split_attributes(log_bytes: bytes, log_kind: str, csv_columns,
+                      filter_spec: Tuple, _file_hash: str) -> Dict[str, int]:
+    """``{attribute: distinct values}`` for the case attributes the Model
+    view can be split on: case-constant, categorical, 2 to
+    ``_SPLIT_MAX_VALUES`` values. Read on the filtered log."""
+    from pm4py_ucm.algo.discovery.families import detect_case_attributes
+
+    df = _filtered_log_df(log_bytes, log_kind, csv_columns, filter_spec,
+                          _file_hash)
+    try:
+        specs, per_case = detect_case_attributes(
+            df, max_enum_cardinality=_SPLIT_MAX_VALUES)
+    except Exception:
+        return {}
+    out: Dict[str, int] = {}
+    for spec in specs.values():
+        if spec.type not in ("enumeration", "boolean"):
+            continue
+        n = int(per_case[spec.source_name].nunique(dropna=True))
+        if 2 <= n <= _SPLIT_MAX_VALUES:
+            out[spec.source_name] = n
+    return dict(sorted(out.items()))
+
+
+@st.cache_data(show_spinner=False)
+def _mine_split(
+    log_bytes: bytes,
+    log_kind: str,
+    csv_columns,
+    split_attribute: str,
+    decomposition_spec,
+    resource_attribute: str,
+    min_support: float,
+    noise_threshold: float,
+    overlay_nodes: Tuple[str, ...],
+    overlay_edges: Tuple[str, ...],
+    _file_hash: str,
+    filter_spec: Tuple = (),
+    _status=None,
+    _progress=None,
+) -> Dict[str, Any]:
+    """Mine the model split along ``split_attribute``. Same result shape as
+    :func:`_mine`, plus a ``split`` entry.
+
+    One model per value, mined from that value's cases, under a root map
+    with one stub per value (:func:`pm4py_ucm.discover_ucm_by_attribute`).
+    The whole-log tree is never mined here, and each case is replayed on
+    its own value's model only, so the shared parse table is not used.
+    """
+    if _status is not None:
+        _status.update(label=f"Mining one model per value of "
+                             f"{split_attribute}...")
+    df = _filtered_log_df(log_bytes, log_kind, csv_columns, filter_spec,
+                          _file_hash)
+    params: Dict[str, Any] = {}
+    attrs = [a.strip() for a in resource_attribute.replace(",", " ").split()
+             if a.strip()]
+    if not attrs:
+        params["resource_attribute"] = False
+    elif len(attrs) == 1:
+        params["resource_attribute"] = attrs[0]
+    else:
+        params["resource_attribute"] = attrs
+    if attrs:
+        params["resource_parameters"] = {"min_support": float(min_support)}
+    decomp_arg = ("off" if decomposition_spec == "off"
+                  else dict(decomposition_spec))
+    fit: Dict[str, int] = {}
+    ucm, family = pm4py_ucm.discover_ucm_by_attribute(
+        df, split_attribute,
+        decomposition=decomp_arg,
+        noise_threshold=float(noise_threshold),
+        node_metrics=list(overlay_nodes), edge_metrics=list(overlay_edges),
+        parameters=params, progress_callback=_progress,
+        return_family=True, fit=fit,
+    )
+    if _status is not None:
+        _status.update(label="Writing .jucm...")
+    with tempfile.TemporaryDirectory() as td:
+        jucm_path = Path(td) / "model.jucm"
+        pm4py_ucm.write_ucm(ucm, str(jucm_path))
+        jucm_bytes = jucm_path.read_bytes()
+    out = {
+        "jucm": jucm_bytes,
+        "n_maps": len(ucm.maps),
+        "n_nodes": sum(len(m.nodes) for m in ucm.maps),
+        "n_cases": int(df["case:concept:name"].nunique()),
+        "n_events": int(len(df)),
+        "n_activities": int(df["concept:name"].nunique()),
+        "split": {
+            "attribute": split_attribute,
+            "values": len(family.cells),
+            "cases": int(sum(c.n_cases for c in family.cells)),
+            "largest_map": max(len(m.nodes) for m in ucm.maps),
+        },
+    }
+    if fit.get("total_cases"):
+        out["fit"] = dict(
+            fit,
+            fitting_ratio=fit["fitting_cases"] / fit["total_cases"],
+            coverage=((fit["fitting_cases"] + fit["repaired_cases"])
+                      / fit["total_cases"]),
+        )
+    return out
+
+
 @st.cache_data(show_spinner=False)
 def _render_cached(jucm_bytes: bytes, style: str,
                    heatmap: bool = False,
@@ -859,7 +1036,7 @@ def _render_png(ucm, style: str, out_path: str,
         gviz = _classic.apply(ucm, parameters=per)
         gviz.format = "png"
         base = os.path.join(tmpdir, f"map_{idx:03d}")
-        rendered = gviz.render(filename=base, cleanup=True)
+        rendered = _dotmod.render(gviz, filename=base, cleanup=True)
         panels.append((ucm_map.name or f"Map{idx}", rendered))
     return _stacked._composite(panels, out_path)
 
@@ -918,9 +1095,15 @@ def _parse_stamps(raw, dayfirst=False):
 
 
 def _format_csv_df(df, case_col, activity_col, ts_col, role_col, resource_col,
-                   dayfirst=False):
+                   dayfirst=False, start_col=""):
     """Format a raw CSV DataFrame for pm4py, mapping the chosen role / resource
     columns to ``org:role`` / ``org:resource``.
+
+    ``start_col`` names the column holding each event's start time. It is
+    parsed like the completion timestamp and becomes ``start_timestamp``,
+    the column every engine reads to tell an interval log. The mapping is
+    authoritative: with no start mapped the result has no
+    ``start_timestamp``, even if the file has a column of that name.
 
     ``dayfirst`` reads ``03/06/2024`` as 3 June rather than 6 March. It has
     to be applied *before* ``format_dataframe``, which would otherwise parse
@@ -958,6 +1141,12 @@ def _format_csv_df(df, case_col, activity_col, ts_col, role_col, resource_col,
         case_col = renames.get(case_col, case_col)
         activity_col = renames.get(activity_col, activity_col)
         ts_col = renames.get(ts_col, ts_col)
+        start_col = renames.get(start_col, start_col)
+    if start_col:
+        # Parsed before format_dataframe, so the starts travel with their
+        # rows through its sort and through the rows it drops.
+        df = _with_start_timestamp(df, start_col, ts_col,
+                                   (case_col, activity_col), dayfirst)
     if dayfirst and ts_col in df.columns and \
             not pd.api.types.is_datetime64_any_dtype(df[ts_col]):
         df = df.copy()
@@ -966,7 +1155,93 @@ def _format_csv_df(df, case_col, activity_col, ts_col, role_col, resource_col,
         df, case_id=case_col, activity_key=activity_col, timestamp_key=ts_col,
     )
     df = _ensure_datetime_timestamp(df, ts_col, dayfirst)
+    if start_col:
+        df = _check_start_timestamp(df, start_col, ts_col)
+    elif _START_KEY in df.columns:
+        df = df.drop(columns=[_START_KEY])
     return _coerce_str_object(df)
+
+
+_START_KEY = "start_timestamp"
+
+
+def _with_start_timestamp(df, start_col, ts_col, keep, dayfirst=False):
+    """``df`` with ``start_col`` parsed into a ``start_timestamp`` column.
+
+    A start that cannot be read stays missing (``NaT``) and its row is kept:
+    the time metrics count such an event from its completion. A column where
+    hardly anything reads as a date is a wrong mapping and raises, naming it.
+    """
+    if start_col == ts_col:
+        raise ValueError(
+            f"The start timestamp and the timestamp are both mapped to "
+            f"`{start_col}`. Choose the column that holds each event's "
+            "start, or set the start timestamp to (none).")
+    if start_col not in df.columns:
+        raise ValueError(
+            f"The column mapped as start timestamp, `{start_col}`, is not "
+            "in the file.")
+    raw = df[start_col]
+    parsed = (raw if pd.api.types.is_datetime64_any_dtype(raw)
+              else _stamps_from_column(raw, dayfirst))
+    n_present = int(raw.notna().sum())
+    n_parsed = int(parsed.notna().sum()) if parsed is not None else 0
+    if n_parsed == 0 or n_parsed < 0.5 * n_present:
+        sample = ", ".join(repr(v) for v in raw.dropna().astype(str).head(3))
+        raise ValueError(
+            f"The column mapped as start timestamp, `{start_col}`, does not "
+            f"contain dates or times (first values: {sample or 'empty'}). "
+            "Choose the column that holds each event's start under CSV "
+            "columns, or set it to (none), and apply the mapping again.")
+    df = df.copy()
+    if start_col != _START_KEY and start_col not in keep:
+        del df[start_col]
+    df[_START_KEY] = parsed
+    return df
+
+
+def _check_start_timestamp(df, start_col, ts_col):
+    """Put the starts on the completions' clock and refuse a swapped pair."""
+    done = df["time:timestamp"]
+    start = pd.to_datetime(df[_START_KEY], utc=True, errors="coerce")
+    tz = getattr(done.dt, "tz", None)
+    start = start.dt.tz_localize(None) if tz is None else start.dt.tz_convert(tz)
+    df = df.copy()
+    df[_START_KEY] = start
+    present = start.notna()
+    late = int((present & (start > done)).sum())
+    if late and late > 0.5 * int(present.sum()):
+        raise ValueError(
+            f"In {late:,} of {int(present.sum()):,} rows the start "
+            f"(`{start_col}`) is after the completion (`{ts_col}`): the two "
+            "columns look swapped. Map the later of the two as Timestamp "
+            "and the earlier as Start timestamp.")
+    return df
+
+
+def _stamps_from_column(raw, dayfirst=False):
+    """Parse a raw column as timestamps, or ``None`` when it cannot be tried.
+
+    Text goes through :func:`_parse_stamps`; numbers are read as epochs,
+    the unit guessed from the magnitude.
+    """
+    if pd.api.types.is_numeric_dtype(raw):
+        try:
+            peak = float(pd.to_numeric(raw, errors="coerce").abs().max())
+        except (TypeError, ValueError):
+            peak = float("nan")
+        if peak != peak:  # NaN
+            return None
+        unit = ("s" if peak < 1e11 else "ms" if peak < 1e14
+                else "us" if peak < 1e17 else "ns")
+        try:
+            return pd.to_datetime(raw, unit=unit, utc=True, errors="coerce")
+        except (TypeError, ValueError, OverflowError):
+            return None
+    try:
+        return _parse_stamps(raw, dayfirst=dayfirst)
+    except (TypeError, ValueError):
+        return None
 
 
 def _ensure_datetime_timestamp(df, ts_col, dayfirst=False):
@@ -993,24 +1268,7 @@ def _ensure_datetime_timestamp(df, ts_col, dayfirst=False):
     if ts_key not in df.columns or pd.api.types.is_datetime64_any_dtype(df[ts_key]):
         return df
     raw = df[ts_key]
-    parsed = None
-    if pd.api.types.is_numeric_dtype(raw):
-        try:
-            peak = float(pd.to_numeric(raw, errors="coerce").abs().max())
-        except (TypeError, ValueError):
-            peak = float("nan")
-        if peak == peak:  # not NaN
-            unit = ("s" if peak < 1e11 else "ms" if peak < 1e14
-                    else "us" if peak < 1e17 else "ns")
-            try:
-                parsed = pd.to_datetime(raw, unit=unit, utc=True, errors="coerce")
-            except (TypeError, ValueError, OverflowError):
-                parsed = None
-    else:
-        try:
-            parsed = _parse_stamps(raw, dayfirst=dayfirst)
-        except (TypeError, ValueError):
-            parsed = None
+    parsed = _stamps_from_column(raw, dayfirst)
     # Accept only when most of the present values read as dates: a free-text
     # column with the odd date in it is a wrong mapping, not a timestamp.
     n_present = int(raw.notna().sum())
@@ -1043,7 +1301,7 @@ def _read_log_for_scenarios(log_bytes: bytes, log_kind: str, csv_columns):
         df = _read_csv_bytes(log_bytes)
         return _format_csv_df(
             df, case_col, activity_col, ts_col, role_col, resource_col,
-            dayfirst)
+            dayfirst, _csv_start_col(csv_columns))
 
     xes_bytes = _plain_xes_bytes(log_bytes, log_kind)
     with tempfile.TemporaryDirectory() as td:
@@ -1222,6 +1480,29 @@ def _simulate_scenarios(synth_fingerprint: str, _ucm):
         return [], f"{type(exc).__name__}: {exc}"
 
 
+def _render_failure(exc: Exception) -> str:
+    """One line on why a model picture could not be produced.
+
+    Tells a missing Graphviz from a layout Graphviz gave up on: the two
+    need different fixes, and the second used to be reported as the first.
+    """
+    name = type(exc).__name__
+    if name == "ExecutableNotFound":
+        return ("Graphviz was not found: check that its `dot` binary is on "
+                "the PATH.")
+    stderr = getattr(exc, "stderr", None)
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode("utf-8", errors="replace")
+    first = next((ln.strip() for ln in (stderr or "").splitlines()
+                  if ln.strip().lower().startswith("error")), "")
+    if first:
+        return (f"Graphviz could not lay the model out ({first}). The model "
+                "is probably too large for one diagram: a tighter "
+                "decomposition, a higher noise threshold or a log filter "
+                "makes the maps smaller.")
+    return f"{name}: {str(exc)[:300]}"
+
+
 @st.cache_data(show_spinner=False)
 def _simulation_svg(synth_fingerprint: str, style: str, mode: str,
                     picks: Tuple[str, ...], _ucm, _results):
@@ -1229,12 +1510,15 @@ def _simulation_svg(synth_fingerprint: str, style: str, mode: str,
 
     Keyed on what the user chose, not on the (unhashable) results — those
     are derived from the same fingerprint, so the key is complete.
+
+    Returns ``(svg, payload, error)``; ``svg`` is ``None`` and ``error``
+    says why when the model could not be drawn.
     """
     from pm4py_ucm.algo import scenario_coverage as _sc
     by_name = {r.scenario: r for r in _results}
     chosen = [by_name[n] for n in picks if n in by_name]
     if not chosen:
-        return None, None
+        return None, None, ""
     if mode == "compare" and len(chosen) == 2:
         cmp = _sc.compare(_ucm, chosen[0], chosen[1])
         render = _sc.comparison_render(_ucm, cmp)
@@ -1244,9 +1528,10 @@ def _simulation_svg(synth_fingerprint: str, style: str, mode: str,
         render = _sc.coverage_render(_ucm, cov)
         payload = cov
     try:
-        return _svgmod.model_to_svg(_ucm, style, coverage=render), payload
-    except Exception:                            # pragma: no cover - env
-        return None, payload
+        return (_svgmod.model_to_svg(_ucm, style, coverage=render), payload,
+                "")
+    except Exception as exc:                     # pragma: no cover - env
+        return None, payload, _render_failure(exc)
 
 
 def _scenario_jucm(synth_fingerprint: str, _ucm) -> bytes:
@@ -1362,19 +1647,21 @@ def _replay_estimate(log_bytes: bytes, log_kind: str, csv_columns,
 
 
 @st.cache_data(show_spinner=False)
-def _log_is_interval(log_bytes: bytes, log_kind: str, _file_hash: str) -> bool:
+def _log_is_interval(log_bytes: bytes, log_kind: str, csv_columns,
+                     _file_hash: str) -> bool:
     """Whether the log carries two timestamps per event (a start_timestamp).
 
     Matches :func:`build_fact_table`'s criterion — an interval log is one
-    whose DataFrame has a ``start_timestamp`` column — but detects it from
-    the raw bytes so it needs no full parse (this is read on every sidebar
-    render, before mining). A CSV upload maps a single timestamp, so it is
-    always single; an XES only yields that column when it declares a
+    whose DataFrame has a ``start_timestamp`` column — but detects it
+    without a full parse (this is read on every sidebar render, before
+    mining). A CSV is an interval log exactly when its column mapping names
+    a start timestamp (:func:`_format_csv_df` writes the column then, and
+    only then); an XES only yields that column when it declares a
     ``start_timestamp`` attribute, which then appears literally in the XML.
     Lifecycle start/complete logs, as elsewhere in the app, count as single.
     """
     if log_kind == "csv":
-        return False
+        return bool(_csv_start_col(csv_columns))
     try:
         return b"start_timestamp" in _plain_xes_bytes(log_bytes, log_kind)
     except Exception:
@@ -3218,6 +3505,9 @@ def _accept_log_bytes(name: str, payload: bytes) -> None:
     # names of the previous log, so they mean nothing on the next one.
     st.session_state.pop("_variant_cap", None)
     st.session_state.pop("_activity_cap", None)
+    # ... and the split names one of its attributes.
+    st.session_state.pop("cfg_split_attr", None)
+    st.session_state.pop("_keep::cfg_split_attr", None)
     if kind == "csv":
         for k, _, _ in _CSV_AUTOPICK:
             st.session_state.pop(k, None)
@@ -3494,6 +3784,8 @@ def _apply_project_config(cfg, fh, csv_columns=None):
         for (key, _, with_none), val in zip(_CSV_AUTOPICK, list(_cols)[:5]):
             ss[key] = val if val else (_NONE_OPT if with_none else val)
         ss["csv_dayfirst"] = bool(_cols[5]) if len(_cols) > 5 else False
+        # The seventh (start timestamp) is optional too: absent means none.
+        ss["csv_start"] = _csv_start_col(_cols) or _NONE_OPT
     _apply_filter_spec_to_state(cfg.get("filter_spec", []), fh, pr)
     if "scenario_strategy" in cfg:
         ss["cond_strategy"] = cfg["scenario_strategy"]
@@ -3542,6 +3834,9 @@ def _apply_project_config(cfg, fh, csv_columns=None):
     # (not the restore slot, which is only consumed when the Family view first
     # renders) so an immediate re-save from another view keeps the real values
     # rather than falling back to the widget defaults.
+    if "split_attribute" in cfg:
+        _sticky_seed("cfg_split_attr", cfg["split_attribute"] or _NONE_OPT)
+        st.session_state.pop("cfg_split_attr", None)
     if "family_min_cases" in cfg:
         _sticky_seed("cfg_family_min_cases", int(cfg["family_min_cases"]))
     if "family_max_values" in cfg:
@@ -3808,6 +4103,9 @@ with st.sidebar:
             st.session_state["applied_decomp"] = candidate_spec
         else:
             st.warning("Decomposition has unapplied changes.")
+    # Filled further down, once the log and its filters are known: the
+    # split's choices are the log's own case attributes.
+    _split_slot = st.container()
 
     # Less-used groups live in collapsed expanders to keep the rail tidy —
     # rendered on their expander container (calling widgets on it, rather than
@@ -3860,17 +4158,36 @@ with st.sidebar:
     # defaults that suit it, while the user's own picks persist within a log.
     _ov_hash = st.session_state.get("log_hash", "nolog")
     _interval = bool(st.session_state.get("log_bytes") is not None
-                     and _log_is_interval(st.session_state["log_bytes"],
-                                          st.session_state.get("log_kind", ""),
-                                          _ov_hash))
+                     and _log_is_interval(
+                         st.session_state["log_bytes"],
+                         st.session_state.get("log_kind", ""),
+                         st.session_state.get("applied_csv_columns"),
+                         _ov_hash))
     _node_key = f"overlay_nodes::{_ov_hash}"
     _edge_key = f"overlay_edges::{_ov_hash}"
-    if _node_key not in st.session_state:
+
+    def _default_nodes(interval):
         # Time metric first (so the heat-map emphasises time — red — by
         # default), traversal count second.
-        st.session_state[_node_key] = [
-            "median_time" if _interval else "sojourn_median_time",
-            "traversal_frequency"]
+        return ["median_time" if interval else "sojourn_median_time",
+                "traversal_frequency"]
+
+    # A CSV becomes an interval log when its mapping is applied, which is
+    # after these defaults were first seeded (and can change again later).
+    # Follow it, but only while the selection is still the untouched default.
+    _seeded_key = f"overlay_seeded_interval::{_ov_hash}"
+    _seeded = st.session_state.setdefault(_seeded_key, _interval)
+    if _seeded != _interval:
+        st.session_state[_seeded_key] = _interval
+        _napp = f"overlay_nodes_applied::{_ov_hash}"
+        if (st.session_state.get(_node_key) == _default_nodes(_seeded)
+                and st.session_state.get(_napp, _default_nodes(_seeded))
+                == _default_nodes(_seeded)):
+            st.session_state[_node_key] = _default_nodes(_interval)
+            if _napp in st.session_state:
+                st.session_state[_napp] = _default_nodes(_interval)
+    if _node_key not in st.session_state:
+        st.session_state[_node_key] = _default_nodes(_interval)
     if _edge_key not in st.session_state:
         st.session_state[_edge_key] = [
             "traversal_frequency", "traversal_percentage"]
@@ -4260,7 +4577,7 @@ if log_kind == "csv":
     case_col = cc1.selectbox("Case id column", options=columns, key="csv_case")
     activity_col = cc2.selectbox("Activity column", options=columns, key="csv_activity")
     ts_col = cc3.selectbox("Timestamp column", options=columns, key="csv_timestamp")
-    cc4, cc5 = _src_exp.columns(2)
+    cc4, cc5, cc6 = _src_exp.columns(3)
     role_col = cc4.selectbox(
         "Role column (optional)",
         options=[_NONE_OPT] + columns, key="csv_role",
@@ -4269,6 +4586,16 @@ if log_kind == "csv":
         "Resource column (optional)",
         options=[_NONE_OPT] + columns, key="csv_resource",
     )
+    # A mapping saved before this selector existed leaves its key unset.
+    if st.session_state.get("csv_start") not in [_NONE_OPT] + columns:
+        st.session_state["csv_start"] = _NONE_OPT
+    start_col = cc6.selectbox(
+        "Start timestamp column (optional)",
+        options=[_NONE_OPT] + columns, key="csv_start",
+        help="When each event started, if the file has it. The Timestamp "
+             "column is then read as the completion, and the log becomes "
+             "an interval log: service and waiting times are available. "
+             "Leave at (none) for a log with one time per event.")
     _dayfirst = _src_exp.checkbox(
         "Day-first dates (dd/mm/yyyy)", key="csv_dayfirst",
         help="Read 03/06/2024 as 3 June rather than 6 March. Only matters "
@@ -4281,15 +4608,15 @@ if log_kind == "csv":
             "being read **month-first**. If this log was written day-first, "
             "tick *Day-first dates* — otherwise the order of events inside "
             "a case may be wrong.", icon=":material/event:")
-    candidate_csv_columns = (
+    # Day-first and the start timestamp ride an optional tail, so a 5-tuple
+    # saved by an older project still reads as unchanged.
+    candidate_csv_columns = _csv_mapping_tuple(
         case_col, activity_col, ts_col,
         "" if role_col == _NONE_OPT else role_col,
         "" if resource_col == _NONE_OPT else resource_col,
+        _dayfirst,
+        "" if start_col == _NONE_OPT else start_col,
     )
-    # A sixth element only when day-first is on, so a 5-tuple saved by an
-    # older project (day-first did not exist) still reads as unchanged.
-    if _dayfirst:
-        candidate_csv_columns += (True,)
     # Auto-detection runs once per file hash, so a hand-picked (or mistaken)
     # choice sticks for that file and re-loading it will not undo it. Offered
     # before the branch below, which stops the script while a mapping is
@@ -4332,6 +4659,14 @@ if log_kind == "csv":
         st.session_state.pop("applied_csv_columns", None)
         st.rerun()
     st.session_state.pop("csv_mapping_error", None)
+    _late, _checked = _csv_late_starts(log_bytes, csv_columns, file_hash)
+    if _late:
+        _src_exp.warning(
+            f"In {_late:,} of the first {_checked:,} rows the start "
+            f"(`{_csv_start_col(csv_columns)}`) is after the completion "
+            f"(`{csv_columns[2]}`). Those events are kept; their service "
+            "time counts from the completion, as for a missing start.",
+            icon=":material/schedule:")
 
 effective_min_support = 0.0 if _min_support_disabled else min_support
 decomposition_spec = st.session_state["applied_decomp"]
@@ -4757,6 +5092,36 @@ with _transforms_slot:
             f"{_n_filters} filter(s) active — the model is mined on the "
             "filtered log.")
 
+# ---- Split by attribute (Model view) ----------------------------------------
+# Rendered into the sidebar slot left under the decomposition controls. It
+# sits here because its choices come from the filtered log. Sticky: a run
+# that stops before this point (an unapplied CSV mapping) does not render the
+# widget, and Streamlit would otherwise drop its value.
+_split_choices = _split_attributes(log_bytes, log_kind, csv_columns,
+                                   filter_spec, file_hash)
+_split_opts = [_NONE_OPT] + list(_split_choices)
+_sticky("cfg_split_attr", lambda: _NONE_OPT, options=_split_opts)
+_split_pick = _split_slot.selectbox(
+    "Split by attribute",
+    options=_split_opts, key="cfg_split_attr",
+    format_func=lambda a: (a if a == _NONE_OPT
+                           else f"{a} ({_split_choices[a]} values)"),
+    help=(
+        "For a log that mixes several processes (many services, products "
+        "or case types). The Model view then mines **one model per value** "
+        "of the attribute, each from its own cases, under a root map with "
+        "one stub per value. The decomposition above is applied to each "
+        "value's model. Nothing is shared between values, so every map's "
+        "overlay is computed from exactly its own cases. Mined as one, "
+        "such a log gives maps that follow no real boundary, whatever the "
+        "decomposition. Applies to the Model view and its downloads; the "
+        "Scenarios view still works on the single model."
+    ),
+)
+_sticky_save("cfg_split_attr")
+split_attribute: Optional[str] = (
+    None if _split_pick == _NONE_OPT else _split_pick)
+
 # ---- Cost screen: do not spend minutes on a log without asking -------------
 # Runs before mining because that is the only moment the choice is still
 # open. On a log with a large alphabet or near-unique cases the miner can
@@ -4860,7 +5225,8 @@ if _risk.high and st.session_state.get("mine_ok_fp") != _screen_fp:
     if log_kind == "csv" and csv_columns:
         st.caption(
             f"Read from — case: `{csv_columns[0]}` · "
-            f"activity: `{csv_columns[1]}` · timestamp: `{csv_columns[2]}`. "
+            f"activity: `{csv_columns[1]}` · timestamp: `{csv_columns[2]}`"
+            f"{_csv_start_caption(csv_columns)}. "
             "Change these under **Log source & columns** in the sidebar."
         )
 
@@ -5038,7 +5404,11 @@ if _replay_choice is None and st.session_state.get("auto_metrics_off"):
     _replay_choice = "drop"
 _replay_ok = False
 
-if _replay_wanted:
+if _replay_wanted and split_attribute:
+    # The estimate below times a replay on the whole-log model, which a
+    # split never runs: each case is replayed on its own value's model.
+    _replay_ok = True
+elif _replay_wanted:
     if _replay_choice == "go":
         _replay_ok = True
     elif _replay_choice in ("drop", "postpone"):
@@ -5116,19 +5486,30 @@ try:
             _parse_table(log_bytes, log_kind, csv_columns, noise_threshold,
                          filter_spec, file_hash,
                          _progress=_ProgressUI(status))
-            if _replay_ok else None
+            if _replay_ok and not split_attribute else None
         )
-        mined = _mine(
-            log_bytes, log_kind, csv_columns,
-            decomposition_spec, resource_attribute,
-            effective_min_support, noise_threshold,
-            overlay_nodes, overlay_edges,
-            file_hash, filter_spec,
-            compute_traversal=_replay_ok,
-            _status=status,
-            _parses=_shared_parses,
-            _progress=_ProgressUI(status),
-        )
+        if split_attribute:
+            mined = _mine_split(
+                log_bytes, log_kind, csv_columns, split_attribute,
+                decomposition_spec, resource_attribute,
+                effective_min_support, noise_threshold,
+                overlay_nodes, overlay_edges,
+                file_hash, filter_spec,
+                _status=status,
+                _progress=_ProgressUI(status),
+            )
+        else:
+            mined = _mine(
+                log_bytes, log_kind, csv_columns,
+                decomposition_spec, resource_attribute,
+                effective_min_support, noise_threshold,
+                overlay_nodes, overlay_edges,
+                file_hash, filter_spec,
+                compute_traversal=_replay_ok,
+                _status=status,
+                _parses=_shared_parses,
+                _progress=_ProgressUI(status),
+            )
         status.update(label="Done.", state="complete")
 except Exception as exc:
     st.error(f"Mining failed: {type(exc).__name__}: {exc}")
@@ -5237,6 +5618,7 @@ with st.sidebar:
             "min_support": float(min_support),
             "notation": style,
             "decomposition": decomposition_spec,
+            "split_attribute": split_attribute,
             "resource_attribute": resource_attribute,
             # The picks, not the replay-off fallbacks — see the comment at
             # the opt-out checkbox.
@@ -5419,11 +5801,21 @@ if _view == "Model":
     if log_kind == "csv" and csv_columns:
         st.caption(
             f"Read from — case: `{csv_columns[0]}` · "
-            f"activity: `{csv_columns[1]}` · timestamp: `{csv_columns[2]}`."
+            f"activity: `{csv_columns[1]}` · timestamp: `{csv_columns[2]}`"
+            f"{_csv_start_caption(csv_columns)}."
         )
 
     # What the replay-based counts describe. Shown right under the counts
     # they qualify, so the coverage is read together with the numbers.
+    _split_info = mined.get("split")
+    if _split_info:
+        st.caption(
+            f"Split by `{_split_info['attribute']}`: "
+            f"{_split_info['values']:,} values, one model each, mined from "
+            "its own cases. The root map has one stub per value, with its "
+            "number of cases; click a stub to open that value's model. "
+            f"Largest map: {_split_info['largest_map']:,} elements. "
+            "Change it under **Decomposition** in the sidebar.")
     _fit_note(mined.get("fit"))
 
     # SVG is the default on-screen render: vector, crisp at any zoom, with
@@ -5675,6 +6067,13 @@ if _view == "Model":
 # ===== Scenarios view =====================================================
 if _view == "Scenarios":
     st.subheader("Synthesize executable scenarios")
+    if split_attribute:
+        st.info(
+            f"The Model view is split by `{split_attribute}`. Scenarios are "
+            "synthesized on the **single** model of the whole log, not on "
+            "the split one. To get scenarios for one value, filter the log "
+            "to it (**Log filters** in the sidebar).",
+            icon=":material/call_split:")
     st.caption(
         "Concurrency-aware variant clustering on the discovered "
         "process tree → one ScenarioDef per variant on the URN model, "
@@ -6021,7 +6420,7 @@ if _view == "Scenarios":
             if not _picks:
                 st.info("Select at least one scenario to highlight.")
             else:
-                _svg_cov, _payload = _simulation_svg(
+                _svg_cov, _payload, _svg_cov_err = _simulation_svg(
                     _synth_fp, style, _sim_mode_key, _picks,
                     synth["ucm"], _sim_results)
 
@@ -6151,9 +6550,8 @@ if _view == "Scenarios":
                     _svg_viewer(_svg_cov, height=620, key="sim_svg")
                 else:
                     st.warning(
-                        "Could not render the highlighted model — check "
-                        "that the graphviz binary is on PATH."
-                    )
+                        "Could not render the highlighted model. "
+                        + (_svg_cov_err or "No picture was produced."))
 
 # ===== Family view ========================================================
 if _view == "Family":

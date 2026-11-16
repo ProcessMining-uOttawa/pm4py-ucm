@@ -18,12 +18,15 @@ _ROOT = Path(__file__).resolve().parents[1]
 _APP = _ROOT / "web" / "streamlit_app_v6.py"
 _SAMPLES = _ROOT / "web" / "samples"
 
-# name -> (cases, events, activities, expected (case, activity, timestamp, role, resource))
+# name -> (cases, events, activities,
+#          expected (case, activity, timestamp, role, resource, start timestamp))
 _EXPECTED = {
     "Procure-to-Pay.csv": (608, 9119, 24,
-                           ("Case ID", "Activity", "Complete Timestamp", "Role", "Resource")),
+                           ("Case ID", "Activity", "Complete Timestamp", "Role", "Resource",
+                            "Start Timestamp")),
     "RefundProcess.csv": (1338, 9032, 32,
-                          ("Case ID", "Activity", "Timestamp", "(none)", "Resource")),
+                          ("Case ID", "Activity", "Timestamp", "(none)", "Resource",
+                           "(none)")),
 }
 
 
@@ -55,11 +58,22 @@ def test_bundled_csv_sample_autodetects_and_mines(name):
     df = pd.read_csv(_SAMPLES / name, low_memory=False)
     picked = _autodetect(ns, list(df.columns))
     assert picked == mapping
-    case_col, act_col, ts_col, role_col, res_col = picked
+    case_col, act_col, ts_col, role_col, res_col, start_col = picked
     out = ns["_format_csv_df"](df, case_col, act_col, ts_col,
                                "" if role_col == "(none)" else role_col,
-                               "" if res_col == "(none)" else res_col)
+                               "" if res_col == "(none)" else res_col,
+                               False,
+                               "" if start_col == "(none)" else start_col)
     assert pd.api.types.is_datetime64_any_dtype(out["time:timestamp"])
+    # A sample with a start column loads as an interval log, and a clean one:
+    # every start reads as a date and none is after its completion.
+    if start_col == "(none)":
+        assert "start_timestamp" not in out.columns
+    else:
+        start = out["start_timestamp"]
+        assert pd.api.types.is_datetime64_any_dtype(start)
+        assert start.notna().all()
+        assert (start <= out["time:timestamp"]).all()
     assert len(out) == events
     assert out["case:concept:name"].nunique() == cases
     assert out["concept:name"].nunique() == activities

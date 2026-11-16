@@ -806,7 +806,17 @@ def assemble_ucm_family(
     :func:`~pm4py_ucm.algo.discovery.families.assembly.assemble_combined`
     (``urn_name``).
 
-    Both modes accept ``validate=True`` (the default), which checks the
+    ``mode="split"`` builds one model split along the attribute: a root
+    map with an OR-fork and **one static stub per cell**, each bound to
+    that cell's own model. Nothing is merged and no plug-in is shared, so
+    each map's overlay comes from exactly its own cell's cases; see
+    :func:`discover_ucm_by_attribute`, which wraps the two steps. Keyword
+    arguments go to
+    :func:`~pm4py_ucm.algo.discovery.families.assembly.assemble_split`
+    (``root_map_name``, ``strategies``, ``node_metrics``,
+    ``edge_metrics``).
+
+    All modes accept ``validate=True`` (the default), which checks the
     **finished** container and raises :class:`ValueError` if it is not
     structurally well-formed. The check runs once, on the completed model:
     mid-assembly a stub is legitimately arity-invalid until its plug-in
@@ -815,9 +825,80 @@ def assemble_ucm_family(
         return _families.assemble_combined(family, **kwargs)
     if mode == "umbrella":
         return _families.assemble_umbrella(family, **kwargs)
+    if mode == "split":
+        return _families.assemble_split(family, **kwargs)
     raise ValueError(
-        f"Unknown assembly mode {mode!r}; expected 'combined' or 'umbrella'."
+        f"Unknown assembly mode {mode!r}; expected 'combined', 'umbrella' "
+        "or 'split'."
     )
+
+
+#: Most distinct values an attribute may have for
+#: :func:`discover_ucm_by_attribute` to split on it.
+SPLIT_MAX_VALUES = 200
+
+
+def discover_ucm_by_attribute(
+    log,
+    attribute: str,
+    decomposition=None,
+    noise_threshold: float = 0.0,
+    min_cases: int = 1,
+    node_metrics=(),
+    edge_metrics=(),
+    parameters: Optional[Dict[str, Any]] = None,
+    progress_callback=None,
+    validate: bool = True,
+    return_family: bool = False,
+    fit: Optional[Dict[str, int]] = None,
+    **family_kwargs,
+):
+    """Mine **one model split along a case attribute**: a root map with one
+    stub per value of ``attribute``, each bound to the model mined from that
+    value's cases alone.
+
+    For a log that mixes processes (many services, products or case types
+    in one file). Mined as a whole, step names shared between unrelated
+    processes tie them together and the model follows no real boundary,
+    whatever the decomposition; split on the attribute that names the
+    process, every value gets its own model, decomposed on its own
+    (``decomposition`` is applied per value).
+
+    It is :func:`discover_ucm_family` on the one attribute followed by
+    :func:`assemble_ucm_family` with ``mode="split"``, with the
+    partitioning set for this purpose: every value is kept as it is (no
+    ``Other`` bucket, ``min_cases=1``) and an attribute may have up to
+    :data:`SPLIT_MAX_VALUES` distinct values. Nothing is merged or shared
+    between values, so every map's overlay (``node_metrics`` /
+    ``edge_metrics``, see :func:`annotate_performance`) is computed from
+    exactly its own value's cases; the root map's counts are the number of
+    cases per value. ``family_kwargs`` are forwarded to
+    :func:`discover_ucm_family` (``include_values``, ``bins``, ...).
+
+    ``fit``, when a dict is passed, receives the replay totals over the
+    values (each case is replayed on its own value's model only).
+
+    Returns the :class:`UCM`, or ``(ucm, family)`` with
+    ``return_family=True``.
+    """
+    family_kwargs.setdefault("max_values_per_attribute", 0)
+    family_kwargs.setdefault("max_enum_cardinality", SPLIT_MAX_VALUES)
+    family = discover_ucm_family(
+        log, [attribute],
+        decomposition=decomposition,
+        noise_threshold=noise_threshold,
+        min_cases=min_cases,
+        parameters=parameters,
+        progress_callback=progress_callback,
+        validate=validate,
+        **family_kwargs,
+    )
+    ucm = _families.assemble_split(
+        family,
+        node_metrics=node_metrics, edge_metrics=edge_metrics,
+        progress_callback=progress_callback, validate=validate, fit=fit,
+    )
+    return (ucm, family) if return_family else ucm
 
 
 def save_vis_ucm_family(

@@ -712,3 +712,73 @@ def test_cycle_time_filter_measures_earliest_start_to_latest_completion():
         assert list(slowest["case:concept:name"].unique()) == ["c1"]
         middle = apply(df, {"duration_pct": (25, 75)})
         assert sorted(middle["case:concept:name"].unique()) == ["c3", "c4"]
+
+
+def test_generated_read_log_maps_a_start_timestamp(tmp_path):
+    """The seventh csv_columns element makes the exported script's log an
+    interval log too, on the same clock as the completions (#153)."""
+    pd = pytest.importorskip("pandas")
+    pytest.importorskip("pm4py")
+    ns = {"__name__": "codegen_test"}
+    exec(compile(generate_script(_doc({})), "gen.py", "exec"), ns)
+
+    csv = tmp_path / "log.csv"
+    csv.write_text(
+        "case,activity,start,end,start_timestamp\n"
+        "c1,a,01/02/2024 09:00,01/02/2024 09:30,x\n"
+        "c1,b,01/02/2024 10:00,01/02/2024 11:00,y\n",
+        encoding="utf-8")
+    out = ns["read_log"](
+        str(csv), kind="csv",
+        csv_columns=["case", "activity", "end", "", "", True, "start"])
+    assert "start" not in out.columns
+    assert out["start_timestamp"].iloc[0] == pd.Timestamp("2024-02-01 09:00", tz="UTC")
+    service = (out["time:timestamp"] - out["start_timestamp"]).dt.total_seconds()
+    assert list(service) == [1800.0, 3600.0]
+    # With no start mapped the log is single-timestamp, whatever the header.
+    single = ns["read_log"](
+        str(csv), kind="csv", csv_columns=["case", "activity", "end", "", ""])
+    assert "start_timestamp" not in single.columns
+
+
+def test_split_attribute_is_emitted_and_used():
+    """The Model view's split is reproduced by the script (#152)."""
+    off = generate_script(_doc({}))
+    assert "SPLIT_ATTRIBUTE = None" in off
+    on = generate_script(_doc({"split_attribute": "service"}))
+    assert "SPLIT_ATTRIBUTE = 'service'" in on
+    assert "pm4py_ucm.discover_ucm_by_attribute(" in on
+    compile(on, "gen.py", "exec")
+
+
+def test_generated_script_runs_a_split_model(tmp_path, monkeypatch):
+    """Not only emitted: run_model builds the split model, with one stub per
+    value carrying that value's cases."""
+    pd = pytest.importorskip("pandas")
+    pytest.importorskip("pm4py")
+    import pm4py_ucm
+    from pm4py_ucm.objects.ucm.obj import UCM
+
+    ns = {"__name__": "codegen_test"}
+    src = generate_script(_doc({
+        "split_attribute": "kind", "decomposition": "off",
+        "resource_attribute": "",
+        "overlay_nodes": ["traversal_frequency"],
+        "overlay_edges": ["traversal_frequency"]}))
+    exec(compile(src, "gen.py", "exec"), ns)
+    ns["OUT_DIR"] = tmp_path
+    # The pictures need Graphviz; the model is what this test is about.
+    ns["_save_image"] = lambda *a, **k: None
+    rows, t = [], pd.Timestamp("2024-01-01", tz="UTC")
+    for n, (kind, trace) in enumerate(
+            [("a", ["x", "y"])] * 4 + [("b", ["x", "z", "w"])] * 2):
+        for step in trace:
+            t += pd.Timedelta(minutes=5)
+            rows.append({"case:concept:name": f"c{n}", "concept:name": step,
+                         "time:timestamp": t, "kind": kind})
+    ns["run_model"](pd.DataFrame(rows))
+    back = pm4py_ucm.read_ucm(str(tmp_path / "model.jucm"))
+    counts = {s.name: {m.name: m.value for m in s._metadata}
+                      ["perf_branch0_traversal_frequency"]
+              for s in back.maps[0].nodes if isinstance(s, UCM.Stub)}
+    assert counts == {"a": "4", "b": "2"}

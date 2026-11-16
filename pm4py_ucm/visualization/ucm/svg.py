@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from xml.sax.saxutils import escape, quoteattr
 
 from ...objects.ucm.obj import UCM
+from . import dot as _dot
 from . import visualizer as _visualizer
 from .variants import classic as _classic
 
@@ -300,7 +301,7 @@ def model_to_svg(ucm: "UCM", style: str = "ucm", *,
     if len(ucm.maps) <= 1:
         gviz = _visualizer.apply(ucm, parameters={"style": style, **_heat})
         return _inject_tooltips(
-            svg_body(gviz.pipe(format="svg").decode("utf-8")), _tips)
+            svg_body(_dot.pipe(gviz, "svg").decode("utf-8")), _tips)
 
     stub_links: Dict[int, Any] = {}
     menus: List[Any] = []
@@ -361,7 +362,7 @@ def model_to_svg(ucm: "UCM", style: str = "ucm", *,
                              "format": "svg", "stub_links": stub_links,
                              **_heat})
         name = ucm_map.name or f"Map{idx}"
-        panels.append((name, svg_body(gviz.pipe(format="svg").decode("utf-8"))))
+        panels.append((name, svg_body(_dot.pipe(gviz, "svg").decode("utf-8"))))
     return _inject_tooltips(
         _inject_stub_menus(stack_svgs(panels, id_prefix=id_prefix), menus),
         _tips)

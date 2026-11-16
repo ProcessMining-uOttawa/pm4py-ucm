@@ -125,9 +125,10 @@ For a CSV, these controls appear under **CSV columns**:
 |---|---|---|
 | Case id column | ✓ | Trace identifier |
 | Activity column | ✓ | Event name |
-| Timestamp column | ✓ | ISO-8601, most other date formats, or integer epochs (seconds → ns) |
+| Timestamp column | ✓ | ISO-8601, most other date formats, or integer epochs (seconds → ns). With a start timestamp mapped, this is the completion. |
 | Role column (optional) | — | Renamed to `org:role` for performer mining |
 | Resource column (optional) | — | Renamed to `org:resource` for performer mining |
+| Start timestamp column (optional) | — | When each event started. Makes the CSV an **interval log**, so service and waiting times are available. Read like the timestamp column, day-first switch included. |
 | Day-first dates | — | Read `03/06/2024` as 3 June, not 6 March. ISO dates are unaffected. A warning appears when the column reads differently both ways. |
 
 Sensible defaults are auto-detected from common column names
@@ -137,6 +138,13 @@ mapping** to start mining. Mining is *blocked* until this button is clicked
 on a fresh upload, so the miner never runs against a wrongly-guessed mapping.
 A mapping whose timestamp column does not read as dates is refused on Apply,
 with the column named and its first values shown.
+
+The start timestamp is auto-detected from `start_timestamp`, `Start Timestamp`,
+`start_time` or `start`. The mapping decides: at *(none)* the log is read with
+one time per event, even if the file has a `start_timestamp` column. A start
+column that does not read as dates, or a pair where most starts are after
+their completion (the two columns swapped), is refused on Apply. A few late
+starts are kept, with a warning: those events count from their completion.
 
 The file may be comma-, semicolon-, tab- or pipe-delimited, in UTF-8 (with
 or without BOM), UTF-16 or Windows-1252 — both are detected.
@@ -254,6 +262,17 @@ Model view's Activities, Cases and Events metrics then read
 **selected / total**.
 
 #### Decomposition
+
+- **Split by attribute** (below the decomposition controls) — for a log
+  that mixes several processes, such as many services in one file. Pick the
+  case attribute that names the process and the Model view mines **one
+  model per value**, each from its own cases, under a root map with one
+  stub per value; click a stub to open that value's model. The
+  decomposition setting then applies within each value. No plug-in is
+  shared between values, so every map's overlay comes from its own cases,
+  and the root shows the number of cases per value. Categorical case
+  attributes with 2 to 200 values are offered. The Scenarios view keeps
+  working on the single model of the whole log.
 
 - **off** — single flat map.
 - **auto** (default) — split into a root map plus plug-in maps, with the map
@@ -731,11 +750,12 @@ than this Streamlit layer.
 
 ## Deprecated app versions
 
-**Every app before V6 is deprecated**: kept runnable so older results stay
-reproducible, rendering a notice at the top when started, but receiving no
-new features. They still *save* every session parameter — each keeps a
-gather covering the whole registry, so their Save button works — but only
-V6 *restores* the newer ones.
+**Every app before V6 is deprecated, untested and unmaintained.** The files
+are kept for the record and each renders a notice at the top when started,
+but nothing guards them any more: they receive no fixes or features, and
+parts of them can stop working as the library and the session registry
+move on (their *Save project* button fails once a setting they do not
+know is registered).
 
 | App | File | Status |
 |---|---|---|

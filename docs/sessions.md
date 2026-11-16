@@ -120,9 +120,13 @@ Example entries — **not a catalogue**; the registry is the list:
 - `overlay_heatmap` / `overlay_heatmap_scope` — the heat-map's on/off and its
   scale (`"local"` / `"global"` / `"family"`). A project written before the
   3-way scale carried a boolean `overlay_heatmap_global`, mapped on load.
+- `split_attribute` — the case attribute the Model view's model is split
+  along (one stub per value, each bound to the model of that value's
+  cases), or `null` for one model of the whole log.
 - `csv_columns` — the CSV mapping (case, activity, timestamp, role, resource,
-  and an optional sixth day-first flag; older projects saved five). It is
-  also recorded on the log reference (§9).
+  and an optional tail: a sixth day-first flag, and a seventh naming the
+  start-timestamp column, in which case the sixth is always present; older
+  projects saved five or six). It is also recorded on the log reference (§9).
 - `filter_spec` — the **semantic** filter spec, a list of `[key, value]`
   pairs (`activity_ranks`, `exclude_activities`, `attr_expr`, `duration_pct`,
   `variant_ranks`, `variant_cap`, `activity_cap`, `time_from`, `time_to`,

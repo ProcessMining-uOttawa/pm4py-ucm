@@ -225,12 +225,15 @@ def _annotate_maps(
     cells: List[FamilyCell],
     node_metrics,
     edge_metrics,
-) -> None:
-    """Performance-overlay the given maps from the given cells' sub-log."""
+):
+    """Performance-overlay the given maps from the given cells' sub-log.
+
+    Returns the cell's :class:`TraversalStats` when a replay was run for
+    it, else ``None``."""
     from ...performance import TRAVERSAL_METRICS, annotate_performance
     sub_log = _cell_sub_log(family, cells)
     if sub_log is None or not len(sub_log):
-        return
+        return None
     # Replay-based counts need the tree these maps were converted from.
     # That is unambiguous only when the maps belong to a single cell —
     # an umbrella map merged from several cells has no one tree, so the
@@ -248,6 +251,7 @@ def _annotate_maps(
         maps=maps, traversal=traversal, tree=tree,
         parameters={"case_id_col": family.case_id_col},
     )
+    return traversal
 
 
 def assemble_combined(
@@ -284,6 +288,203 @@ def assemble_combined(
         from ....objects.ucm.validate import check_generated
         check_generated(container, "family assembly (combined)")
     return container
+
+
+# ---------------------------------------------------------------------------
+# Split (one static stub per value) assembly
+# ---------------------------------------------------------------------------
+
+def assemble_split(
+    family: ModelFamily,
+    *,
+    urn_name: Optional[str] = None,
+    root_map_name: str = "Overview",
+    strategies: bool = True,
+    group_name: str = "SplitStrategies",
+    node_metrics: Sequence[str] = (),
+    edge_metrics: Sequence[str] = (),
+    progress_callback=None,
+    validate: bool = True,
+    fit: Optional[Dict[str, int]] = None,
+) -> UCM:
+    """Assemble the family as **one model split along the attribute**: a
+    root map with an OR-fork and one static stub per cell, each stub bound
+    to the map mined from that cell's cases.
+
+    This is the model for a log that *mixes* processes (one log, many
+    services): mined as a whole, step names shared between unrelated
+    processes tie them into fragments that follow no real boundary. Here
+    the boundary is the attribute. Unlike the umbrella:
+
+    * **nothing is merged and no plug-in is shared.** Every cell keeps its
+      own maps (root plus its decomposition plug-ins), even when two cells
+      behave identically, so each map's performance overlay is computed
+      from exactly its own cell's cases;
+    * the stubs are **static**, one per value, and each fork branch carries
+      the guard ``attribute == value``;
+    * the root map's counts are **exact**: a stub is traversed by the cases
+      of its cell, with no replay involved.
+
+    ``node_metrics`` / ``edge_metrics`` attach performance overlays, per
+    cell from the cell's sub-log (see
+    :func:`pm4py_ucm.annotate_performance`). On the root map the
+    event-based ``frequency`` / ``percentage`` are shown as the traversal
+    counts they equal there. ``strategies`` emits one scenario per cell,
+    initialising the attribute variables so a traversal takes that cell's
+    branch.
+
+    ``fit``, when a dict is passed, receives the replay totals over the
+    cells (``total_cases``, ``fitting_cases``, ``repaired_cases``,
+    ``unexplained_cases``): each case is replayed on its own cell's model
+    only. It stays empty when no traversal metric was asked for.
+    """
+    from ....objects.ucm.conversion.decomposition import _SyntheticNode
+    from ....util.progress import Ticker
+
+    if not family.cells:
+        raise ValueError(
+            "Split assembly: the family has no cell to assemble (every "
+            "value was below min_cases).")
+
+    container = UCM(name=_urn_name(family, urn_name))
+    root = container.add_map(name=root_map_name)
+    start = UCM.StartPoint(name="start")
+    end = UCM.EndPoint(name="end")
+    root.add_node(start)
+    root.add_node(end)
+    variables = _make_variables(container, family)
+
+    # The root is converted from a synthetic choice over the cells' own
+    # trees, each intercepted as a stub. Going through the converter (rather
+    # than drawing the fork by hand) gives the root the same provenance
+    # tags, simplification and routing as any other map.
+    cells = list(family.cells)
+    cell_of: Dict[int, FamilyCell] = {id(c.tree): c for c in cells}
+    if len(cell_of) != len(cells):
+        raise ValueError(
+            "Split assembly: two cells share one process-tree object.")
+    synthetic = _SyntheticNode("X", [c.tree for c in cells])
+    stub_of: Dict[int, "UCM.Stub"] = {}
+
+    def cut_handler(t, entry, exit, m):
+        cell = cell_of.get(id(t))
+        if cell is None or m is not root:
+            return False
+        stub = _converter._tag(UCM.Stub(name=cell.label), t)
+        m.add_node(stub)
+        branch = _converter._connect(m, entry, stub, t)
+        _converter._connect(m, stub, exit, t)
+        if len(cells) > 1:
+            branch.set_condition(UCM.Condition(
+                label=cell.label, expression=_cell_clause(family, cell)))
+        stub_of[id(t)] = stub
+        return True
+
+    with _cut_handler_active(cut_handler):
+        _converter._attach(synthetic, start, end, root)
+    _converter._simplify_map(container, root)
+    _converter._insert_routing_for_map(container, root)
+
+    ticker = Ticker(progress_callback, "Assembling the split model",
+                    len(cells), report_every=1)
+    cell_maps: List[Tuple[FamilyCell, List["UCM.UCMmap"]]] = []
+    for cell in cells:
+        before = len(container.maps)
+        plugin_root = _convert_cell_into(container, family, cell)
+        cell_maps.append((cell, container.maps[before:]))
+        stub = stub_of[id(cell.tree)]
+        binding = UCM.PluginBinding(stub=stub, plugin=plugin_root)
+        in_arcs, out_arcs = stub.pred_connections, stub.succ_connections
+        starts, ends = plugin_root.start_points, plugin_root.end_points
+        if in_arcs and out_arcs and starts and ends:
+            binding.add_in(parent_connection=in_arcs[0],
+                           plugin_start=starts[0])
+            binding.add_out(plugin_end=ends[0],
+                            parent_connection=out_arcs[0])
+        stub.bindings.append(binding)
+        ticker.tick()
+    ticker.finish()
+
+    if strategies:
+        sg = container.add_scenario_group(
+            name=group_name,
+            description=(
+                "One strategy per value of the split attribute; "
+                "initialising the variable takes that value's branch of "
+                "the root map."),
+        )
+        for cell in cells:
+            assignments = "; ".join(
+                f"{a.display_name} = {v.label}"
+                for a, v in zip(family.attributes, cell.values))
+            sd = UCM.ScenarioDef(
+                name=cell.label,
+                description=f"{assignments}. Cases: {cell.caption}.")
+            sg.add_scenario(sd)
+            for var, value in zip(variables, cell.values):
+                sd.add_initialization(var, value.token)
+            sd.add_start_point(start)
+            sd.add_end_point(end, mandatory=True)
+
+    _bind_family_performers(container, family)
+
+    if node_metrics or edge_metrics:
+        for cell, maps in cell_maps:
+            stats = _annotate_maps(container, family, maps, [cell],
+                                   node_metrics, edge_metrics)
+            if stats is not None and fit is not None:
+                for key in ("total_cases", "fitting_cases",
+                            "repaired_cases", "unexplained_cases"):
+                    fit[key] = fit.get(key, 0) + int(getattr(stats, key))
+        _annotate_split_root(container, family, root, synthetic, cells,
+                             node_metrics, edge_metrics)
+    if validate:
+        from ....objects.ucm.validate import check_generated
+        check_generated(container, "family assembly (split)")
+    return container
+
+
+def _annotate_split_root(container, family, root, synthetic, cells,
+                         node_metrics, edge_metrics) -> None:
+    """Traversal counts for the split root, from the partition itself.
+
+    Every case takes exactly the branch of its own cell, so the counts need
+    no replay: the fork sees every case, each stub its cell's cases. They
+    are handed to the ordinary overlay pass as the traversal statistics of
+    the synthetic choice the root was converted from.
+    """
+    from ...performance import annotate_performance
+    from ...traversal import TraversalStats
+    from ..variants.choice_signature import assign_node_ids
+
+    sub_log = _cell_sub_log(family, cells)
+    if sub_log is None or not len(sub_log):
+        return
+    ids = assign_node_ids(synthetic)
+    total = sum(c.n_cases for c in cells)
+    top = ids[id(synthetic)]
+    stats = TraversalStats(total_cases=total, fitting_cases=total)
+    stats.node_counts[top] = stats.node_cases[top] = total
+    stats.branch_counts[top] = {}
+    for k, cell in enumerate(cells):
+        nid = ids[id(cell.tree)]
+        stats.node_counts[nid] = stats.node_cases[nid] = cell.n_cases
+        stats.branch_counts[top][k] = cell.n_cases
+    # On this map the event-based counts and the traversal counts are the
+    # same number, so a caller who skipped the replay still gets them.
+    exact = {"frequency": "traversal_frequency",
+             "percentage": "traversal_percentage"}
+
+    def on_root(metrics):
+        return list(dict.fromkeys(exact.get(m, m) for m in metrics))
+
+    annotate_performance(
+        container, sub_log,
+        node_metrics=on_root(node_metrics),
+        edge_metrics=on_root(edge_metrics),
+        maps=[root], traversal=stats, tree=synthetic,
+        parameters={"case_id_col": family.case_id_col},
+    )
 
 
 # ---------------------------------------------------------------------------

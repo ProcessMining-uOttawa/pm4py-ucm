@@ -22,6 +22,7 @@ from typing import Any, Dict, Optional
 
 from graphviz import Digraph
 
+from . import dot as _dot
 from .variants import classic as _classic
 from ...objects.ucm.obj import UCM
 
@@ -57,7 +58,7 @@ def save(gviz: Digraph, output_file_path: str) -> str:
     base, ext = os.path.splitext(output_file_path)
     if ext:
         gviz.format = ext.lstrip(".").lower()
-    rendered = gviz.render(filename=base, cleanup=True)
+    rendered = _dot.render(gviz, filename=base, cleanup=True)
     if rendered != output_file_path:
         shutil.move(rendered, output_file_path)
     return output_file_path
@@ -87,7 +88,7 @@ def matplotlib_view(gviz: Digraph) -> None:
     gviz.format = "png"
     tmpdir = tempfile.mkdtemp(prefix="pm4py_ucm_viz_")
     out_path = os.path.join(tmpdir, "ucm")
-    rendered = gviz.render(filename=out_path, cleanup=True)
+    rendered = _dot.render(gviz, filename=out_path, cleanup=True)
     img = mpimg.imread(rendered)
     plt.axis("off")
     plt.tight_layout(pad=0)

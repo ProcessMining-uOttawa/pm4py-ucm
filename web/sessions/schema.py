@@ -45,7 +45,9 @@ class LogRef:
     kind: str            # "xes" | "csv" | "zip"
     sha256: str          # matches the app's ``file_hash``; "" if unknown
     #: CSV column mapping (case, activity, timestamp, role, resource), or None.
-    #: A sixth element is present only when dates are read day-first.
+    #: A sixth element is present only when dates are read day-first; a
+    #: seventh, the start-timestamp column, only when one is mapped (the
+    #: sixth is then the day-first flag either way).
     csv_columns: Optional[List[str]] = None
 
     def to_dict(self) -> Dict[str, Any]:

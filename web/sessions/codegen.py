@@ -63,6 +63,7 @@ def read_log(log_path, kind=LOG_KIND, csv_columns=CSV_COLUMNS):
             raise ValueError("CSV_COLUMNS mapping is required for a CSV log.")
         case_col, activity_col, ts_col, role_col, resource_col = csv_columns[:5]
         dayfirst = bool(csv_columns[5]) if len(csv_columns) > 5 else False
+        start_col = csv_columns[6] if len(csv_columns) > 6 else ""
         # Sniff encoding and delimiter as the web app does, so a ';'-separated
         # cp1252 export reads the same here as it did there.
         import codecs
@@ -86,17 +87,39 @@ def read_log(log_path, kind=LOG_KIND, csv_columns=CSV_COLUMNS):
         except _csv.Error:
             sep = ","
         df = pd.read_csv(log_path, low_memory=False, encoding=encoding, sep=sep)
-        if dayfirst and ts_col in df.columns:
+        def _stamps(raw):
             # ISO stamps first (dateutil would apply day-first to those
-            # too and return 6 March for 2024-06-03), then the rest day-first.
-            text = df[ts_col].astype(str).str.strip()
+            # too and return 6 March for 2024-06-03), then the rest.
+            text = raw.astype(str).str.strip()
             stamps = pd.to_datetime(text, format="ISO8601", errors="coerce", utc=True)
-            rest = stamps.isna() & df[ts_col].notna()
+            rest = stamps.isna() & raw.notna()
             if rest.any():
                 stamps[rest] = pd.to_datetime(text[rest], format="mixed",
                                               errors="coerce", utc=True,
-                                              dayfirst=True)
-            df[ts_col] = stamps
+                                              dayfirst=dayfirst)
+            return stamps
+
+        # The start timestamp makes this an interval log: parsed like the
+        # completion and written to the column the engines read. The mapping
+        # is authoritative, so an unmapped start_timestamp column is dropped.
+        starts = None
+        if start_col:
+            starts = df[start_col]
+            if pd.api.types.is_numeric_dtype(starts):
+                peak = float(pd.to_numeric(starts, errors="coerce").abs().max())
+                unit = ("s" if peak < 1e11 else "ms" if peak < 1e14
+                        else "us" if peak < 1e17 else "ns")
+                starts = pd.to_datetime(starts, unit=unit, utc=True, errors="coerce")
+            else:
+                starts = _stamps(starts)
+            if start_col not in (case_col, activity_col, role_col, resource_col):
+                del df[start_col]
+        if "start_timestamp" in df.columns and ts_col != "start_timestamp":
+            del df["start_timestamp"]
+        if starts is not None:
+            df["start_timestamp"] = starts
+        if dayfirst and ts_col in df.columns:
+            df[ts_col] = _stamps(df[ts_col])
         # Map role/resource to org:role / org:resource BEFORE format_dataframe:
         # format_dataframe writes the canonical concept:name / case:concept:name
         # / time:timestamp by dropping any same-named column, so a source column
@@ -120,6 +143,15 @@ def read_log(log_path, kind=LOG_KIND, csv_columns=CSV_COLUMNS):
         df = pm4py.format_dataframe(
             df, case_id=case_col, activity_key=activity_col,
             timestamp_key=ts_col)
+        if starts is None and "start_timestamp" in df.columns:
+            del df["start_timestamp"]
+        elif starts is not None:
+            # On the completions' clock (aware or naive), so they subtract.
+            done = df["time:timestamp"]
+            if getattr(done.dt, "tz", None) is None:
+                df["start_timestamp"] = df["start_timestamp"].dt.tz_localize(None)
+            else:
+                df["start_timestamp"] = df["start_timestamp"].dt.tz_convert(done.dt.tz)
         return _coerce_str_object(df)
     data = Path(log_path).read_bytes()
     if kind == "zip" or (len(data) >= 2 and data[:2] == b"PK"):
@@ -467,6 +499,9 @@ def _config(
         f"MIN_SUPPORT = {float(cfg['min_support'])!r}",
         f"NOTATION = {cfg['notation']!r}",
         f"DECOMPOSITION = {_decomposition_literal(cfg['decomposition'])}",
+        "# Split the model along a case attribute (one stub per value), or "
+        "None.",
+        f"SPLIT_ATTRIBUTE = {cfg['split_attribute']!r}",
         f"RESOURCE_ATTRIBUTE = {cfg['resource_attribute']!r}",
         f"OVERLAY_NODES = {list(cfg['overlay_nodes'])!r}",
         f"OVERLAY_EDGES = {list(cfg['overlay_edges'])!r}",
@@ -519,19 +554,30 @@ def _model_fn() -> str:
     return (
         "def run_model(log):\n"
         '    """Mine the UCM, overlay performance, and export it."""\n'
-        "    tree = pm4py.discover_process_tree_inductive(\n"
-        "        log, noise_threshold=NOISE_THRESHOLD)\n"
-        '    params = {"process_tree": tree}\n'
-        "    params.update(resource_params())\n"
-        "    ucm = pm4py_ucm.discover_ucm_inductive(\n"
-        "        log, parameters=params, decomposition=DECOMPOSITION)\n"
-        "    traversal = (pm4py_ucm.compute_traversal_stats(tree, log)\n"
-        "                 if wants_traversal() else None)\n"
-        "    if NODE_METRICS or EDGE_METRICS:\n"
-        "        pm4py_ucm.annotate_performance(\n"
-        "            ucm, log,\n"
+        "    if SPLIT_ATTRIBUTE:\n"
+        "        # One model per value of the attribute, under a root map\n"
+        "        # with one stub per value; each map's overlay comes from\n"
+        "        # its own value's cases.\n"
+        "        ucm = pm4py_ucm.discover_ucm_by_attribute(\n"
+        "            log, SPLIT_ATTRIBUTE, decomposition=DECOMPOSITION,\n"
+        "            noise_threshold=NOISE_THRESHOLD,\n"
         "            node_metrics=NODE_METRICS, edge_metrics=EDGE_METRICS,\n"
-        "            traversal=traversal, tree=tree)\n"
+        "            parameters=resource_params())\n"
+        "    else:\n"
+        "        tree = pm4py.discover_process_tree_inductive(\n"
+        "            log, noise_threshold=NOISE_THRESHOLD)\n"
+        '        params = {"process_tree": tree}\n'
+        "        params.update(resource_params())\n"
+        "        ucm = pm4py_ucm.discover_ucm_inductive(\n"
+        "            log, parameters=params, decomposition=DECOMPOSITION)\n"
+        "        traversal = (pm4py_ucm.compute_traversal_stats(tree, log)\n"
+        "                     if wants_traversal() else None)\n"
+        "        if NODE_METRICS or EDGE_METRICS:\n"
+        "            pm4py_ucm.annotate_performance(\n"
+        "                ucm, log,\n"
+        "                node_metrics=NODE_METRICS,\n"
+        "                edge_metrics=EDGE_METRICS,\n"
+        "                traversal=traversal, tree=tree)\n"
         '    pm4py_ucm.write_ucm(ucm, str(OUT_DIR / "model.jucm"))\n'
         "    _save_image(pm4py_ucm.save_vis_ucm, ucm,\n"
         '                str(OUT_DIR / "model.png"), style=NOTATION,\n'

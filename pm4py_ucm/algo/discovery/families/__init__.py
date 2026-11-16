@@ -32,7 +32,9 @@ from .advisor import (  # noqa: F401
 )
 from .family import FamilyCell, ModelFamily, write_family  # noqa: F401
 from .algorithm import discover  # noqa: F401
-from .assembly import assemble_combined, assemble_umbrella  # noqa: F401
+from .assembly import (  # noqa: F401
+    assemble_combined, assemble_split, assemble_umbrella,
+)
 from .stats import (  # noqa: F401
     CellStats,
     FamilyChoice,
