@@ -144,7 +144,8 @@ The start timestamp is auto-detected from `start_timestamp`, `Start Timestamp`,
 one time per event, even if the file has a `start_timestamp` column. A start
 column that does not read as dates, or a pair where most starts are after
 their completion (the two columns swapped), is refused on Apply. A few late
-starts are kept, with a warning: those events count from their completion.
+starts are kept, with a warning in this panel and a count in the "Read
+from" line above the model: those events count from their completion.
 
 The file may be comma-, semicolon-, tab- or pipe-delimited, in UTF-8 (with
 or without BOM), UTF-16 or Windows-1252 — both are detected.
@@ -436,6 +437,10 @@ builds the `.jucm` (with the synthesized `<scenarioGroups>`), `variants.csv`,
 `.jucm` is serialized only when you ask. Works on flat and decomposed models
 alike.
 
+Scenarios are synthesized on the **single model of the whole log**. When the
+Model view is split by an attribute, this view says so and still uses the
+unsplit model; filter the log to one value to get that value's scenarios.
+
 #### Simulation (bottom of the Scenarios view)
 
 Once scenarios are synthesised, the section at the bottom of this view runs
@@ -489,9 +494,10 @@ identifiers and near-constant fields) — so the picker isn't a blind guess. It 
 fully **deterministic** (no LLM; `pm4py_ucm.rank_partition_attributes`); when
 nothing scores high it says so, rather than pretend.
 
-Pick **1–2 case attributes**; a **coverage heatmap** previews the cell
+Pick **1–2 case attributes** (a categorical attribute is offered when it has
+at most 60 distinct values); a **coverage heatmap** previews the cell
 sizes *before* mining, with per-value filters, a minimum number of cases per
-cell, a cap on values per attribute (the rest merge into *Other*), and
+cell, a cap on values per attribute (at most 20; the rest merge into *Other*), and
 quantile bins for numeric attributes. Mine to get one model per
 combination, shown as a **2-D SVG grid** (rows × columns). A single
 **⬇ Prepare downloads** button then builds the download-only artifacts —
@@ -663,7 +669,7 @@ a colleague. The sidebar's **Project** group offers two saves:
 
 - **⬇ Save settings** → `<log>.ucmproj.json` — the *configuration only* (miner
   settings, CSV mapping, renaming, filters, performers, overlays,
-  decomposition, family and scenario settings, the Simulation highlight, the
+  decomposition, the split attribute, family and scenario settings, the Simulation highlight, the
   open view, and your dashboards). Small and email-able; carries **no event data**, so it's the
   privacy-preserving way to share when the log is sensitive.
 - **⬇ Save project bundle** → `<log>.ucmproj.zip` — everything above **plus the

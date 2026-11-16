@@ -59,8 +59,11 @@ applied before mining across every view, and a **cost screen** that sizes a
 log before the miner is started. The full walkthrough is in
 [`web/README.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/web/README.md).
 
-- **Model** — upload an event log (XES or CSV), tune the inductive
+- **Model** — upload an event log (XES or CSV; a CSV with a start and a
+  completion column loads as an interval log), tune the inductive
   miner / decomposition / performer settings interactively, optionally
+  **split the model by a case attribute** (one model per value, for a log
+  that mixes several processes), optionally
   **filter the log** (range sliders over activity- and variant-frequency
   ranks, an exclude list, a date range, a **cycle-time percentile** band
   that keeps the fastest or slowest cases by end-to-end duration, and an
@@ -531,7 +534,11 @@ overwhelming. The optional `decomposition=` keyword splits the result into a
 **root map plus plug-in (sub-)maps connected by Stubs**. Four public entry
 points take it, and all four interpret it identically:
 `discover_ucm_inductive`, `convert_to_ucm`, `discover_scenarios` and
-`discover_ucm_family`. The same
+`discover_ucm_family`. A fifth, `discover_ucm_by_attribute`, applies it
+within each value of the attribute it splits on (see
+[Model families](#model-families-attribute-partitioned-discovery)): on a
+log that mixes unrelated processes, no decomposition of the single mined
+tree gives readable maps, and that is the one to use. The same
 `PluginBinding` machinery the package already uses for hand-built models
 ties everything together — every round-trip stays byte-stable through the
 exporter and importer.
@@ -966,8 +973,27 @@ scenarios** — one per behavioural variant of its sub-log, with
 `family_variant` branch conditions and loop counters, so jUCMNav's
 traversal walks genuinely different paths per strategy.
 
-Full documentation — partitioning policy, skeleton merge rules,
-dedup/conditions, path scenarios, grid resolution, value filtering —
+When the cells are not variants of one process but **different
+processes in one log** (dozens of services in one file), there is no
+skeleton to share. Split the model instead:
+
+```python
+ucm = pm4py_ucm.discover_ucm_by_attribute(
+    log, "service", decomposition="auto",
+    node_metrics=["median_time", "traversal_frequency"],
+    edge_metrics=["traversal_frequency", "traversal_percentage"])
+```
+
+One model is mined per value, each from its own cases, under a root map
+with an OR-fork and **one static stub per value**, guarded by
+`service == <value>`. Every value is kept, nothing is merged and no
+plug-in is shared, so each map's overlay comes from exactly its own
+cases; the root map shows the number of cases per value. The same model
+is `assemble_ucm_family(family, mode="split")` on a family mined on that
+one attribute.
+
+Full documentation — partitioning policy, skeleton merge rules, the split
+model, dedup/conditions, path scenarios, grid resolution, value filtering —
 in [`docs/model_families.md`](https://github.com/ProcessMining-uOttawa/pm4py-ucm/blob/main/docs/model_families.md). The web app's
 **Family** view exposes all of it interactively, including a
 pre-mining coverage heatmap and per-attribute value filters.
@@ -1256,7 +1282,8 @@ reach you in the first place:
 | `discover_scenarios` | via synthesis, below |
 | `synthesize_scenarios` | after splicing loop guards and condition forks |
 | `discover_ucm_family` | each cell as it is mined, naming the cell |
-| `assemble_ucm_family` | the finished container, both modes |
+| `assemble_ucm_family` | the finished container, in every mode |
+| `discover_ucm_by_attribute` | each value's model as it is mined, then the finished container |
 | `write_ucm` | before writing; nothing is written if it fails |
 | `write_bpmn` | likewise |
 
