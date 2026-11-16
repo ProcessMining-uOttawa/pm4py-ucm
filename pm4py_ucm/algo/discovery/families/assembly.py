@@ -249,7 +249,10 @@ def _annotate_maps(
         pruned = getattr(cells[0], "prune", None)
         traversal = compute_traversal_stats(
             tree, sub_log,
-            repair_hints=getattr(pruned, "repair_hints", None) or None)
+            repair_hints=getattr(pruned, "repair_hints", None) or None,
+            # Scaled to this cell's size, as in the pruning pass.
+            max_repair_seconds="auto",
+            max_repair_seconds_per_sequence="auto")
     annotate_performance(
         container, sub_log,
         node_metrics=node_metrics, edge_metrics=edge_metrics,

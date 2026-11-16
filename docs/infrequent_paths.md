@@ -190,7 +190,11 @@ right after it is mined. The dict takes `min_cases`, `min_share`,
   one run to the next** on a log that fits poorly, because the alignment
   is bounded by wall-clock time and what it does not reach is not counted.
   Seen on a 10,004-case log split 11 ways: 166 paths in one run, 169 in
-  the next. It only happens where the budget is exhausted.
+  the next. It only happens where the budget is exhausted. Families and
+  split models therefore scale the budget to each model's size (one
+  second per 50 distinct sequences, 10 s to 120 s), which makes it rarer:
+  165 and 164 on that log, with about 93 cases left uncounted instead of
+  about 470.
 - **Counts on a poorly fitting tree are partly repaired counts.** On a
   model mined with a high noise threshold many cases do not fit, and their
   traversals are those of the nearest path. The pruning decisions are only

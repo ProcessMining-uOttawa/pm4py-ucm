@@ -2661,7 +2661,15 @@ def _mine_family(
             # come from replaying that cell's sub-log on that cell's
             # model — the same reason the other metrics are per-cell.
             cell_traversal = (
-                pm4py_ucm.compute_traversal_stats(cell.tree, cell_df)
+                pm4py_ucm.compute_traversal_stats(
+                    cell.tree, cell_df,
+                    # As the library's own assemblies do: reuse the
+                    # pruning pass's alignments, and scale the budget to
+                    # the cell.
+                    repair_hints=(getattr(cell.prune, "repair_hints", None)
+                                  or None),
+                    max_repair_seconds="auto",
+                    max_repair_seconds_per_sequence="auto")
                 if _cell_traversal and cell.tree is not None else None
             )
             pm4py_ucm.annotate_performance(

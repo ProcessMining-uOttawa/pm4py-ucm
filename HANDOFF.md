@@ -119,6 +119,25 @@ of his decisions; the code has not been reviewed beyond that.
   model**, pruning or not; the changelog says so. What is left is real
   search time: two cells still exhaust the 10 s budget. Going further
   means parallel alignment across processes, not tried here.
+- **The budget scales with each model** in families and splits (the
+  maintainer's choice over a fixed 15 s, 2026-11-17):
+  `scaled_repair_budget`, one second per 50 distinct sequences, 10 s to
+  120 s, the formula the app already used for a single model. Measured on
+  that log with pruning, two runs each:
+
+  | Budget per model | Total | Uncounted | Paths removed |
+  |---|---|---|---|
+  | 10 s fixed | about 110 s | about 470 | 166, 169 |
+  | 15 s fixed | 118 s | 304, 321 | 162, 162 |
+  | 30 s fixed | about 155 s | 21, 42 | 158, 158 |
+  | scaled | about 134 s | 92, 95 | 165, 164 |
+
+  The scaled one still leaves 4 of 22 replays short: cells of 400 to 800
+  sequences stay at the 10 s floor and need about 15 s, because a
+  non-fitting sequence costs 30 to 95 ms here, not the 20 ms the slope
+  assumes. `REPAIR_SEQUENCES_PER_SECOND = 25` would cover them; not
+  changed without the maintainer's say, since it lengthens every large
+  mine.
 - Three registry parameters (`prune_min_cases`, `prune_min_share`,
   `prune_drop_cases`), restored in `_apply_project_config`, emitted by the
   code export (`prune_tree`, `prune_arg`).

@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are optimal; they may pick different paths among equally near ones. The
   net-based search remains the fallback for a tree that is not a PM4Py
   `ProcessTree`.
+- **Family and split models scale the alignment budget to each model**
+  (one second per 50 distinct activity sequences, between 10 s and 120 s)
+  instead of a fixed 10 s per model, in the pruning pass and in the
+  replay. Small models are unaffected; large ones get the time they need.
+  On the same log: about 134 s in all, about 93 cases uncounted.
+  `compute_traversal_stats` itself keeps its fixed defaults; pass
+  `max_repair_seconds="auto"` to get the scaled budget
+  (`scaled_repair_budget`).
 - A split model reports the replay of each value's cases as its own
   progress stage, instead of sitting on "Assembling the split model" for
   the whole of it.

@@ -115,7 +115,11 @@ def _prune_cell(tree, cell_df, case_ids, case_id_col: str,
     replay_df = (cell_df if case_id_col == "case:concept:name"
                  else cell_df.rename(columns={case_id_col:
                                               "case:concept:name"}))
-    stats = compute_traversal_stats(tree, replay_df)
+    # Budget scaled to the cell: a family mixes small cells with large
+    # ones, and a fixed one starves exactly the cells that matter most.
+    stats = compute_traversal_stats(
+        tree, replay_df, max_repair_seconds="auto",
+        max_repair_seconds_per_sequence="auto")
     result = prune_infrequent_paths(tree, stats, **prune)
     if drop_cases and result.removed:
         gone = set(result.dropped_case_ids(replay_df))

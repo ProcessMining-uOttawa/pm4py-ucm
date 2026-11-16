@@ -1,6 +1,6 @@
 # Test suite
 
-**1654 tests** across **47 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
+**1656 tests** across **47 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
 
 > Regenerate this file with `python tests/gen_readme.py` after adding or removing tests. Purposes are the first sentence of each module's docstring; edit the docstring, not this table.
 
@@ -30,8 +30,8 @@
 | | _Model families subtotal_ | | **96** |
 | **Performance & metrics** | [`test_metric_validation.py`](test_metric_validation.py) | Metric-correctness validation suite. | 48 |
 |  | [`test_performance.py`](test_performance.py) | Tests for the performance overlay (frequencies / times on activities and edges): stats computation, segment-based annotation, visualizer output, and .jucm round-trip of the metadata. | 17 |
-|  | [`test_traversal.py`](test_traversal.py) | Tests for replay-based traversal counting. | 29 |
-| | _Performance & metrics subtotal_ | | **94** |
+|  | [`test_traversal.py`](test_traversal.py) | Tests for replay-based traversal counting. | 31 |
+| | _Performance & metrics subtotal_ | | **96** |
 | **Cost screening & log reduction** | [`test_complexity.py`](test_complexity.py) | Tests for the discovery/replay cost screening in ``algo.complexity``. | 12 |
 |  | [`test_quick_reductions.py`](test_quick_reductions.py) | V6's one-click reductions record what they selected, and hold. | 12 |
 |  | [`test_replay_budget.py`](test_replay_budget.py) | Tests for telling a truncated replay apart from a trace that cannot fit. | 7 |
@@ -66,6 +66,6 @@
 |  | [`test_pruning.py`](test_pruning.py) | Tests for pruning infrequent paths from a process tree. | 35 |
 |  | [`test_split_assembly.py`](test_split_assembly.py) | One model split along a case attribute (#152). | 13 |
 | | _Other subtotal_ | | **57** |
-| | **Total** | | **1654** |
+| | **Total** | | **1656** |
 
 See the repository [`README.md`](../README.md#testing) for how to run the suite, and [`docs/metrics.md`](../docs/metrics.md) for the metric definitions the validation tests enforce.

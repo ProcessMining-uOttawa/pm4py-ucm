@@ -530,14 +530,43 @@ def _aligned_paths_petri(
 # Driver
 # ---------------------------------------------------------------------------
 
+#: Bounds of the size-scaled alignment budget, in seconds.
+REPAIR_BUDGET_MIN = 10.0
+REPAIR_BUDGET_MAX = 120.0
+#: Distinct sequences that buy one second of it.
+REPAIR_SEQUENCES_PER_SECOND = 50.0
+
+
+def scaled_repair_budget(n_sequences: int) -> Tuple[float, float]:
+    """``(seconds_total, seconds_per_sequence)`` for aligning the
+    non-fitting part of a log with ``n_sequences`` distinct activity
+    sequences — what ``max_repair_seconds="auto"`` resolves to.
+
+    A fixed budget is generous on a small log and stingy on a large one:
+    alignment works through the sequences that did not fit, so its work
+    grows with them. One second per 50 distinct sequences, never under
+    10 s (the fixed default) nor over 120 s, with a twentieth of it, at
+    least 1 s, for any single sequence.
+
+    Measured on an 11-model split of a 10,004-case log, where most models
+    need well under 10 s and the largest has some 800 non-fitting
+    sequences: a fixed 10 s left about 470 cases uncounted, 15 s about
+    310, 30 s about 30.
+    """
+    total = min(REPAIR_BUDGET_MAX,
+                max(REPAIR_BUDGET_MIN,
+                    float(n_sequences) / REPAIR_SEQUENCES_PER_SECOND))
+    return total, max(1.0, total / 20.0)
+
+
 def compute_traversal_stats(
     tree,
     log,
     *,
     repair: bool = True,
     max_repair_sequences: Optional[int] = 2000,
-    max_repair_seconds: Optional[float] = 10.0,
-    max_repair_seconds_per_sequence: Optional[float] = 1.0,
+    max_repair_seconds: "Optional[float | str]" = 10.0,
+    max_repair_seconds_per_sequence: "Optional[float | str]" = 1.0,
     coarsen_loops: bool = True,
     progress_callback=None,
     parses: "Optional[_parses.ParseTable]" = None,
@@ -571,7 +600,10 @@ def compute_traversal_stats(
         longer one costs milliseconds. Bounding it keeps a mine
         responsive; whatever is left unaligned is reported as
         unexplained rather than silently attributed. Pass ``None`` to
-        either for the unbounded behaviour.
+        either for the unbounded behaviour, or ``"auto"`` to scale it
+        with the number of distinct sequences in ``log``
+        (:func:`scaled_repair_budget`) — what the family and split
+        miners do for each of their models.
     coarsen_loops
         Passed to :func:`choice_signature.replay`; does not affect the
         counts, only how signatures are pooled.
@@ -619,6 +651,13 @@ def compute_traversal_stats(
         total_cases=len(cases), n_sequences=len(sequence_cases),
         sequence_cases=sequence_cases,
     )
+    if max_repair_seconds == "auto" or (
+            max_repair_seconds_per_sequence == "auto"):
+        _auto_total, _auto_each = scaled_repair_budget(len(sequence_cases))
+        if max_repair_seconds == "auto":
+            max_repair_seconds = _auto_total
+        if max_repair_seconds_per_sequence == "auto":
+            max_repair_seconds_per_sequence = _auto_each
     if not cases:
         return stats
 

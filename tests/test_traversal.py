@@ -738,3 +738,35 @@ def test_a_hint_that_no_longer_replays_is_ignored():
     stats = tv.compute_traversal_stats(tree, log, repair_hints=stale)
     assert stats.repaired_cases == 2
     assert stats.repaired_paths[("S", "A", "E")] != ("S", "A", "Z", "E")
+
+
+# ---------------------------------------------------------------------------
+# The alignment budget can scale with the log
+# ---------------------------------------------------------------------------
+
+def test_scaled_repair_budget_has_a_floor_a_slope_and_a_ceiling():
+    assert tv.scaled_repair_budget(0) == (10.0, 1.0)
+    assert tv.scaled_repair_budget(500) == (10.0, 1.0)      # still the floor
+    assert tv.scaled_repair_budget(1300) == (26.0, 1.3)
+    assert tv.scaled_repair_budget(10 ** 6) == (120.0, 6.0)
+
+
+def test_auto_budget_is_resolved_from_the_distinct_sequences(monkeypatch):
+    seen = {}
+
+    def fake(tree, sequences, **kw):
+        seen.update(kw)
+        return {}
+    monkeypatch.setattr(tv, "_aligned_paths", fake)
+    tree = _seq(_leaf("A"), _leaf("B"))
+    # 1,500 distinct non-fitting sequences -> 30 s in all, 1.5 s each.
+    log = [["A", "B"]] + [["A", f"x{i}"] for i in range(1499)]
+    tv.compute_traversal_stats(
+        tree, log, max_repair_seconds="auto",
+        max_repair_seconds_per_sequence="auto")
+    assert seen["seconds_total"] == 30.0
+    assert seen["seconds_per_sequence"] == 1.5
+    # Left alone, the fixed defaults still apply.
+    seen.clear()
+    tv.compute_traversal_stats(tree, log)
+    assert (seen["seconds_total"], seen["seconds_per_sequence"]) == (10.0, 1.0)
