@@ -5845,13 +5845,18 @@ prune_spec: Tuple = prune_spec_wanted if _replay_ok else ()
 # ---- Mine UCM (for Model tab) ----------------------------------------------
 try:
     with st.status("Mining UCM...", expanded=True) as status:
-        if prune_spec and not split_attribute:
+        if (prune_spec and not split_attribute
+                and st.session_state.get("_prune_warm_fp") != _replay_fp):
             # The unpruned tree's replay, with progress: _pruned_tree needs
-            # it and, being cached, cannot report progress itself.
+            # it and, being cached, cannot report progress itself. Once per
+            # log + filter + noise threshold in a session, not on every
+            # rerun: even as a cache hit this call unpickles the whole parse
+            # table, which grows with the log, only to throw it away.
             status.update(label="Replaying the log to measure each path...")
             _parse_table(log_bytes, log_kind, csv_columns, noise_threshold,
                          filter_spec, file_hash,
                          _progress=_ProgressUI(status), prune_spec=())
+            st.session_state["_prune_warm_fp"] = _replay_fp
         # The replay table is shared with the Scenarios view: both need
         # the same parses, and on a big log that is the dominant cost.
         # Built only when something will actually consume it.

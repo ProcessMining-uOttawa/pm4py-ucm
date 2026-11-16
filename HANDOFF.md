@@ -75,6 +75,16 @@ of his decisions; the code has not been reviewed beyond that.
   *Log filters*, at the maintainer's request: its three widgets render
   only while it is open, so they use the `_sticky` mirror, and a project
   restore writes both the widget keys and the mirror.
+  Checked in the running app by saving and loading real project files:
+  saved open, the file holds the thresholds; saved closed, it holds 0;
+  loading the first into a closed section opens it with its values, and
+  loading the second into an open section closes it.
+- The unpruned tree's parse table is pre-built with progress **once per
+  log + filter + noise threshold in a session** (`_prune_warm_fp`), not on
+  every rerun: as a cache hit it still unpickles the whole table. Measured
+  on the claims sample a rerun costs about 0.6 s with or without pruning,
+  so this is a precaution for large logs; the maintainer's report of a
+  slow rerun after changing the diagram height was not reproduced.
 - Three registry parameters (`prune_min_cases`, `prune_min_share`,
   `prune_drop_cases`), restored in `_apply_project_config`, emitted by the
   code export (`prune_tree`, `prune_arg`).
