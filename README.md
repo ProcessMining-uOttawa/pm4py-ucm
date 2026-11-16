@@ -171,9 +171,8 @@ streamlit run web/streamlit_app_v6.py
 
 **Every app older than V6 is deprecated.** `web/streamlit_app.py`, the
 deployment's main file, is a shim that runs V6. The older apps are kept
-runnable so earlier results stay reproducible, and each says so when it
-starts, but they receive no new features — including settings added to the
-session registry, which they save but do not restore.
+in the repository for the record and each says so when it starts, but they
+are no longer tested or maintained, and parts of them may stop working.
 
 | App | File | Status |
 |---|---|---|

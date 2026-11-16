@@ -183,6 +183,13 @@ class Partition:
         return out
 
 
+#: Most distinct values a string attribute may have and still be offered
+#: as an enumeration to partition on. Past it the column is treated as
+#: free text or an identifier. An axis this wide is still cut down by
+#: ``max_values_per_attribute`` (the rest merge into ``Other``).
+DEFAULT_MAX_ENUM_CARDINALITY = 60
+
+
 # ---------------------------------------------------------------------------
 # Attribute detection
 # ---------------------------------------------------------------------------
@@ -190,7 +197,7 @@ class Partition:
 def detect_case_attributes(
     log_df,
     case_id_col: str = "case:concept:name",
-    max_enum_cardinality: int = 40,
+    max_enum_cardinality: int = DEFAULT_MAX_ENUM_CARDINALITY,
     numeric_coercion_threshold: float = DEFAULT_NUMERIC_COERCION_THRESHOLD,
 ):
     """Detect the case-constant attributes of ``log_df`` usable as
@@ -495,7 +502,7 @@ def partition_log(
     bin_edges: Optional[Dict[str, Sequence[float]]] = None,
     other_bucket: bool = True,
     unknown_bucket: bool = True,
-    max_enum_cardinality: int = 40,
+    max_enum_cardinality: int = DEFAULT_MAX_ENUM_CARDINALITY,
     numeric_coercion_threshold: float = DEFAULT_NUMERIC_COERCION_THRESHOLD,
     include_values: Optional[Dict[str, Sequence[str]]] = None,
     ignore_value_case: bool = True,

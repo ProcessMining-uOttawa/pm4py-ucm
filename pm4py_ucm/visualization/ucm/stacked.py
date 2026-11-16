@@ -24,6 +24,7 @@ import tempfile
 from typing import Any, Dict, List, Optional, Tuple
 
 from ...objects.ucm.obj import UCM
+from . import dot as _dot
 from .variants import classic as _classic
 
 
@@ -88,7 +89,7 @@ def _render_each(
         gviz = _classic.apply(ucm, parameters=per_map_params)
         gviz.format = "png"
         base = os.path.join(tmpdir, f"map_{idx:03d}")
-        rendered = gviz.render(filename=base, cleanup=True)
+        rendered = _dot.render(gviz, filename=base, cleanup=True)
         out.append((ucm_map.name or f"Map{idx}", rendered))
     return out
 

@@ -35,6 +35,10 @@ REGISTRY: Tuple[Param, ...] = (
     Param("min_support", "miner", 0.0),
     Param("notation", "miner", "bpmn"),         # "ucm" | "bpmn"
     Param("decomposition", "miner", "off"),     # "off" | list of [k, v] pairs
+    # Split the Model view's model along a case attribute: one stub per
+    # value, each bound to the model mined from that value's cases. None =
+    # one model for the whole log.
+    Param("split_attribute", "miner", None),
     # Performers.
     Param("resource_attribute", "performers", "org:role"),
     # Performance overlay.

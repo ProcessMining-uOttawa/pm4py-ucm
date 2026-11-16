@@ -57,6 +57,7 @@ upper-case constant in the script's `CONFIG` block (`NOISE_THRESHOLD`,
 |---|---|
 | `LogRef` (name, kind, CSV columns) | `DEFAULT_LOG`, `LOG_KIND`, `CSV_COLUMNS` and an inlined `read_log(...)` — XES, zipped XES or CSV, sniffing encoding and delimiter as the app does |
 | `filter_spec` (incl. `rename_map`, `attr_expr`) | inlined `apply_log_filters(log, FILTER_SPEC)` (see §6a) |
+| `split_attribute` | when set, `run_model` calls `discover_ucm_by_attribute(log, SPLIT_ATTRIBUTE, …)` instead of mining one tree |
 | `noise_threshold`, `notation`, `decomposition` | `pm4py.discover_process_tree_inductive(log, noise_threshold=…)`, then `discover_ucm_inductive(log, parameters={"process_tree": tree, …}, decomposition=…)`; `notation` is the `style=` of every render |
 | `resource_attribute`, `min_support` | an inlined `resource_params()` that builds the `resource_attribute` / `resource_parameters` keys passed in `parameters` |
 | `overlay_nodes`, `overlay_edges`, `overlay_replay`, `overlay_heatmap*` | `annotate_performance(...)` (+ heat-map render args). When a `traversal_*` metric is selected the script first calls `compute_traversal_stats(tree, log)` and passes it — the emitted `wants_traversal()` helper gates that, so a session without those metrics pays nothing. |

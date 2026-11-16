@@ -47,6 +47,7 @@ import shutil
 import tempfile
 from typing import Any, Dict, List, Optional, Tuple
 
+from . import dot as _dot
 from . import stacked as _stacked
 from .variants import classic as _classic
 
@@ -102,8 +103,8 @@ def _render_cell_png(ucm, tmpdir: str, index: int,
     params["format"] = "png"
     gviz = _classic.apply(ucm, parameters=params)
     gviz.format = "png"
-    rendered = gviz.render(
-        filename=os.path.join(tmpdir, f"cell_{index:03d}"), cleanup=True,
+    rendered = _dot.render(
+        gviz, filename=os.path.join(tmpdir, f"cell_{index:03d}"), cleanup=True,
     )
     return rendered
 

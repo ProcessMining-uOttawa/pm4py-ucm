@@ -8,10 +8,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "web"))
 
 _WEB = Path(__file__).resolve().parent.parent / "web"
 #: The app the drift guards parse — the one ``streamlit_app.py`` shims, i.e.
-#: the one actually deployed. V5 is superseded and only has to keep *saving*
-#: (see ``test_v5_gather_still_satisfies_the_registry``).
+#: the one actually deployed. The older apps are deprecated and unguarded.
 _APP = _WEB / "streamlit_app_v6.py"
-_APP_V5 = _WEB / "streamlit_app_v5.py"
 
 from sessions import (  # noqa: E402
     LogRef,
@@ -30,6 +28,7 @@ FULL_VALUES = {
     "min_support": 0.1,
     "notation": "bpmn",
     "decomposition": [["on_root_sequence", True]],
+    "split_attribute": "service",
     "resource_attribute": "org:resource",
     "overlay_nodes": ["frequency", "sojourn_median_time"],
     "overlay_edges": ["percentage", "frequency"],
@@ -246,28 +245,6 @@ def test_family_attr_restores_before_its_view_is_opened():
     restore = _app_func_sources("_apply_project_config")["_apply_project_config"]
     assert '_sticky_seed("family_attr1"' in restore
     assert '_sticky_seed("family_attr2"' in restore
-
-
-def test_v5_gather_still_satisfies_the_registry():
-    """The superseded V5 app must keep *saving*. ``collect`` refuses a gather
-    that is missing a registered id, so a Param added for V6 without a
-    corresponding (default-valued) entry in V5 would make V5's Save button
-    raise at runtime. V5 need not restore the newer params — only round-trip
-    them — so this is a gather-only guard."""
-    import ast
-
-    tree = ast.parse(_APP_V5.read_text(encoding="utf-8"))
-    keys = None
-    for node in ast.walk(tree):
-        if (isinstance(node, ast.Assign)
-                and any(isinstance(t, ast.Name) and t.id == "_proj_values"
-                        for t in node.targets)
-                and isinstance(node.value, ast.Dict)):
-            keys = {k.value for k in node.value.keys
-                    if isinstance(k, ast.Constant)}
-            break
-    assert keys is not None, "could not find V5's _proj_values gather dict"
-    assert keys == set(param_ids())
 
 
 def test_simulation_mode_is_persisted_as_an_identifier_not_a_label():

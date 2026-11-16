@@ -403,12 +403,12 @@ them, the A/B colours, and the Elements/Paths coverage split (#109).
 
 ## Web app versions
 
-**Everything older than V6 is deprecated** — V5, V3 and V2 alike. They stay
-runnable so older results reproduce, each renders a notice on start-up, and
-they receive no new features. The line is drawn at persistence: they still
-*save* every session parameter (`collect()` refuses a gather missing one, so
-their Save buttons work), but only V6 *restores* newly-added ones. New work
-goes in V6.
+**Everything older than V6 is deprecated, untested and unmaintained** — V5,
+V3 and V2 alike (maintainer's decision, 2026-11-16). The files stay in the
+repository and each renders a notice on start-up, but no test parses them
+and nothing has to be kept working in them: a new registry `Param` is
+gathered in V6 only, which breaks V5's Save button, and that is accepted.
+New work goes in V6.
 
 The frozen-V2 rule is **over**. Nothing needs to stay byte-stable for it any
 more. (`.jucm` byte-stability for jUCMNav interop is a separate, still-live

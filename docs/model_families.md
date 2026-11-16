@@ -128,7 +128,7 @@ non-null values parse. Values that do not parse become missing, and land
 in the **Unknown** bucket. The share is `numeric_coercion_threshold`:
 pass `discover_ucm_family(..., numeric_coercion_threshold=1.01)` to keep
 a column of numeric strings (codes, say) as an enumeration instead.
-`max_enum_cardinality` (default 40) is the most distinct values a string
+`max_enum_cardinality` (default 60) is the most distinct values a string
 attribute may have and still be offered as an enumeration.
 
 Two consequences worth knowing before you partition:
@@ -141,9 +141,12 @@ Two consequences worth knowing before you partition:
   `concept:instance` — are never coerced however numeric they look,
   because their digits are labels and a range like `541-561` over them
   means nothing. They partition as enumerations.
-- An enumeration with more than 40 distinct values is not offered as a
+- An enumeration with more than 60 distinct values is not offered as a
   partition attribute at all; naming one raises a `ValueError` listing
-  the attributes that were detected.
+  the attributes that were detected. A wide axis is still cut down by
+  `max_values_per_attribute`: the most frequent values are kept and the
+  rest merge into `Other` (the web app allows at most 20). To keep every
+  value of such an attribute, use the split model below.
 
 The threshold is deliberately strict. A column of treatment codes
 `"1"`/`"2"`/`"3"` that writes combinations as `"2,3"` is 97.7% numeric,
@@ -193,6 +196,43 @@ need.
 (`cancer_type=Breast_age=40-59.jucm`); `family_summary.csv` lists every
 combination with its case count, coverage and file, skipped ones
 included.
+
+### The split model (one stub per value)
+
+A log can also be a plain **mixture**: one file holding many unrelated
+processes (55 public services, say), told apart by one attribute. Mined
+as a whole, step names shared between the processes tie them into
+fragments that follow no real boundary, and no decomposition setting
+helps, because decomposition cuts along the mined tree.
+
+```python
+ucm = pm4py_ucm.discover_ucm_by_attribute(
+    log, "service", decomposition="auto",
+    node_metrics=["median_time", "traversal_frequency"],
+    edge_metrics=["traversal_frequency", "traversal_percentage"])
+```
+
+mines one model per value, each from its own cases, and returns one
+`UCM` whose root map is an OR-fork with **one static stub per value**,
+each branch guarded by `service == <value>` and each stub bound to that
+value's model. It is `discover_ucm_family` on the one attribute followed
+by `assemble_ucm_family(family, mode="split")`, with the partitioning set
+for the purpose: every value is kept (no `Other` bucket, `min_cases=1`)
+and the attribute may have up to 200 values.
+
+How it differs from the umbrella below:
+
+- **Nothing is merged and no plug-in is shared**, even between values
+  that behave identically. Each map's overlay is therefore computed from
+  exactly its own value's cases, and each case is replayed on its own
+  value's model only.
+- The stubs are static. The root map carries no shared skeleton; its
+  counts are the number of cases per value and need no replay.
+- `decomposition` applies within each value's model.
+
+The umbrella answers "what do these variants of one process share, and
+where do they differ"; the split answers "these are different processes,
+show me each".
 
 ### The umbrella (overarching model)
 

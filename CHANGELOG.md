@@ -21,6 +21,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   renamed or edited; **Clear** and **⬆ Load** drop the mark. Dashboard sets
   saved earlier carry no marks and are matched by name, or by the Overview's
   original widget ids. See `docs/dashboard_suggestions.md` §2.4.
+- **A CSV can be loaded as an interval log** (#153). The web app's column
+  mapping has an optional **Start timestamp column**, auto-detected from
+  `start_timestamp`, `Start Timestamp`, `start_time` or `start`. It is
+  parsed like the completion timestamp (ISO, other formats, epochs, the
+  day-first switch) and gives the log a `start_timestamp`, so service and
+  waiting times, in the overlays, the family statistics and the dashboards,
+  are available for a CSV as they are for an XES. The mapping is saved with
+  a project (an optional seventh element of `csv_columns`; older projects
+  load unchanged) and reproduced by an exported script. A start column that
+  does not read as dates, or a pair that looks swapped, is refused on
+  **Apply**; a few starts after their completion are kept with a warning.
+- The completion timestamp is also auto-detected from `Complete Timestamp`,
+  `end_timestamp`, `end_time` and `end`.
+- **One model split along a case attribute** (#152), for a log that mixes
+  several processes (many services, products or case types in one file).
+  Mined as one, such a log gives maps that follow no real boundary whatever
+  the decomposition: step names shared between unrelated processes tie them
+  together. `discover_ucm_by_attribute(log, attribute)` mines one model per
+  value, each from its own cases, and puts them under a root map with an
+  OR-fork and **one static stub per value**, guarded by
+  `attribute == value`. `decomposition` applies within each value. Nothing
+  is merged and no plug-in is shared, even between values that behave
+  alike, so each map's overlay is computed from exactly its own cases; the
+  root map shows the number of cases per value, with no replay needed.
+  Also available as `assemble_ucm_family(family, mode="split")`.
+- **Web app: *Split by attribute*** under Decomposition in the sidebar. It
+  offers the log's categorical case attributes with up to 200 values and
+  applies to the Model view and its downloads; the Scenarios view keeps
+  working on the single model. Saved with a project (`split_attribute`)
+  and reproduced by an exported script.
+
+### Changed
+
+- **Zooming a model diagram is now Ctrl + wheel** (Cmd on macOS; a trackpad
+  pinch works too), or the new **− / + / Fit** buttons in the viewer's top
+  right corner. Dragging still pans. The diagrams embedded in the
+  Dashboards view and in exported reports are separate viewers and still
+  zoom on a plain wheel.
+- **The V2, V3 and V5 web apps are no longer tested or maintained.** They
+  were already deprecated; the files remain, but nothing guards them and
+  parts of them may stop working (V5's *Save project* does, as of this
+  release's new session setting).
+- **A family can be partitioned on an attribute with up to 60 values**
+  (was 40): `max_enum_cardinality` now defaults to 60. The web app's
+  *Max values per attribute* still tops out at 20, so on a wide attribute
+  the most frequent values are kept and the rest merge into `Other`.
+- **The bundled `Procure-to-Pay` sample now loads as an interval log**: its
+  `Start Timestamp` column is picked up by the auto-detection.
+- **A CSV's column mapping decides whether it is an interval log.** A column
+  literally named `start_timestamp` used to reach the dashboards and the
+  family statistics unparsed and unannounced, while the Model view treated
+  the log as single-timestamp. It is now auto-detected as the start
+  timestamp; with the selector at *(none)* the column is dropped. A project
+  saved earlier on such a file loads with no start mapped: pick the column
+  and apply to get the service times back.
 
 ### Fixed
 
@@ -34,14 +89,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wheel now scrolls the diagram and, at its end, carries on down the page.
   Touch scrolling passes through the viewer the same way (not tested on a
   touch device).
-
-### Changed
-
-- **Zooming a model diagram is now Ctrl + wheel** (Cmd on macOS; a trackpad
-  pinch works too), or the new **− / + / Fit** buttons in the viewer's top
-  right corner. Dragging still pans. The diagrams embedded in the
-  Dashboards view and in exported reports are separate viewers and still
-  zoom on a plain wheel.
+- **A map Graphviz cannot lay out with its component boxes is drawn
+  without them, instead of not at all.** On a large map whose path keeps
+  re-entering the same components, `dot` fails with `Error: trouble in
+  init_rank` (Graphviz 8.0.3 and 15.1.0 alike). Every picture (SVG, PNG,
+  stacked, family grid) now retries that map with the components as plain
+  subgraphs and says so at the bottom of the picture. Found on the root
+  map of a 55-process log mined at noise threshold 0.
+- The Scenarios view's highlighted model blamed a missing Graphviz for any
+  rendering failure. It now reports what Graphviz said.
 
 ## [0.9.2] — 2026-11-14
 
