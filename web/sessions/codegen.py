@@ -322,6 +322,37 @@ def wants_traversal():
                for m in tuple(NODE_METRICS) + tuple(EDGE_METRICS))
 
 
+def prune_arg():
+    """The app's *Infrequent paths* settings as the ``prune=`` argument of
+    the family and split miners, or None when both thresholds are 0."""
+    if not (PRUNE_MIN_CASES or PRUNE_MIN_SHARE):
+        return None
+    return {"min_cases": PRUNE_MIN_CASES, "min_share": PRUNE_MIN_SHARE,
+            "drop_cases": PRUNE_DROP_CASES}
+
+
+def prune_tree(tree, log):
+    """Remove the mined tree's infrequent paths, as the app's *Infrequent
+    paths* controls do. Returns ``(tree, log)``: the log comes back without
+    the cases that walked a removed path when PRUNE_DROP_CASES is set, and
+    unchanged otherwise. A no-op when both thresholds are 0.
+
+    The frequencies are the traversal counts of the unpruned tree, so this
+    replays the log on it once.
+    """
+    if not (PRUNE_MIN_CASES or PRUNE_MIN_SHARE):
+        return tree, log
+    result = pm4py_ucm.prune_infrequent_paths(
+        tree, log, min_cases=PRUNE_MIN_CASES, min_share=PRUNE_MIN_SHARE,
+        drop_cases=PRUNE_DROP_CASES)
+    print(f"[prune] removed {len(result.removed)} infrequent path(s)"
+          + (f", without {', '.join(result.removed_activities)}"
+             if result.removed_activities else "")
+          + (f"; dropped {result.affected_cases[1]} case(s)"
+             if PRUNE_DROP_CASES else ""))
+    return result.tree, result.log
+
+
 def _heat_metrics():
     nm = NODE_METRICS[0] if NODE_METRICS else None
     em = EDGE_METRICS[0] if EDGE_METRICS else None
@@ -502,6 +533,16 @@ def _config(
         "# Split the model along a case attribute (one stub per value), or "
         "None.",
         f"SPLIT_ATTRIBUTE = {cfg['split_attribute']!r}",
+        "# Infrequent paths removed from the mined tree: a branch walked by "
+        "fewer",
+        "# cases than the first, or below the second as a share of its "
+        "decision",
+        "# point (a fraction: 0.05 = 5 %). Both 0 = keep everything.",
+        f"PRUNE_MIN_CASES = {int(cfg['prune_min_cases'])!r}",
+        f"PRUNE_MIN_SHARE = {float(cfg['prune_min_share'])!r}",
+        "# True drops the cases that walked a removed path; False keeps "
+        "them.",
+        f"PRUNE_DROP_CASES = {bool(cfg['prune_drop_cases'])!r}",
         f"RESOURCE_ATTRIBUTE = {cfg['resource_attribute']!r}",
         f"OVERLAY_NODES = {list(cfg['overlay_nodes'])!r}",
         f"OVERLAY_EDGES = {list(cfg['overlay_edges'])!r}",
@@ -562,10 +603,11 @@ def _model_fn() -> str:
         "            log, SPLIT_ATTRIBUTE, decomposition=DECOMPOSITION,\n"
         "            noise_threshold=NOISE_THRESHOLD,\n"
         "            node_metrics=NODE_METRICS, edge_metrics=EDGE_METRICS,\n"
-        "            parameters=resource_params())\n"
+        "            parameters=resource_params(), prune=prune_arg())\n"
         "    else:\n"
         "        tree = pm4py.discover_process_tree_inductive(\n"
         "            log, noise_threshold=NOISE_THRESHOLD)\n"
+        "        tree, log = prune_tree(tree, log)\n"
         '        params = {"process_tree": tree}\n'
         "        params.update(resource_params())\n"
         "        ucm = pm4py_ucm.discover_ucm_inductive(\n"
@@ -600,6 +642,7 @@ def _scenarios_fn() -> str:
         "    # app treated as noise becomes an extra variant.\n"
         "    tree = pm4py.discover_process_tree_inductive(\n"
         "        log, noise_threshold=NOISE_THRESHOLD)\n"
+        "    tree, log = prune_tree(tree, log)\n"
         '    params = {"process_tree": tree}\n'
         "    params.update(resource_params())\n"
         "    ucm_s, clustering = pm4py_ucm.discover_scenarios(\n"
@@ -767,6 +810,7 @@ def _family_fn() -> str:
         "        bins=FAMILY_BINS,\n"
         "        include_values=FAMILY_INCLUDE_VALUES,\n"
         "        parameters=resource_params(),\n"
+        "        prune=prune_arg(),\n"
         "    )\n"
         "    if NODE_METRICS or EDGE_METRICS:\n"
         '        fam_cases = family.log_df["case:concept:name"].astype(str)\n'
@@ -774,7 +818,13 @@ def _family_fn() -> str:
         "            cell_df = family.log_df[\n"
         "                fam_cases.isin(set(cell.case_ids))]\n"
         "            cell_traversal = (\n"
-        "                pm4py_ucm.compute_traversal_stats(cell.tree, cell_df)\n"
+        "                pm4py_ucm.compute_traversal_stats(\n"
+        "                    cell.tree, cell_df,\n"
+        "                    repair_hints=(getattr(cell.prune, "
+        "\"repair_hints\", None)\n"
+        "                                  or None),\n"
+        "                    max_repair_seconds=\"auto\",\n"
+        "                    max_repair_seconds_per_sequence=\"auto\")\n"
         "                if wants_traversal() and cell.tree is not None\n"
         "                else None)\n"
         "            pm4py_ucm.annotate_performance(\n"
@@ -830,13 +880,19 @@ def _dashboards_fn() -> str:
         "the\n"
         "    # app mined (same noise threshold), so its v1, v2, ... are the "
         "app's.\n"
+        "    # The tree is also needed when pruning drops cases: the "
+        "dashboards\n"
+        "    # then measure the same remaining cases as the model.\n"
         "    behaviour = None\n"
-        '    if "behavioural variant" in repr(DASHBOARDS):\n'
-        "        from pm4py_ucm.algo.discovery.variants import clustering "
-        "as _cl\n"
+        '    wants_variants = "behavioural variant" in repr(DASHBOARDS)\n'
+        "    if wants_variants or (PRUNE_DROP_CASES and prune_arg()):\n"
         "        tree = pm4py.discover_process_tree_inductive(\n"
         "            df, noise_threshold=NOISE_THRESHOLD)\n"
-        "        behaviour = _cl.cluster(df, tree)\n"
+        "        tree, df = prune_tree(tree, df)\n"
+        "        if wants_variants:\n"
+        "            from pm4py_ucm.algo.discovery.variants import "
+        "clustering as _cl\n"
+        "            behaviour = _cl.cluster(df, tree)\n"
         "    table = build_fact_table(df, log_name=Path(DEFAULT_LOG).stem,\n"
         "                             behaviour=behaviour)\n"
         "    # Embed the model SVG only when a dashboard actually pins the "

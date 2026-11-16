@@ -123,6 +123,14 @@ Example entries — **not a catalogue**; the registry is the list:
 - `split_attribute` — the case attribute the Model view's model is split
   along (one stub per value, each bound to the model of that value's
   cases), or `null` for one model of the whole log.
+- `prune_min_cases` / `prune_min_share` / `prune_drop_cases` — the
+  **Infrequent paths** controls: a branch of a mined tree is removed when
+  fewer cases than the first walk it, or when its share of its decision
+  point is below the second (a fraction: `0.05` is 5%). Both `0` is off.
+  The third says what happens to the cases that walked a removed path:
+  `false` keeps them in the log, `true` drops them. The exported script
+  carries them as `PRUNE_MIN_CASES` / `PRUNE_MIN_SHARE` /
+  `PRUNE_DROP_CASES`. See [`infrequent_paths.md`](infrequent_paths.md).
 - `csv_columns` — the CSV mapping (case, activity, timestamp, role, resource,
   and an optional tail: a sixth day-first flag, and a seventh naming the
   start-timestamp column, in which case the sixth is always present; older

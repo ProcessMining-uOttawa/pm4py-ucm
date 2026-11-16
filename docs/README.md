@@ -28,6 +28,7 @@ reading. Each says which it is under its title.
 | how to define a dashboard widget, or what the engine computes for it | [`dashboards.md`](dashboards.md) |
 | why a dashboard was proposed for your log, and what the rules are | [`dashboard_suggestions.md`](dashboard_suggestions.md) |
 | how to compare a process across case attributes | [`model_families.md`](model_families.md) |
+| how to simplify a model by removing the paths few cases take | [`infrequent_paths.md`](infrequent_paths.md) |
 | how a UCM becomes a BPMN 2.0 diagram, element by element | [`bpmn_export.md`](bpmn_export.md) |
 | why a log is slow to mine or replay, and what actually helps | [`miner_performance.md`](miner_performance.md) |
 | what scenario simulation, coverage and A/B comparison do | [`scenario_simulation.md`](scenario_simulation.md) |
@@ -53,6 +54,7 @@ Notebook: [`dashboards_tutorial.ipynb`](../demo/dashboards_tutorial.ipynb).
 | Document | Kind | What it covers | Held to by |
 |---|---|---|---|
 | [`model_families.md`](model_families.md) | Guide | Partitioning a log by one or two case attributes and mining one model per combination; the overarching model with dynamic stubs; performance overlays; the family statistics report; known limitations. | [`test_family.py`](../tests/test_family.py), [`test_family_stats.py`](../tests/test_family_stats.py), [`test_performance.py`](../tests/test_performance.py) |
+| [`infrequent_paths.md`](infrequent_paths.md) | Design note (built, unreleased) | Removing the branches few cases take from the mined process tree, by a minimum number of cases and a minimum local share: what counts as a decision point, why parallel branches are only removed indirectly, the clean-up that makes forks and joins disappear, keeping or dropping the cases concerned, families and split models, and what the web app does with it. | [`test_pruning.py`](../tests/test_pruning.py) |
 | [`bpmn_export.md`](bpmn_export.md) | Design note (built in 0.8.5) | The UCM → BPMN 2.0 element mapping, components as one pool with nested lanes, how the layout is carried over, performance annotations, families, and the decisions taken (call activities, inclusive gateways, no task typing). | [`test_bpmn_export.py`](../tests/test_bpmn_export.py), against the OMG schema |
 | [`scenario_simulation.md`](scenario_simulation.md) | Design note (built in 0.8.0) | Running a UCM's scenarios the way jUCMNav does, highlighting what a scenario covers, comparing two scenarios, and exporting the log for the selected variants; the simulator's API, the decisions, and the measurements taken while it was built. | [`test_scenario_traversal.py`](../tests/test_scenario_traversal.py), [`test_scenario_coverage.py`](../tests/test_scenario_coverage.py) |
 | [`miner_performance.md`](miner_performance.md) | Measurements (2026-08-15) | What mining and replay cost across twelve logs, why there is no faster path that preserves the model, why `multi_processing=True` does not help, how to estimate a run before committing to it, and what the package and the app adopted from it. | [`test_complexity.py`](../tests/test_complexity.py), for the screening code only |

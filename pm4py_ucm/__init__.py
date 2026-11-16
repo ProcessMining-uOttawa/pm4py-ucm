@@ -44,6 +44,7 @@ from .api import (
     write_family_report,
     annotate_performance,
     compute_traversal_stats,
+    prune_infrequent_paths,
     suggest_decomposition,
     suggest_loop_iterations,
 )
@@ -109,6 +110,7 @@ __all__ = [
     "write_family_report",
     "annotate_performance",
     "compute_traversal_stats",
+    "prune_infrequent_paths",
     # Scenario simulation — unrelated to compute_traversal_stats above.
     "ScenarioTraversalResult",
     "TraversalProblem",

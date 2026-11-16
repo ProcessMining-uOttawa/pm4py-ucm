@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Non-fitting cases are aligned on the process tree itself**, with
+  PM4Py's tree aligner, instead of on the Petri net converted from it. On
+  a tree with wide parallel blocks the net-based search spent its time
+  budget on a handful of sequences; the tree search aligns each in tens
+  of milliseconds. **Numbers change where a model does not fit its log
+  well**: far more cases are counted on their nearest path and far fewer
+  are left uncounted, so traversal counts and the "counted on their
+  closest path" figure rise. Measured on an 11-model split of a
+  10,004-case log: uncounted cases went from about 1,520 to about 470,
+  while the whole run went from about 146 s to about 110 s. Both searches
+  are optimal; they may pick different paths among equally near ones. The
+  net-based search remains the fallback for a tree that is not a PM4Py
+  `ProcessTree`.
+- **Family and split models scale the alignment budget to each model**
+  (one second per 50 distinct activity sequences, between 10 s and 60 s)
+  instead of a fixed 10 s per model, in the pruning pass and in the
+  replay. Small models are unaffected; large ones get the time they need.
+  On the same log: about 134 s in all, about 93 cases uncounted.
+  `compute_traversal_stats` itself keeps its fixed defaults; pass
+  `max_repair_seconds="auto"` to get the scaled budget
+  (`scaled_repair_budget`).
+- A split model reports the replay of each value's cases as its own
+  progress stage, instead of sitting on "Assembling the split model" for
+  the whole of it.
+
+### Added
+
+- `compute_traversal_stats(..., repair_hints=...)` and
+  `TraversalStats.repaired_paths`: the nearest paths found on a tree can
+  be reused on a tree pruned from it. The family and split assemblies and
+  the web app do this after a pruning, so a non-fitting sequence is
+  aligned once, not twice.
+
+- **Removing infrequent paths.** `pm4py_ucm.prune_infrequent_paths(tree,
+  log, min_cases=…, min_share=…)` removes from a process tree the branches
+  few cases take: a branch of a choice (a silent skip included) or the
+  repeat of a loop, judged by the number of cases walking it and by its
+  share at its decision point, both read from the replay-based traversal
+  counts. Forks and joins left with one branch disappear, and so does an
+  optional parallel branch that is almost never taken. It returns the
+  pruned copy, the list of what was removed and the exact number of cases
+  that walked a removed path; convert it with `convert_to_ucm` as usual.
+  Those cases are kept by default (they no longer fit the model);
+  `drop_cases=True` returns the log without them as `result.log`. Design
+  and decisions in [`docs/infrequent_paths.md`](docs/infrequent_paths.md).
+- **Pruning in families and split models.** `discover_ucm_family` and
+  `discover_ucm_by_attribute` take `prune={"min_cases": …, "min_share": …,
+  "drop_cases": …}` and prune every cell's tree from that cell's own
+  cases. `FamilyCell.prune` / `pruned_cases` and
+  `ModelFamily.pruned_cases` / `pruned_case_ids` report it.
+- `TraversalStats` records, per distinct activity sequence, its number of
+  cases (`sequence_cases`) and the tree nodes it walks (`sequence_nodes`).
+- **Web app: *Infrequent paths* controls** in the sidebar, a section that
+  opens and switches on with one checkbox, as *Log filters* does (*Minimum
+  branch share (%)*, *Minimum cases per branch*, *Drop the cases on
+  removed paths*). Every view uses them: the Model, Scenarios and Dashboards
+  views, a split model, and the Family and Compare views, where each model
+  is judged on its own cases. The Model, Family and Compare views say what
+  was removed. Saved with a project (`prune_min_cases`, `prune_min_share`,
+  `prune_drop_cases`) and reproduced by the exported script.
+
 ## [0.9.3] — 2026-11-16
 
 **Upgrade notes.** This is a patch release that changes two things you may

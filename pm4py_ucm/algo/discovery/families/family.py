@@ -46,6 +46,13 @@ class FamilyCell:
     #: different actors in different cells is a genuine difference
     #: between the cell processes even when control flow is identical.
     performers: Dict[str, str] = field(default_factory=dict)
+    #: The :class:`~pm4py_ucm.algo.pruning.PruneResult` of this cell when
+    #: the family was mined with ``prune=...``, else ``None``. ``tree`` is
+    #: then the pruned tree; with ``drop_cases`` the cases that walked a
+    #: removed path are no longer in ``case_ids`` / ``n_cases``, and
+    #: ``pruned_cases`` counts them.
+    prune: Any = None
+    pruned_cases: int = 0
 
     @property
     def labels(self) -> Tuple[str, ...]:
@@ -89,6 +96,12 @@ class ModelFamily:
     #: later steps that slice the log by a cell's case ids read the same
     #: column instead of assuming the XES name.
     case_id_col: str = "case:concept:name"
+    #: Cases removed because they walked a pruned path (``prune`` with
+    #: ``drop_cases``). They are in no cell and no longer in ``log_df``,
+    #: but still count in ``total_cases``, which is the log's.
+    pruned_cases: int = 0
+    #: Their ids (as strings), for a caller that re-attaches a log.
+    pruned_case_ids: List[str] = field(default_factory=list)
 
     # ------------------------------------------------------------------
     # Lookup / grid helpers

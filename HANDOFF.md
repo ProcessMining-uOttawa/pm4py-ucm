@@ -41,6 +41,126 @@ parse), and 0.8.0–0.8.3 delivered scenario simulation, coverage and A/B compar
 the validation gates, the variant-filtered log export, and the release
 tooling described below.
 
+## In progress: removing infrequent paths (unreleased)
+
+On the branch `feature/prune-infrequent-paths`, in a pull request. Built
+in one session (2026-11-16) from the maintainer's request and two rounds
+of his decisions; the code has not been reviewed beyond that.
+
+- `pm4py_ucm/algo/pruning.py` and `pm4py_ucm.prune_infrequent_paths`
+  prune the **process tree** from the traversal counts; the conversion is
+  untouched. Design, decisions and the not-built list are in
+  [`docs/infrequent_paths.md`](docs/infrequent_paths.md); tests in
+  `tests/test_pruning.py`.
+- The V6 app has the sidebar's **Infrequent paths** controls. The pruned
+  tree comes from `_model_tree`, which every single-tree consumer now
+  calls instead of `_log_and_tree` (Model, parse table, Scenarios,
+  behavioural variants). `_pruned_tree` is the cached step; it replays the
+  *unpruned* tree through the shared `_parse_table(…, prune_spec=())`.
+  `_model_tree` is deliberately uncached so the log is not stored once per
+  slider position.
+- **Keep or drop is an option** (the maintainer's decision, 2026-11-16):
+  `drop_cases` in the library, the *Drop the cases on removed paths*
+  checkbox in the app. `prune_spec` is `()` or `(min_cases, min_share,
+  drop)`. With drop on, `_model_tree` returns the log without the dropped
+  cases (their ids are the third element of `_pruned_tree`'s result), and
+  `_fact_table` filters the dashboards' frame the same way.
+- **Split models and families are pruned too** (same decision): the
+  family miner takes `prune=`, each cell judged on its own cases, and
+  `_mine_split` / `_mine_family` pass the sidebar's settings. With drop
+  on, the cells and `family.log_df` lose the dropped cases; the app's
+  download-only assemblies re-attach the log through
+  `_attach_family_log`, which removes them again.
+- The sidebar section is a disclosure checkbox (`cfg_prune_on`), like
+  *Log filters*, at the maintainer's request: its three widgets render
+  only while it is open, so they use the `_sticky` mirror, and a project
+  restore writes both the widget keys and the mirror.
+  Checked in the running app by saving and loading real project files:
+  saved open, the file holds the thresholds; saved closed, it holds 0;
+  loading the first into a closed section opens it with its values, and
+  loading the second into an open section closes it.
+- The unpruned tree's parse table is pre-built with progress **once per
+  log + filter + noise threshold in a session** (`_prune_warm_fp`), not on
+  every rerun: as a cache hit it still unpickles the whole table. Measured
+  on the claims sample a rerun costs about 0.6 s with or without pruning,
+  so this is a precaution for large logs.
+- **The maintainer's slow refresh after changing the diagram height**
+  (his journey log: 10,004 cases, 4,474 variants, split on an 11-value
+  attribute, 2% and 5 cases) was measured with temporary timing markers.
+  A height change costs about 0.4 s server-side while the mine is cached,
+  eight times out of eight, with identical mining arguments. The split
+  mine itself costs about 150 s with pruning and 92 s without. So a slow
+  refresh there is a re-mine, and nothing in a height change triggers
+  one; the likely trigger is the cache being invalidated by the code
+  edits and server restarts of this session (Streamlit re-runs a cached
+  function whose source changed). Not proven.
+- **Pruning with repaired counts is not deterministic.** On that log the
+  same settings removed 173 paths in one mine and 172 in the next,
+  because the alignment repair is bounded by wall-clock time and the
+  repaired counts feed the thresholds. Open: prune from fitting cases
+  only, or give the repair a budget that does not depend on the clock.
+  (After the aligner change below: 166 and 169. Fewer cells exhaust the
+  budget, so it is rarer, not gone.)
+- **Where a split's time goes, and the aligner change.** The maintainer
+  asked why "Assembling the split model" was slow. Profiled on that log:
+  mining the 11 trees takes 3 s; the rest was alignment repair, about
+  64 s in the pruning pass and about 57 s again in the assembly's replay.
+  The pruning decision itself costs nothing measurable. The Petri-net A*
+  aligned 2 to 18 sequences per cell before its 10 s budget ran out (each
+  hit the 1 s per-sequence cap). `_aligned_paths` now searches the tree
+  with PM4Py's `search_graph_pt` (30 to 95 ms per sequence, all aligned
+  in most cells), keeps the Petri search as `_aligned_paths_petri` for
+  non-PM4Py trees, and bounds a single sequence through a deadline-aware
+  stand-in for `heapq` in PM4Py's module (`_HeapqWithDeadline`), since
+  that search has no time limit of its own. The pruning pass's alignments
+  are reused in the next replay (`repair_hints`). Result on that log with
+  pruning: about 146 s to about 110 s, uncounted cases about 1,520 to
+  about 470. **This changes traversal numbers on any poorly fitting
+  model**, pruning or not; the changelog says so. What is left is real
+  search time: two cells still exhaust the 10 s budget. Going further
+  means parallel alignment across processes, not tried here.
+- **The budget scales with each model** in families and splits (the
+  maintainer's choice over a fixed 15 s, 2026-11-17):
+  `scaled_repair_budget`, one second per 50 distinct sequences, 10 s to
+  60 s. It is the formula the app already used for a single model, with
+  the maintainer's lower ceiling (60 s, not 120 s; same day). The app's
+  pruning pass (`_pruned_tree`) calls the same function. `_mine`'s own
+  replay of a single model keeps its released 120 s ceiling: it was not
+  part of that decision. Measured on that log with pruning, two runs each
+  (the largest model gets 26 s, so the ceiling plays no part in them):
+
+  | Budget per model | Total | Uncounted | Paths removed |
+  |---|---|---|---|
+  | 10 s fixed | about 110 s | about 470 | 166, 169 |
+  | 15 s fixed | 118 s | 304, 321 | 162, 162 |
+  | 30 s fixed | about 155 s | 21, 42 | 158, 158 |
+  | scaled | about 134 s | 92, 95 | 165, 164 |
+
+  The scaled one still leaves 4 of 22 replays short: cells of 400 to 800
+  sequences stay at the 10 s floor and need about 15 s, because a
+  non-fitting sequence costs 30 to 95 ms here, not the 20 ms the slope
+  assumes. `REPAIR_SEQUENCES_PER_SECOND = 25` would cover them; not
+  changed without the maintainer's say, since it lengthens every large
+  mine.
+- Three registry parameters (`prune_min_cases`, `prune_min_share`,
+  `prune_drop_cases`), restored in `_apply_project_config`, emitted by the
+  code export (`prune_tree`, `prune_arg`).
+- Checked in the running app on the claims sample at 10%: two rare repeats
+  go; kept, the fit note moves from 89% to 83% with 341 cases affected;
+  dropped, the log card reads 5,259 cases and the fit is back to 89%;
+  split by Channel, 6 paths go in 3 models; a Broker family loses 17 paths
+  in 8 models and 386 cases, and Compare shows the same note. In drop
+  mode the Scenarios view reads 88.6% fitness with 598 non-conforming
+  cases, the dashboards compute over 5,259 cases, and the event-log export
+  holds 5,259 cases.
+- The Model view's event-log export leaves the dropped cases out
+  (`mined["dropped_case_ids"]`). The Family view's coverage preview is
+  computed before mining and only says that pruning will change it. The
+  replay prompts name what the replay is for (`_replay_what`), so they no
+  longer say "metrics" when only pruning asked for it; **those prompts
+  were not seen in the app**, since they only appear on a log whose replay
+  is slow.
+
 ## State on arrival
 
 - `main` carries 0.9.3. **Check the tag and PyPI

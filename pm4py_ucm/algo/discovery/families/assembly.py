@@ -244,7 +244,15 @@ def _annotate_maps(
             and len(cells) == 1 and cells[0].tree is not None):
         from ...traversal import compute_traversal_stats
         tree = cells[0].tree
-        traversal = compute_traversal_stats(tree, sub_log)
+        # A pruned cell was already aligned, on its unpruned tree; the
+        # paths that avoided the removed branches are still valid here.
+        pruned = getattr(cells[0], "prune", None)
+        traversal = compute_traversal_stats(
+            tree, sub_log,
+            repair_hints=getattr(pruned, "repair_hints", None) or None,
+            # Scaled to this cell's size, as in the pruning pass.
+            max_repair_seconds="auto",
+            max_repair_seconds_per_sequence="auto")
     annotate_performance(
         container, sub_log,
         node_metrics=node_metrics, edge_metrics=edge_metrics,
@@ -429,6 +437,13 @@ def assemble_split(
     _bind_family_performers(container, family)
 
     if node_metrics or edge_metrics:
+        # By far the longest part of an assembly with traversal metrics:
+        # each value's cases are replayed on that value's model. It gets
+        # its own progress line, or the last one shown ("Assembling ...
+        # 11/11") sits there looking finished while this runs.
+        a_ticker = Ticker(progress_callback,
+                          "Replaying each value's cases on its model",
+                          len(cell_maps), report_every=1)
         for cell, maps in cell_maps:
             stats = _annotate_maps(container, family, maps, [cell],
                                    node_metrics, edge_metrics)
@@ -436,6 +451,8 @@ def assemble_split(
                 for key in ("total_cases", "fitting_cases",
                             "repaired_cases", "unexplained_cases"):
                     fit[key] = fit.get(key, 0) + int(getattr(stats, key))
+            a_ticker.tick()
+        a_ticker.finish()
         _annotate_split_root(container, family, root, synthetic, cells,
                              node_metrics, edge_metrics)
     if validate:
