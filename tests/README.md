@@ -1,6 +1,6 @@
 # Test suite
 
-**1576 tests** across **44 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
+**1612 tests** across **46 modules**, grouped by area below. Counts are pytest-collected items (parametrised cases counted individually), so they match `pytest` exactly.
 
 > Regenerate this file with `python tests/gen_readme.py` after adding or removing tests. Purposes are the first sentence of each module's docstring; edit the docstring, not this table.
 
@@ -36,32 +36,35 @@
 |  | [`test_quick_reductions.py`](test_quick_reductions.py) | V6's one-click reductions record what they selected, and hold. | 12 |
 |  | [`test_replay_budget.py`](test_replay_budget.py) | Tests for telling a truncated replay apart from a trace that cannot fit. | 7 |
 | | _Cost screening & log reduction subtotal_ | | **31** |
-| **Log import & filtering** | [`test_bundled_csv_samples.py`](test_bundled_csv_samples.py) | The bundled CSV samples auto-detect their columns and mine straight after *Load sample*. | 3 |
-|  | [`test_csv_timestamp_mapping.py`](test_csv_timestamp_mapping.py) | The CSV import must hand pm4py a real datetime timestamp column. | 8 |
-|  | [`test_upload_edge_cases.py`](test_upload_edge_cases.py) | Upload edge cases the readers used to crash or silently misread. | 23 |
+| **Log import & filtering** | [`test_csv_timestamp_mapping.py`](test_csv_timestamp_mapping.py) | The CSV import must hand pm4py a real datetime timestamp column. | 8 |
+|  | [`test_upload_edge_cases.py`](test_upload_edge_cases.py) | Upload edge cases the readers used to crash or silently misread. | 38 |
 |  | [`test_variant_log_filter.py`](test_variant_log_filter.py) | Selecting an event log down to chosen behavioural variants. | 11 |
 |  | [`test_xes_gz_upload.py`](test_xes_gz_upload.py) | An uploaded ``.xes.gz`` (bare, or inside a zip) must reach pm4py inflated. | 6 |
-| | _Log import & filtering subtotal_ | | **51** |
+| | _Log import & filtering subtotal_ | | **63** |
 | **BPMN 2.0 export** | [`test_bpmn_export.py`](test_bpmn_export.py) | Tests for the BPMN 2.0 exporter (``docs/bpmn_export.md``). | 60 |
 | **Layout** | [`test_graphviz_layout.py`](test_graphviz_layout.py) | Tests for the graphviz-based layouter. | 8 |
 |  | [`test_layout.py`](test_layout.py) | Tests for the compact left-to-right auto-layouter. | 15 |
 |  | [`test_routing_points.py`](test_routing_points.py) | Tests for the routing-empty-points pass (issue 4). | 7 |
 | | _Layout subtotal_ | | **30** |
 | **Visualization** | [`test_heatmap.py`](test_heatmap.py) | Tests for the performance heat-map (render-time emphasis) in `pm4py_ucm.visualization.ucm.variants.classic`. | 19 |
-|  | [`test_ucm_svg.py`](test_ucm_svg.py) | Tests for inline-SVG rendering of UCM models (`pm4py_ucm.visualization.ucm.svg`). | 17 |
 |  | [`test_svg_viewer_scroll.py`](test_svg_viewer_scroll.py) | The inline SVG viewer must not trap the mouse wheel. | 9 |
+|  | [`test_ucm_svg.py`](test_ucm_svg.py) | Tests for inline-SVG rendering of UCM models (`pm4py_ucm.visualization.ucm.svg`). | 17 |
 |  | [`test_visualization.py`](test_visualization.py) | Tests for the graphviz-based UCM visualiser. | 35 |
 | | _Visualization subtotal_ | | **80** |
 | **Dashboards** | [`test_dashboard_suggestions.py`](test_dashboard_suggestions.py) | Tests for dashboard suggestions (``docs/dashboard_suggestions.md`` §2). | 100 |
 |  | [`test_dashboards.py`](test_dashboards.py) | Tests for user-defined dashboards: the client contract, the metric engine, and the parity of the Python engine with its JS counterpart. | 559 |
 | | _Dashboards subtotal_ | | **659** |
 | **Sessions (save / share / resume)** | [`test_sessions.py`](test_sessions.py) | Tests for the project save/share/resume core (``web/sessions``). | 15 |
-|  | [`test_sessions_codegen.py`](test_sessions_codegen.py) | Tests for the Python code exporter (``web/sessions/codegen.py``). | 36 |
-|  | [`test_sessions_registry.py`](test_sessions_registry.py) | Tests for the Session Parameter Registry (``web/sessions/registry.py``). | 17 |
-| | _Sessions (save / share / resume) subtotal_ | | **68** |
+|  | [`test_sessions_codegen.py`](test_sessions_codegen.py) | Tests for the Python code exporter (``web/sessions/codegen.py``). | 39 |
+|  | [`test_sessions_registry.py`](test_sessions_registry.py) | Tests for the Session Parameter Registry (``web/sessions/registry.py``). | 16 |
+| | _Sessions (save / share / resume) subtotal_ | | **70** |
 | **Progress / infrastructure** | [`test_progress.py`](test_progress.py) | Tests for the progress-reporting layer and the vectorized DataFrame resource miner. | 15 |
 |  | [`test_release_consistency.py`](test_release_consistency.py) | Drift guards for the things a release has to keep true. | 11 |
 | | _Progress / infrastructure subtotal_ | | **26** |
-| | **Total** | | **1576** |
+| **Other** | [`test_bundled_csv_samples.py`](test_bundled_csv_samples.py) | The CSV logs bundled in ``web/samples`` must mine straight after *Load sample*: the column auto-detection has to land on the case, activity and timestamp columns without the user touching the mapping. | 3 |
+|  | [`test_dot_fallback.py`](test_dot_fallback.py) | A map Graphviz cannot lay out with its component boxes is drawn without them, rather than not at all. | 6 |
+|  | [`test_split_assembly.py`](test_split_assembly.py) | One model split along a case attribute (#152). | 13 |
+| | _Other subtotal_ | | **22** |
+| | **Total** | | **1612** |
 
 See the repository [`README.md`](../README.md#testing) for how to run the suite, and [`docs/metrics.md`](../docs/metrics.md) for the metric definitions the validation tests enforce.

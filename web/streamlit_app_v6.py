@@ -410,10 +410,19 @@ def _csv_mapping_problem(csv_bytes: bytes, csv_columns, _file_hash: str):
     return None
 
 
-def _csv_start_caption(csv_columns) -> str:
-    """`` · start: `col` `` for the "Read from" captions, or nothing."""
+def _csv_start_caption(csv_columns, late: int = 0) -> str:
+    """`` · start: `col` `` for the "Read from" captions, or nothing.
+
+    ``late`` adds the number of starts found after their completion: the
+    warning about them sits in the mapping panel, which is collapsed once
+    the mapping is applied.
+    """
     start = _csv_start_col(csv_columns)
-    return f" · start: `{start}`" if start else ""
+    if not start:
+        return ""
+    note = (f" ({late:,} start(s) after their completion, counted from "
+            "the completion)" if late else "")
+    return f" · start: `{start}`{note}"
 
 
 @st.cache_data(show_spinner=False)
@@ -4562,6 +4571,7 @@ if _BRIDGE_OK:
 
 # ---- CSV column mapping ----------------------------------------------------
 csv_columns: Optional[Tuple[str, str, str, str, str]] = None
+_late = 0       # starts after their completion; set below for a CSV
 if log_kind == "csv":
     # Rendered through the _src_exp handle so the mapping sits inside the same
     # "Log source & columns" expander as the picker above.
@@ -5226,7 +5236,7 @@ if _risk.high and st.session_state.get("mine_ok_fp") != _screen_fp:
         st.caption(
             f"Read from — case: `{csv_columns[0]}` · "
             f"activity: `{csv_columns[1]}` · timestamp: `{csv_columns[2]}`"
-            f"{_csv_start_caption(csv_columns)}. "
+            f"{_csv_start_caption(csv_columns, _late)}. "
             "Change these under **Log source & columns** in the sidebar."
         )
 
@@ -5802,7 +5812,7 @@ if _view == "Model":
         st.caption(
             f"Read from — case: `{csv_columns[0]}` · "
             f"activity: `{csv_columns[1]}` · timestamp: `{csv_columns[2]}`"
-            f"{_csv_start_caption(csv_columns)}."
+            f"{_csv_start_caption(csv_columns, _late)}."
         )
 
     # What the replay-based counts describe. Shown right under the counts

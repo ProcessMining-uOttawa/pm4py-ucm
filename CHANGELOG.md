@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.3] — 2026-11-16
+
+**Upgrade notes.** This is a patch release that changes two things you may
+see, and adds a public function:
+
+- **A CSV's column mapping now decides whether it is an interval log**
+  (web app). A CSV with a column literally named `start_timestamp` used to
+  reach the dashboards and the family statistics as an interval log
+  without being mapped. That column is now auto-detected as the *Start
+  timestamp*; with the selector at *(none)* it is dropped. A project saved
+  earlier on such a file loads with no start mapped: pick the column and
+  apply the mapping to get the service times back.
+- **`max_enum_cardinality` defaults to 60, not 40**, in
+  `discover_ucm_family`, `partition_log` and `detect_case_attributes`. A
+  string attribute with 41 to 60 distinct values is now offered as a
+  partition attribute, where naming it used to raise. Pass
+  `max_enum_cardinality=40` to keep the old limit.
+- The bundled `Procure-to-Pay` sample loads as an interval log, so its
+  default overlay is the service time (`median_time`), not the sojourn
+  time.
+- The V2, V3 and V5 web apps are no longer tested or maintained.
+
 ### Added
 
 - **Dashboards: *Add all* in the suggestion gallery.** The gallery behind

@@ -1,6 +1,15 @@
-# Handoff — after 0.9.2
+# Handoff — after 0.9.3
 
-**0.9.2 is released.** It is a samples release (PR #148): the bundled
+**0.9.3 is released.** It adds the **split model** (one model per value of
+a case attribute, under a root map with one stub per value, issue #152),
+the **CSV start timestamp** (a CSV can be an interval log, #153), a
+**Graphviz fallback** for maps `dot` cannot lay out, *Add all* in the
+suggestion gallery (PR #151) and the SVG viewer's scroll/zoom change
+(PR #150). It ships at patch level at the maintainer's request although it
+adds a public function and changes two behaviours; the changelog section
+opens with the upgrade notes.
+
+Before it, 0.9.2 was a samples release (PR #148): the bundled
 `devlog` sample now covers **two development periods** (410 cases, with a
 `case:period` attribute), and two CSV samples are added, **Procure-to-Pay**
 and **RefundProcess**. No library or app behaviour changes.
@@ -34,16 +43,17 @@ tooling described below.
 
 ## State on arrival
 
-- `main` carries 0.9.2 (release PR #149). **Check the tag and PyPI
+- `main` carries 0.9.3. **Check the tag and PyPI
   before assuming it is live**: `git tag --sort=-v:refname | head -1` and
   `pip index versions pm4py-ucm`. The upload waits at the `pypi`
   environment gate for the maintainer's approval, so `main` can read
-  0.9.2 while PyPI still serves 0.9.1 (published 2026-11-13).
+  0.9.3 while PyPI still serves 0.9.2.
+- 0.9.3 holds PRs #150, #151 and #154 (see "What 0.9.3 did").
 - 0.9.2 holds the sample logs (PR #148) and a `.gitattributes` that pins
   `tests/fixtures/*.jucm` to LF.
 - 0.9.1 holds the `docs/` index (PR #143), the documentation audit
   (PR #145) and the fixes for the code defects it reported (PR #146).
-- All three version sites read **0.9.2** and are kept in lock-step by a test:
+- All three version sites read **0.9.3** and are kept in lock-step by a test:
   `pyproject.toml`, `pm4py_ucm/__init__.py`, `web/sessions/codegen.py`
   (`GENERATOR_VERSION`).
 - `CHANGELOG.md`'s `[Unreleased]` is empty.
@@ -62,15 +72,105 @@ tooling described below.
   implemented" headers since before they shipped; a design note's status
   line is prose, so nothing guards it — update it in the PR that ships the
   feature.
-- Suite: **1552 passed, 0 failed, 1 skipped** in a fresh worktree (~3 min;
-  the skip needs the untracked `demo/ClaimsPaymentLog.xes`, so the main
-  checkout runs all 1553); CI
-  green on Python 3.10–3.14. `requires-python` is `>=3.10`.
+- Suite: **1612 passed, 0 failed** in the main checkout (~3 min; one
+  test needs the untracked `demo/ClaimsPaymentLog.xes` and is skipped in a
+  fresh worktree); CI green on Python 3.10–3.14. `requires-python` is
+  `>=3.10`.
+- **Checked in the running app before the release**, on a 55-service
+  mixed log (77,551 events, 431 activities): the split by `service` (55
+  stubs with their case counts, 176 maps at threshold 0.20); saving a
+  split project and resuming it in a fresh session; the highlighted model
+  in the Scenarios view at threshold 0, drawn through the Graphviz
+  fallback; the Family view offering the 55-value attribute; the
+  late-start warning; *Add all* in the gallery. **Not checked there**: the
+  PNG and BPMN downloads of a split model.
+- `demo/sessions_tutorial.ipynb` and `demo/model_families_tutorial.ipynb`
+  were **re-executed** for 0.9.3 (the second gained section 6b, the split
+  model). The other three notebooks were not re-run.
 - **One deployment.** https://pm4py-ucm.streamlit.app/ serves V6 through the
   `streamlit_app.py` shim. The second deployment
   (`pm4py-ucm-scenarios`, which served the frozen V2) has been **deleted** —
   the SAM 2026 paper that required it was accepted and its final version
   points at the main app. That URL now 404s; do not link it.
+
+## What 0.9.3 did (PRs #150, #151, #154)
+
+- **The split model.** `discover_ucm_by_attribute(log, attribute)` =
+  `discover_ucm_family` on that attribute (every value kept: no `Other`,
+  `min_cases=1`, up to 200 values) + `assemble_split`
+  (`pm4py_ucm/algo/discovery/families/assembly.py`,
+  `assemble_ucm_family(mode="split")`). The root map is converted from a
+  *synthetic* choice over the cells' own trees, each intercepted as a
+  static stub, so it gets the ordinary provenance tags, simplification
+  and routing. Its counts come from the partition, handed to the overlay
+  pass as the traversal statistics of that synthetic choice; the
+  event-based `frequency` / `percentage` are mapped to their traversal
+  twins there, because on the root they are the same number.
+- **Why it exists** (issue #152, measured on the mixed log): at threshold
+  0 the single tree's root is a 28-way choice, not 55, because 72 step
+  names are shared across services; per service the models have 3 to 31
+  activities. Decomposition cuts along the mined tree and cannot recover
+  the service boundary.
+- **Decisions the maintainer made**: the split lives in the Model view,
+  not the Family view; **no plug-in is shared across stubs** (precise
+  overlays matter more than compactness), so there is no dedup even
+  between identical values; the Scenarios view keeps working on the
+  single whole-log model ("not now" to per-value scenarios); families
+  accept an attribute with up to **60** values
+  (`DEFAULT_MAX_ENUM_CARDINALITY`) while the app's *Max values per
+  attribute* stays capped at 20.
+- **App.** *Split by attribute* is rendered into a sidebar slot left
+  under the decomposition controls and filled after the log filters are
+  known (its choices are the filtered log's case attributes), through
+  `_sticky`. `_mine_split` replaces `_mine` when it is set; the shared
+  parse table and the replay estimate are skipped, since each case is
+  replayed on its own value's model. Registry param `split_attribute`.
+- **CSV start timestamp.** `csv_columns` gained an optional **seventh**
+  element (the start column; the sixth, day-first, is then always
+  present). Build the tuple with `_csv_mapping_tuple`, read the start
+  with `_csv_start_col`. `_format_csv_df` parses the start before
+  `format_dataframe` (so it travels with its rows), puts it on the
+  completions' clock afterwards, and **drops an unmapped
+  `start_timestamp` column**: the mapping is authoritative. The exported
+  script's `read_log` mirrors all of it.
+- **The overlay default follows the mapping.** A CSV becomes an interval
+  log only when its mapping is applied, after the overlay defaults were
+  seeded; `overlay_seeded_interval::<hash>` records what they were seeded
+  under and swaps `sojourn_median_time` / `median_time` only while the
+  selection is still the untouched default.
+- **Graphviz fallback** (`pm4py_ucm/visualization/ucm/dot.py`). `dot`
+  fails with `Error: trouble in init_rank` on a large map whose path
+  keeps re-entering the same component clusters (8.0.3 and 15.1.0 alike;
+  the graph is valid). It still writes a complete-looking picture, which
+  is garbage: overlapping, empty component boxes. `pipe` / `render` retry
+  with the component clusters as plain subgraphs and a note in the
+  picture. Every pipe and render in the package and the app goes through
+  them.
+- **V2, V3, V5 are untested and unmaintained** (see "Web app versions").
+
+Traps this release taught:
+
+- **Editing `streamlit_app_v6.py` under a running app breaks it** with a
+  `TokenError` from `inspect.getsource` inside `st.cache_data`: the server
+  runs the bytecode it compiled, with the old line numbers, and reads the
+  function source from the file on disk. Restart the app; it is not a bug.
+- **A non-zero exit from `dot` does not mean no output.** The SVG was
+  complete and wrong. Do not salvage stdout from a failed layout.
+- **The warning inside *Log source & columns* is invisible once the
+  mapping is applied**, because the expander collapses. Anything the user
+  must keep seeing belongs in the main area too; the late-start count is
+  repeated in the "Read from" caption for that reason.
+- **The cost screen still judges the whole log when a split is on**: 431
+  activities trips it although no value has more than 31. Unfixed.
+- **`@@case_index` and a numeric id column are offered as family
+  attributes** (binned into ranges). Pre-existing, visible on any CSV.
+- **A stash pop after a fast-forward leaves the files staged** and the
+  stash in place. `git restore --staged .`, then drop the stash by hand.
+- **Driving the app with a hidden window**: `find` + a ref click still
+  works for selectboxes; a slider needs synthetic `ArrowLeft` keydowns on
+  its thumb; a download can be captured by patching
+  `HTMLAnchorElement.prototype.click` and fetching the `/media/` URL; a
+  file upload by assigning a `DataTransfer` to the uploader's input.
 
 ## What 0.9.2 did: sample logs (PR #148)
 
@@ -536,6 +636,21 @@ B. **One decision is the maintainer's.** `docs/ai_insights.md` §3 specifies
    an *in-tool* LLM provider seam; the stance settled for dashboards is an
    *external* LLM fed an exported brief (`dashboard_suggestions.md` §3).
    The two documents now flag the conflict instead of hiding it.
+
+00. **Split model, next steps** (none built):
+   - **Scenarios per value.** The Scenarios view and simulation assume one
+     tree; on a mixed log they run on the unreadable whole-log model. The
+     maintainer said "not now".
+   - **The cost screen and the replay estimate ignore the split.**
+   - **The decomposition cap is not hard.** `_enforce_cap` only cuts
+     subtrees at or above `min_leaves_to_decompose`, and a wide operator
+     with only leaf children has nothing to cut: on the mixed log "auto"
+     (cap 31) leaves a root with 141 responsibilities. Relaxing the floor
+     changes existing outputs; grouping a wide choice's children would
+     split one tree choice across two forks, which traversal counts and
+     scenario synthesis both key on. Left for the maintainer to decide.
+   - **A mixture warning**: nothing tells the user a log looks like a
+     mixture and that splitting would help.
 
 0. **Dashboards, next steps** (all designed in
    `docs/dashboard_suggestions.md`, none built):
