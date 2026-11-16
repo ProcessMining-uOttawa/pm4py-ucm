@@ -275,6 +275,32 @@ Model view's Activities, Cases and Events metrics then read
   attributes with 2 to 200 values are offered. The Scenarios view keeps
   working on the single model of the whole log.
 
+#### Infrequent paths
+
+Tick **Infrequent paths** (above Decomposition) to remove from the mined
+model the branches few cases take; ticking it opens the section and
+switches the removal on, unticking it closes the section and switches it
+off.
+
+- **Minimum branch share (%)** removes a branch taken less often than this
+  at its decision point: a branch of a choice, a rarely taken skip, or a
+  rarely taken repeat of a loop.
+- **Minimum cases per branch** also removes a branch that fewer than this
+  many cases take, whatever its share.
+- **Drop the cases on removed paths** decides what happens to the cases
+  that took one. Off, they stay in the log and count as not fitting the
+  model. On, they are left out, and the counts, times, scenarios,
+  dashboards and the event-log export describe the remaining cases.
+
+Forks and joins left with one branch disappear, and so does an optional
+parallel branch that is almost never taken; the most frequent branch of a
+choice is always kept. Every view uses the result, and in a split model
+and in the Family and Compare views each model is judged on its own
+cases. The Model, Family and Compare views say what was removed. It needs
+the replay of the log on the model, so it follows the same prompt as the
+replay-based metrics on a large log. Details in
+[`docs/infrequent_paths.md`](../docs/infrequent_paths.md).
+
 - **off** — single flat map.
 - **auto** (default) — split into a root map plus plug-in maps, with the map
   size **fitted to the mined tree's shape** (`suggest_decomposition`): the

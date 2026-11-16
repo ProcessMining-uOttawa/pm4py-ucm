@@ -131,4 +131,4 @@ __all__ = [
     "rank_partition_attributes",
 ]
 
-__version__ = "0.9.3"
+__version__ = "0.9.4"
