@@ -535,6 +535,205 @@ def _log_and_tree(
         return log, tree
 
 
+def _prune_spec(min_cases, min_share_pct, drop_cases=False) -> Tuple:
+    """The cache-friendly form of the *Infrequent paths* controls: ``()``
+    when both thresholds are off, else ``(min_cases, min_share,
+    drop_cases)`` with the share as a fraction."""
+    min_cases = max(0, int(min_cases or 0))
+    share = max(0.0, min(1.0, float(min_share_pct or 0) / 100.0))
+    return ((min_cases, share, bool(drop_cases))
+            if (min_cases or share) else ())
+
+
+def _prune_arg(prune_spec: Tuple) -> Optional[Dict[str, Any]]:
+    """``prune_spec`` as the ``prune=`` argument of the family miners."""
+    if not prune_spec:
+        return None
+    return {"min_cases": int(prune_spec[0]), "min_share": float(prune_spec[1]),
+            "drop_cases": bool(prune_spec[2])}
+
+
+def _without_cases(log, case_ids):
+    """``log`` (DataFrame or pm4py ``EventLog``) without ``case_ids``."""
+    if not case_ids:
+        return log
+    gone = set(case_ids)
+    if hasattr(log, "columns"):
+        return log[~log["case:concept:name"].astype(str).isin(gone)]
+    import copy
+    out = copy.copy(log)
+    out._list = [t for i, t in enumerate(log)
+                 if str(t.attributes.get("concept:name", f"case_{i}"))
+                 not in gone]
+    return out
+
+
+def _prune_summary(prune_spec: Tuple, results, total_cases: int,
+                   dropped: int, cells: Optional[int] = None
+                   ) -> Dict[str, Any]:
+    """What one or several :class:`PruneResult` removed, for
+    :func:`_prune_note`. ``cells`` is how many models ``results`` cover
+    when that is more than the one (a split model, a family)."""
+    removed = [b for r in results for b in r.removed]
+    acts: Dict[str, None] = {}
+    for b in removed:
+        for a in b.activities:
+            acts.setdefault(a)
+    low = sum(r.affected_cases[0] for r in results)
+    high = sum(r.affected_cases[1] for r in results)
+    return {
+        "min_cases": int(prune_spec[0]),
+        "min_share": float(prune_spec[1]),
+        "drop": bool(prune_spec[2]),
+        "branches": len(removed),
+        "skips": sum(1 for b in removed if not b.activities),
+        "loops": sum(1 for b in removed if b.kind == "loop"),
+        "activities": list(acts),
+        "affected_low": low,
+        "affected_high": high,
+        "dropped": int(dropped),
+        "total_cases": int(total_cases),
+        "cells": cells,
+        "cells_changed": sum(1 for r in results if r.removed),
+    }
+
+
+@st.cache_data(show_spinner=False)
+def _pruned_tree(
+    log_bytes: bytes,
+    log_kind: str,
+    csv_columns,
+    noise_threshold: float,
+    filter_spec: Tuple,
+    prune_spec: Tuple,
+    _file_hash: str,
+):
+    """The mined tree with its infrequent paths removed, and what went.
+
+    The frequencies are the traversal counts of the *unpruned* tree, so
+    this needs that tree's replay — the shared :func:`_parse_table`, which
+    the Model view has usually built already and which every threshold
+    then reuses: moving a control re-prunes, it does not replay the
+    unpruned tree again.
+
+    Returns ``(tree, summary, dropped_case_ids)``; the last is empty
+    unless the spec asks to drop the cases that walked a removed path.
+    Only the tree, a few numbers and those ids are cached here, never the
+    log (see :func:`_model_tree`).
+    """
+    log, tree = _log_and_tree(
+        log_bytes, log_kind, csv_columns, noise_threshold, filter_spec,
+        _file_hash,
+    )
+    parses = _parse_table(log_bytes, log_kind, csv_columns, noise_threshold,
+                          filter_spec, _file_hash, prune_spec=())
+    # Same proportionate alignment budget as _mine (see the note there).
+    profile, _ = _screen_log(log_bytes, log_kind, csv_columns, filter_spec,
+                             _file_hash)
+    budget = min(120.0, max(10.0, profile.seq_variants / 50.0))
+    stats = pm4py_ucm.compute_traversal_stats(
+        tree, log, parses=parses,
+        max_repair_seconds=budget,
+        max_repair_seconds_per_sequence=max(1.0, budget / 20.0),
+    )
+    min_cases, min_share, drop_cases = prune_spec
+    res = pm4py_ucm.prune_infrequent_paths(
+        tree, stats=stats, min_cases=int(min_cases),
+        min_share=float(min_share))
+    dropped = tuple(res.dropped_case_ids(log)) if drop_cases else ()
+    summary = _prune_summary(prune_spec, [res], stats.total_cases,
+                             len(dropped))
+    return res.tree, summary, dropped
+
+
+def _model_tree(log_bytes: bytes, log_kind: str, csv_columns,
+                noise_threshold: float, filter_spec: Tuple, file_hash: str,
+                prune_spec: Tuple = (), _status=None):
+    """``(log, tree)`` for the model the views show: the mined tree, with
+    its infrequent paths removed when ``prune_spec`` asks for it.
+
+    When the spec also drops the cases that walked a removed path, the
+    log returned is the log without them, so everything computed from the
+    pair (overlays, replay, scenarios, variants) describes the same cases.
+
+    Deliberately not cached itself. :func:`_log_and_tree` caches the log
+    with the mined tree; caching the pair again per pruning setting would
+    store one more copy of the log for every position of a slider.
+    """
+    log, tree = _log_and_tree(
+        log_bytes, log_kind, csv_columns, noise_threshold, filter_spec,
+        file_hash, _status=_status,
+    )
+    if prune_spec:
+        if _status is not None:
+            _status.update(label="Removing infrequent paths...")
+        tree, _, dropped = _pruned_tree(
+            log_bytes, log_kind, csv_columns, noise_threshold, filter_spec,
+            prune_spec, file_hash)
+        log = _without_cases(log, dropped)
+    return log, tree
+
+
+def _prune_note(prune: Optional[Dict[str, Any]]) -> None:
+    """Say what the *Infrequent paths* controls removed from the model."""
+    if not prune:
+        return
+    asked = []
+    if prune["min_share"]:
+        asked.append(f"under {prune['min_share'] * 100:g}% of their "
+                     "decision point")
+    if prune["min_cases"]:
+        asked.append(f"walked by fewer than {prune['min_cases']:,} cases")
+    asked_txt = " or ".join(asked)
+    n = prune["branches"]
+    cells = prune.get("cells")
+    if not n:
+        st.caption(
+            f":material/content_cut: **Infrequent paths:** no branch is "
+            f"{asked_txt}"
+            + (f" in any of the {cells:,} models" if cells else "")
+            + ", so nothing was removed.")
+        return
+    where = (f" in {prune['cells_changed']:,} of {cells:,} models, each "
+             "judged on its own cases" if cells else "")
+    parts = [f":material/content_cut: **{n:,} infrequent "
+             f"{'path' if n == 1 else 'paths'} removed**{where} (branches "
+             f"{asked_txt})."]
+    acts = prune["activities"]
+    if acts:
+        shown = ", ".join(f"*{a}*" for a in acts[:8])
+        more = f" and {len(acts) - 8} more" if len(acts) > 8 else ""
+        parts.append(f"{len(acts):,} "
+                     f"{'activity' if len(acts) == 1 else 'activities'} "
+                     f"left the model: {shown}{more}.")
+    details = []
+    if prune["skips"]:
+        details.append(f"{prune['skips']:,} rarely taken "
+                       f"{'skip' if prune['skips'] == 1 else 'skips'}")
+    if prune["loops"]:
+        details.append(f"{prune['loops']:,} rarely taken "
+                       f"{'repeat' if prune['loops'] == 1 else 'repeats'}")
+    if details:
+        parts.append("That includes " + " and ".join(details) + ".")
+    low, high, total = (prune["affected_low"], prune["affected_high"],
+                        prune["total_cases"])
+    if prune.get("drop"):
+        dropped = prune.get("dropped", 0)
+        if dropped and total:
+            parts.append(
+                f"The {dropped:,} of {total:,} cases "
+                f"({dropped / total * 100:.1f}%) that walked a removed path "
+                "were **dropped**: the counts, times and scenarios here "
+                "describe the remaining cases.")
+    elif high and total:
+        span = (f"{low:,}" if low == high else f"{low:,} to {high:,}")
+        parts.append(
+            f"{span} of {total:,} cases ({high / total * 100:.1f}%) "
+            "walked a removed path and no longer fit the model exactly; "
+            "they are **kept** in the log.")
+    st.caption(" ".join(parts))
+
+
 @st.cache_data(show_spinner=False)
 def _parse_table(
     log_bytes: bytes,
@@ -544,6 +743,7 @@ def _parse_table(
     filter_spec: Tuple,
     _file_hash: str,
     _progress=None,
+    prune_spec: Tuple = (),
 ) -> Any:
     """Replay every distinct activity sequence once, for the whole app.
 
@@ -554,16 +754,16 @@ def _parse_table(
     the tree. Computing it here, keyed exactly like :func:`_log_and_tree`,
     means opening both views pays for it once.
 
-    Cached on the log + noise threshold + filters, i.e. everything the
-    tree depends on. The integer-keyed parse data survives the cache
-    round trip and stays valid against the fresh tree copy the caller
-    holds; the table's own ``node_ids`` does not, and is not used.
+    Cached on the log + noise threshold + filters + pruning, i.e.
+    everything the tree depends on. The integer-keyed parse data survives
+    the cache round trip and stays valid against the fresh tree copy the
+    caller holds; the table's own ``node_ids`` does not, and is not used.
     """
     from pm4py_ucm.algo.discovery.variants import parses as _parses_mod
 
-    log, tree = _log_and_tree(
+    log, tree = _model_tree(
         log_bytes, log_kind, csv_columns, noise_threshold, filter_spec,
-        _file_hash,
+        _file_hash, prune_spec,
     )
     return _parses_mod.build(
         log, tree, coarsen_loops=True, progress_callback=_progress,
@@ -642,6 +842,7 @@ def _mine(
     _status=None,
     _progress=None,
     _parses=None,
+    prune_spec: Tuple = (),
 ) -> Dict[str, Any]:
     """Mine a UCM from the event log. Returns .jucm bytes + metadata.
 
@@ -660,9 +861,9 @@ def _mine(
             _status.update(label=label)
 
     _mine_started = time.perf_counter()
-    log, tree = _log_and_tree(
+    log, tree = _model_tree(
         log_bytes, log_kind, csv_columns, noise_threshold, filter_spec,
-        _file_hash, _status=_status,
+        _file_hash, prune_spec, _status=_status,
     )
 
     params: Dict[str, Any] = {"process_tree": tree}
@@ -788,6 +989,11 @@ def _mine(
             # can be read as the budget decision it is.
             "repair_budget_s": _repair_budget,
         }
+    if prune_spec:
+        # A cache hit: _model_tree above has just computed it.
+        _, out["prune"], out["dropped_case_ids"] = _pruned_tree(
+            log_bytes, log_kind, csv_columns, noise_threshold, filter_spec,
+            prune_spec, _file_hash)
     return out
 
 
@@ -836,6 +1042,7 @@ def _mine_split(
     filter_spec: Tuple = (),
     _status=None,
     _progress=None,
+    prune_spec: Tuple = (),
 ) -> Dict[str, Any]:
     """Mine the model split along ``split_attribute``. Same result shape as
     :func:`_mine`, plus a ``split`` entry.
@@ -870,8 +1077,11 @@ def _mine_split(
         noise_threshold=float(noise_threshold),
         node_metrics=list(overlay_nodes), edge_metrics=list(overlay_edges),
         parameters=params, progress_callback=_progress,
-        return_family=True, fit=fit,
+        return_family=True, fit=fit, prune=_prune_arg(prune_spec),
     )
+    # With pruning that drops cases, the model is about the remaining ones.
+    if family.pruned_case_ids:
+        df = _without_cases(df, family.pruned_case_ids)
     if _status is not None:
         _status.update(label="Writing .jucm...")
     with tempfile.TemporaryDirectory() as td:
@@ -892,6 +1102,9 @@ def _mine_split(
             "largest_map": max(len(m.nodes) for m in ucm.maps),
         },
     }
+    if prune_spec:
+        out["prune"] = _family_prune_summary(family, prune_spec)
+        out["dropped_case_ids"] = tuple(family.pruned_case_ids)
     if fit.get("total_cases"):
         out["fit"] = dict(
             fit,
@@ -1337,6 +1550,7 @@ def _synthesize(
     _status=None,
     _progress=None,
     _parses=None,
+    prune_spec: Tuple = (),
 ) -> Dict[str, Any]:
     """Run the full concurrency-aware variant + scenario pipeline.
 
@@ -1364,10 +1578,11 @@ def _synthesize(
     # parsed log and the mined tree rather than re-reading and re-mining; and
     # if the Model view already mined this log at this noise, the tree is
     # already cached and this is a straight hit. The tree is pinned to both
-    # the UCM builder and the clustering pass, exactly as before.
-    log, tree = _log_and_tree(
+    # the UCM builder and the clustering pass, exactly as before. With
+    # pruning on, it is the pruned tree the Model view shows.
+    log, tree = _model_tree(
         log_bytes, log_kind, csv_columns, noise_threshold, filter_spec,
-        _file_hash, _status=_status,
+        _file_hash, prune_spec, _status=_status,
     )
 
     # Resolve resource params + decomposition argument the same way
@@ -2008,19 +2223,23 @@ def _variant_filter_options(log_bytes: bytes, log_kind: str, csv_columns,
 
 @st.cache_data(show_spinner=False)
 def _filtered_log_export(log_bytes: bytes, log_kind: str, csv_columns,
-                         filter_spec: Tuple, _file_hash: str):
+                         filter_spec: Tuple, _file_hash: str,
+                         dropped_case_ids: Tuple[str, ...] = ()):
     """Serialize the (optionally filtered) event log as ``(xes_bytes,
     csv_bytes, n_cases, n_events)`` for download.
 
     Applies the same :func:`_apply_log_filters` transform used before mining,
-    so the exported log is exactly the one the Model view mined from. Cached
-    on the log + filter, and built only when the user asks (XES serialization
-    is not free on a large log)."""
+    so the exported log is exactly the one the Model view mined from, and
+    leaves out ``dropped_case_ids``: the cases the *Infrequent paths*
+    controls dropped, which the model shown is not about. Cached on the log
+    + filter + those ids, and built only when the user asks (XES
+    serialization is not free on a large log)."""
     df = _load_log_df(log_bytes, log_kind, csv_columns, _file_hash)
     if filter_spec:
         df = _apply_log_filters(df, filter_spec)
         if not isinstance(df, pd.DataFrame):
             df = pm4py.convert_to_dataframe(df)
+    df = _without_cases(df, dropped_case_ids)
     csv_bytes = df.to_csv(index=False).encode("utf-8")
     with tempfile.TemporaryDirectory() as td:
         xes_path = Path(td) / "log.xes"
@@ -2085,7 +2304,7 @@ _DEFAULT_DASHBOARD_SPECS: List[Dict[str, Any]] = [
 @st.cache_data(show_spinner="Grouping cases into behavioural variants...")
 def _behaviour_clustering(log_bytes: bytes, log_kind: str, csv_columns,
                           noise_threshold: float, filter_spec: Tuple,
-                          _file_hash: str):
+                          _file_hash: str, prune_spec: Tuple = ()):
     """The concurrency-aware variant clustering, for the Dashboards view.
 
     The same call the Scenarios view makes — same cached tree, same shared
@@ -2094,19 +2313,20 @@ def _behaviour_clustering(log_bytes: bytes, log_kind: str, csv_columns,
     table already built for the Model view this is a regrouping of parses,
     not another replay.
     """
-    log, tree = _log_and_tree(
+    log, tree = _model_tree(
         log_bytes, log_kind, csv_columns, noise_threshold, filter_spec,
-        _file_hash,
+        _file_hash, prune_spec,
     )
     parses = _parse_table(log_bytes, log_kind, csv_columns, noise_threshold,
-                          filter_spec, _file_hash)
+                          filter_spec, _file_hash, prune_spec=prune_spec)
     return _clustering_mod.cluster(log, tree, parses=parses)
 
 
 @st.cache_data(show_spinner="Preparing dashboard data...")
 def _fact_table(log_bytes: bytes, log_kind: str, csv_columns,
                 log_name: str, filter_spec: Tuple, _file_hash: str,
-                behaviour_noise: Optional[float] = None):
+                behaviour_noise: Optional[float] = None,
+                prune_spec: Tuple = ()):
     """The per-case fact table the Dashboards view computes over.
 
     ``behaviour_noise`` is the miner's noise threshold when the cases'
@@ -2125,12 +2345,19 @@ def _fact_table(log_bytes: bytes, log_kind: str, csv_columns,
 
     df = _filtered_log_df(log_bytes, log_kind, csv_columns, filter_spec,
                           _file_hash)
+    if prune_spec and prune_spec[2] and behaviour_noise is not None:
+        # Pruning that drops cases: the dashboards measure the same cases
+        # as the Model view. (A pruning in force implies the replay ran,
+        # hence a noise threshold here.)
+        df = _without_cases(df, _pruned_tree(
+            log_bytes, log_kind, csv_columns, behaviour_noise, filter_spec,
+            prune_spec, _file_hash)[2])
     behaviour = None
     if behaviour_noise is not None:
         try:
             behaviour = _behaviour_clustering(
                 log_bytes, log_kind, csv_columns, behaviour_noise,
-                filter_spec, _file_hash)
+                filter_spec, _file_hash, prune_spec)
         except Exception:
             # The dashboard is still worth having without the extra axis.
             behaviour = None
@@ -2141,7 +2368,8 @@ def _fact_table(log_bytes: bytes, log_kind: str, csv_columns,
 def _dashboard_suggestions(log_bytes: bytes, log_kind: str, csv_columns,
                            log_name: str, filter_spec: Tuple,
                            _file_hash: str,
-                           behaviour_noise: Optional[float] = None) -> str:
+                           behaviour_noise: Optional[float] = None,
+                           prune_spec: Tuple = ()) -> str:
     """Dashboards proposed from the log itself, as JSON (``"[]"`` if none).
 
     Takes ``_fact_table``'s own arguments rather than the table, so the key
@@ -2156,7 +2384,8 @@ def _dashboard_suggestions(log_bytes: bytes, log_kind: str, csv_columns,
 
     try:
         table = _fact_table(log_bytes, log_kind, csv_columns, log_name,
-                            filter_spec, _file_hash, behaviour_noise)
+                            filter_spec, _file_hash, behaviour_noise,
+                            prune_spec)
         return _json.dumps(suggest_dashboards(table))
     except Exception:
         return "[]"
@@ -2337,6 +2566,7 @@ def _mine_family(
     compute_traversal: bool = True,
     _status=None,
     _progress=None,
+    prune_spec: Tuple = (),
 ) -> Dict[str, Any]:
     """Mine the family and its comparative statistics.
 
@@ -2396,6 +2626,7 @@ def _mine_family(
         ),
         parameters=params,
         progress_callback=_progress,
+        prune=_prune_arg(prune_spec),
     )
 
     if overlay_nodes or overlay_edges:
@@ -2452,12 +2683,29 @@ def _mine_family(
     return {
         "family": family,
         "stats": family_stats,
+        "prune": (_family_prune_summary(family, prune_spec)
+                  if prune_spec else None),
         "summary_df": summary_df,
         "n_cells": len(family.cells),
         "n_skipped": len(family.skipped_cells),
         "total_cases": family.total_cases,
         "covered_cases": family.covered_cases,
     }
+
+
+def _family_prune_summary(family, prune_spec: Tuple) -> Dict[str, Any]:
+    """:func:`_prune_summary` over a family's cells (a split model's
+    values): each cell was pruned from its own cases."""
+    results = [c.prune for c in family.cells if c.prune is not None]
+    total = sum(c.n_cases + c.pruned_cases for c in family.cells)
+    return _prune_summary(prune_spec, results, total, family.pruned_cases,
+                          cells=len(family.cells))
+
+
+def _attach_family_log(family, log_df) -> None:
+    """Re-attach the event log to a cached family for an assembly, minus
+    the cases its pruning dropped (they are in no cell any more)."""
+    family.log_df = _without_cases(log_df, family.pruned_case_ids)
 
 
 @st.cache_data(show_spinner=False)
@@ -2487,7 +2735,7 @@ def _family_combined_jucm(
     from pm4py_ucm.objects.ucm.exporter.variants.jucm import (
         serialize_to_string,
     )
-    _family.log_df = _log_df
+    _attach_family_log(_family, _log_df)
     try:
         combined = pm4py_ucm.assemble_ucm_family(
             _family, mode="combined",
@@ -2516,7 +2764,7 @@ def _family_umbrella(
     from pm4py_ucm.objects.ucm.exporter.variants.jucm import (
         serialize_to_string,
     )
-    _family.log_df = _log_df
+    _attach_family_log(_family, _log_df)
     try:
         umbrella = pm4py_ucm.assemble_ucm_family(
             _family, mode="umbrella", dedup=bool(dedup),
@@ -3708,6 +3956,15 @@ def _apply_project_config(cfg, fh, csv_columns=None):
         ss["cfg_noise"] = float(cfg["noise_threshold"])
     if "min_support" in cfg:
         ss["cfg_min_support"] = float(cfg["min_support"])
+    # Same reason: the Infrequent paths controls sit in the sidebar above
+    # the log gate. A project saved before they existed leaves them off.
+    if "prune_min_share" in cfg:
+        ss["cfg_prune_share"] = int(round(
+            max(0.0, min(0.5, float(cfg["prune_min_share"] or 0))) * 100))
+    if "prune_min_cases" in cfg:
+        ss["cfg_prune_cases"] = max(0, int(cfg["prune_min_cases"] or 0))
+    if "prune_drop_cases" in cfg:
+        ss["cfg_prune_drop"] = bool(cfg["prune_drop_cases"])
     if "notation" in cfg:
         ss["cfg_notation"] = "BPMN" if cfg["notation"] == "bpmn" else "UCM"
     if "decomposition" in cfg:
@@ -4006,6 +4263,53 @@ with st.sidebar:
     # miner settings, above Decomposition, which shapes the model afterwards.
     # A container reserves the position now and is filled in below.
     _transforms_slot = st.container()
+
+    st.subheader(":material/content_cut: Infrequent paths")
+    st.session_state.setdefault("cfg_prune_share", 0)
+    st.session_state.setdefault("cfg_prune_cases", 0)
+    _prune_share_pct = st.slider(
+        "Minimum branch share (%)", min_value=0, max_value=50, step=1,
+        key="cfg_prune_share",
+        help=(
+            "Removes from the mined model every branch taken less often "
+            "than this at its decision point: a branch of a choice, a "
+            "rarely taken skip, or a rarely taken repeat of a loop. Forks "
+            "and joins left with one branch disappear, and so does an "
+            "optional parallel branch that is almost never taken. The most "
+            "frequent branch of a choice is always kept. 0 = off.\n\n"
+            "Unlike the noise threshold, this acts on the finished model, "
+            "using how often the log actually walks each branch, so the "
+            "structure of what remains does not change. In a split model "
+            "and in the Family and Compare views, every model is judged on "
+            "its own cases."
+        ),
+    )
+    _prune_min_cases = st.number_input(
+        "Minimum cases per branch", min_value=0, step=1,
+        key="cfg_prune_cases",
+        help=(
+            "Also removes a branch that fewer than this many cases take, "
+            "whatever its share. Useful against a branch that is half of "
+            "a decision only a handful of cases ever reach. 0 = off."
+        ),
+    )
+    st.session_state.setdefault("cfg_prune_drop", False)
+    _prune_drop = st.checkbox(
+        "Drop the cases on removed paths", key="cfg_prune_drop",
+        disabled=not (_prune_min_cases or _prune_share_pct),
+        help=(
+            "What happens to the cases that took a removed path.\n\n"
+            "**Off (keep):** they stay in the log. They no longer fit the "
+            "model exactly, which the fit note reports, and their counts "
+            "land on the closest remaining path.\n\n"
+            "**On (drop):** they are left out, as a log filter would do. "
+            "The removal then makes no remaining case non-fitting, "
+            "percentages add up over them, and the counts, times, "
+            "scenarios and dashboards all describe that smaller set."
+        ),
+    )
+    prune_spec_wanted = _prune_spec(_prune_min_cases, _prune_share_pct,
+                                    _prune_drop)
 
     st.subheader(":material/call_split: Decomposition")
     from pm4py_ucm.objects.ucm.conversion.decomposition import AUTO_DIM
@@ -5403,7 +5707,21 @@ if _risk.high and st.session_state.get("mine_ok_fp") != _screen_fp:
 # to linear in cases — so this probes rather than guesses, and only asks
 # when the answer is "this will take a while". Most logs finish inside the
 # 5s probe and are never interrupted.
-_replay_wanted = _wants_traversal(overlay_nodes, overlay_edges)
+# Removing infrequent paths needs the same replay (of the unpruned tree) to
+# know how often each branch is walked, so it goes through the same gate. The
+# estimate below times that unpruned tree, which is the costly one.
+_metrics_wanted = _wants_traversal(overlay_nodes, overlay_edges)
+_replay_wanted = _metrics_wanted or bool(prune_spec_wanted)
+# What the replay is for, named in the prompts below so a user who only
+# asked to remove infrequent paths is not told about "metrics".
+_replay_needs = []
+if _metrics_wanted:
+    _replay_needs.append("the replay-based metrics (coverage, traversal "
+                         "counts)")
+if prune_spec_wanted:
+    _replay_needs.append("the removal of infrequent paths")
+_replay_what = " and ".join(_replay_needs)
+_replay_what_single = (len(_replay_needs) == 1 and not _metrics_wanted)
 _replay_fp = _arg_fingerprint(file_hash, filter_spec, noise_threshold)
 _replay_state = st.session_state.get("replay_choice")
 _replay_choice = (_replay_state.get("choice")
@@ -5428,16 +5746,19 @@ elif _replay_wanted:
                                 noise_threshold, filter_spec, file_hash)
         _c1, _c2 = st.columns([3, 2])
         _c1.info(
-            "Replay-based metrics are off for this log. Computing them "
-            f"should take about **{_est['estimated_total_s']:.0f}s**.",
+            f"{_replay_what[0].upper() + _replay_what[1:]} "
+            f"{'is' if _replay_what_single else 'are'} off for this log: "
+            f"{'it needs' if _replay_what_single else 'they need'} a replay "
+            "of the log on the model, which should take about "
+            f"**{_est['estimated_total_s']:.0f}s**.",
             icon=":material/query_stats:")
-        if _c2.button("Compute them now", key="replay_now",
+        if _c2.button("Run the replay now", key="replay_now",
                       width="stretch"):
             st.session_state["replay_choice"] = {"fp": _replay_fp,
                                                  "choice": "go"}
             st.session_state["auto_metrics_off"] = False
             st.rerun()
-        if _c2.button("Leave them off", key="replay_leave_off",
+        if _c2.button("Leave it off", key="replay_leave_off",
                       width="stretch"):
             st.session_state["replay_choice"] = {"fp": _replay_fp,
                                                  "choice": "drop"}
@@ -5456,47 +5777,62 @@ elif _replay_wanted:
             _pretty = (f"{_est['estimated_total_s']:.0f} seconds"
                        if _mins < 1.5 else f"about {_mins:.0f} minutes")
             st.warning(
-                f"The replay-based metrics on this log are estimated to "
+                f"Replaying this log on the model is estimated to "
                 f"take **{_pretty}** "
                 f"(measured on {_est['sampled_cases']:,} of "
                 f"{_est['total_cases']:,} cases). Roughly "
                 f"{_est['noise_rate'] * 100:.0f}% of the sampled cases did "
-                "not fit the model. The model below is already mined — this "
-                "is only the metrics that need a replay (coverage, traversal "
-                "counts). Time metrics such as sojourn are read straight "
-                "from the log and are computed either way.",
+                "not fit the model. The model below is already mined — the "
+                f"replay is only needed for {_replay_what}. Time metrics "
+                "such as sojourn are read straight from the log and are "
+                "computed either way.",
                 icon=":material/timer:")
             _b1, _b2, _b3 = st.columns(3)
-            if _b1.button("Compute them", width="stretch",
+            if _b1.button("Run the replay", width="stretch",
                           key="replay_go"):
                 st.session_state["replay_choice"] = {"fp": _replay_fp,
                                                      "choice": "go"}
                 st.rerun()
-            if _b2.button("Drop these metrics", width="stretch",
+            if _b2.button("Skip the replay", width="stretch",
                           key="replay_drop",
-                          help="Leave them out of this analysis. The model, "
-                               "scenarios and exports all still work."):
+                          help="Leave out what needs it (the replay-based "
+                               "metrics, the removal of infrequent paths). "
+                               "The model, scenarios and exports all still "
+                               "work."):
                 st.session_state["replay_choice"] = {"fp": _replay_fp,
                                                      "choice": "drop"}
                 st.rerun()
             if _b3.button("Not now", width="stretch", key="replay_later",
                           help="Skip for the moment. You will be asked "
-                               "again when a metric needs them."):
+                               "again when something needs the replay."):
                 st.session_state["replay_choice"] = {"fp": _replay_fp,
                                                      "choice": "postpone"}
                 st.rerun()
 
+# The pruning actually in force: it needs the replay. A split model and the
+# Family / Compare models are pruned too, each from its own cases.
+prune_spec: Tuple = prune_spec_wanted if _replay_ok else ()
+
 # ---- Mine UCM (for Model tab) ----------------------------------------------
 try:
     with st.status("Mining UCM...", expanded=True) as status:
+        if prune_spec and not split_attribute:
+            # The unpruned tree's replay, with progress: _pruned_tree needs
+            # it and, being cached, cannot report progress itself.
+            status.update(label="Replaying the log to measure each path...")
+            _parse_table(log_bytes, log_kind, csv_columns, noise_threshold,
+                         filter_spec, file_hash,
+                         _progress=_ProgressUI(status), prune_spec=())
         # The replay table is shared with the Scenarios view: both need
         # the same parses, and on a big log that is the dominant cost.
         # Built only when something will actually consume it.
         _shared_parses = (
             _parse_table(log_bytes, log_kind, csv_columns, noise_threshold,
                          filter_spec, file_hash,
-                         _progress=_ProgressUI(status))
-            if _replay_ok and not split_attribute else None
+                         _progress=_ProgressUI(status),
+                         prune_spec=prune_spec)
+            if _replay_ok and _metrics_wanted and not split_attribute
+            else None
         )
         if split_attribute:
             mined = _mine_split(
@@ -5507,6 +5843,7 @@ try:
                 file_hash, filter_spec,
                 _status=status,
                 _progress=_ProgressUI(status),
+                prune_spec=prune_spec,
             )
         else:
             mined = _mine(
@@ -5519,6 +5856,7 @@ try:
                 _status=status,
                 _parses=_shared_parses,
                 _progress=_ProgressUI(status),
+                prune_spec=prune_spec,
             )
         status.update(label="Done.", state="complete")
 except Exception as exc:
@@ -5549,6 +5887,8 @@ _family_base_fp = _arg_fingerprint(
     # counts present or absent), so a family mined under the old answer must
     # not read as fresh after the answer changes.
     _replay_ok,
+    # Every cell is pruned with the sidebar's Infrequent paths settings.
+    prune_spec,
 )
 if st.session_state.get("family_base_fp") not in (None, _family_base_fp):
     st.session_state.pop("family_result", None)
@@ -5629,6 +5969,14 @@ with st.sidebar:
             "notation": style,
             "decomposition": decomposition_spec,
             "split_attribute": split_attribute,
+            # What the controls ask for, not what is in force: a replay the
+            # user declined must not erase the setting from the project.
+            "prune_min_cases": int(prune_spec_wanted[0]
+                                   if prune_spec_wanted else 0),
+            "prune_min_share": float(prune_spec_wanted[1]
+                                     if prune_spec_wanted else 0.0),
+            # The checkbox itself, so it survives both thresholds at 0.
+            "prune_drop_cases": bool(_prune_drop),
             "resource_attribute": resource_attribute,
             # The picks, not the replay-off fallbacks — see the comment at
             # the opt-out checkbox.
@@ -5827,6 +6175,12 @@ if _view == "Model":
             f"Largest map: {_split_info['largest_map']:,} elements. "
             "Change it under **Decomposition** in the sidebar.")
     _fit_note(mined.get("fit"))
+    _prune_note(mined.get("prune"))
+    if prune_spec_wanted and not prune_spec:
+        st.caption(
+            ":material/content_cut: **Infrequent paths** are not removed "
+            "while the replay is off: finding them needs the replay "
+            "offered above.")
 
     # SVG is the default on-screen render: vector, crisp at any zoom, with
     # selectable text, and cheap (0.1–0.4 s even for a decomposed stack).
@@ -6033,14 +6387,22 @@ if _view == "Model":
     # both XES and CSV. Built only on demand (XES serialization is not free on
     # a large log), keyed on the log + filter so a re-filter re-arms it.
     _log_filtered = bool(filter_spec)
+    # The cases the Infrequent paths controls dropped are not part of the
+    # log this model describes, so they are not exported either.
+    _lx_dropped = tuple(mined.get("dropped_case_ids") or ())
     st.markdown("**Event-log export**")
     _logexp_caption = (
         ("The filtered log " if _log_filtered else "The full log ")
         + "the model was mined from, as XES or CSV.")
     if _log_filtered:
         _logexp_caption += f" Active filter: {_filter_summary(filter_spec)}."
+    if _lx_dropped:
+        _logexp_caption += (
+            f" Without the {len(_lx_dropped):,} cases dropped with the "
+            "infrequent paths.")
     st.caption(_logexp_caption)
-    _logexp_key = f"logexp::{file_hash}::{_arg_fingerprint(filter_spec)}"
+    _logexp_key = (f"logexp::{file_hash}::"
+                   f"{_arg_fingerprint(filter_spec, _lx_dropped)}")
     if _logexp_key not in st.session_state:
         if st.button("⬇ Prepare log export", key="logexp_prepare",
                      help="Serialize the (filtered) log to XES and CSV. Built "
@@ -6049,7 +6411,7 @@ if _view == "Model":
                 try:
                     st.session_state[_logexp_key] = _filtered_log_export(
                         log_bytes, log_kind, csv_columns, filter_spec,
-                        file_hash)
+                        file_hash, _lx_dropped)
                 except Exception as _lx_exc:
                     st.warning(f"Log export failed: {_lx_exc}")
             st.rerun()
@@ -6063,6 +6425,8 @@ if _view == "Model":
         _lx_stem = Path(log_name).stem
         if _log_filtered:
             _lx_stem += "_filtered_" + _filter_summary(filter_spec)
+        if _lx_dropped:
+            _lx_stem += "_pruned"
         st.caption(f"{_lx_nc:,} cases · {_lx_ne:,} events.")
         lx1, lx2 = st.columns(2)
         lx1.download_button(
@@ -6173,7 +6537,7 @@ if _view == "Scenarios":
         condition_strategy, max_loop_iterations,
         decision_tree_max_depth, group_name,
         decomposition_spec, resource_attribute,
-        effective_min_support, filter_spec,
+        effective_min_support, filter_spec, prune_spec,
     )
 
     stashed_fp = st.session_state.get("synth_fp")
@@ -6201,8 +6565,10 @@ if _view == "Scenarios":
                     _parses=_parse_table(
                         log_bytes, log_kind, csv_columns, noise_threshold,
                         filter_spec, file_hash,
-                        _progress=_ProgressUI(status)),
+                        _progress=_ProgressUI(status),
+                        prune_spec=prune_spec),
                     _progress=_ProgressUI(status),
+                    prune_spec=prune_spec,
                 )
                 status.update(label="Done.", state="complete")
             st.session_state["synth_fp"] = _synth_fp
@@ -6765,6 +7131,16 @@ if _view == "Family":
             )
             pm3.metric("Case coverage", f"{cov:.1f}%")
             pm4.metric("Dropped cases", preview["dropped_cases"])
+            if prune_spec:
+                st.caption(
+                    ":material/content_cut: These numbers are the "
+                    "partition's, before mining. The sidebar's **Infrequent "
+                    "paths** settings then prune each model from its own "
+                    "cases"
+                    + (", and the cases on the removed paths are dropped, "
+                       "so the mined family covers fewer cases than shown "
+                       "here; which ones is only known once each model is "
+                       "mined." if prune_spec[2] else "."))
 
             # The "merge identical plug-ins" option only shapes the umbrella
             # .jucm download, so it lives down in the Prepare-downloads
@@ -6805,7 +7181,7 @@ if _view == "Family":
                 int(family_bins), family_include_values,
                 noise_threshold, decomposition_spec,
                 resource_attribute, effective_min_support,
-                overlay_nodes, overlay_edges, filter_spec,
+                overlay_nodes, overlay_edges, filter_spec, prune_spec,
             )
             stashed_family_fp = st.session_state.get("family_fp")
             family_params_changed = (
@@ -6832,6 +7208,7 @@ if _view == "Family":
                             compute_traversal=_replay_ok,
                             _status=status,
                             _progress=_ProgressUI(status),
+                            prune_spec=prune_spec,
                         )
                         status.update(label="Done.", state="complete")
                     st.session_state["family_fp"] = _family_fp
@@ -6873,6 +7250,7 @@ if _view == "Family":
                     if fam["total_cases"] else 0.0
                 )
                 fm3.metric("Case coverage", f"{fcov:.1f}%")
+                _prune_note(fam.get("prune"))
 
                 # SVG is the default grid view: one 2-D vector matrix,
                 # crisp at any zoom with selectable text, and cheap to
@@ -7151,6 +7529,7 @@ if _view == "Compare":
         )
     else:
         _stats = _cmp_fam["stats"]
+        _prune_note(_cmp_fam.get("prune"))
         _cmp_fp = st.session_state.get("family_fp", "")
         _labels = _stats.cell_labels
 
@@ -7556,7 +7935,7 @@ if _view == "Dashboards":
     _bv_noise = float(noise_threshold) if _replay_ok else None
     try:
         _ft = _fact_table(log_bytes, log_kind, csv_columns, log_name,
-                          filter_spec, file_hash, _bv_noise)
+                          filter_spec, file_hash, _bv_noise, prune_spec)
     except Exception as exc:
         st.error(
             f"Could not prepare dashboard data: {type(exc).__name__}: {exc}"
@@ -7624,7 +8003,7 @@ if _view == "Dashboards":
     # project, wins.
     _sugg_json = _dashboard_suggestions(log_bytes, log_kind, csv_columns,
                                         log_name, filter_spec, file_hash,
-                                        _bv_noise)
+                                        _bv_noise, prune_spec)
     _sugg = _json.loads(_sugg_json)
     _specs_json = _json.dumps(_sugg[0]["specs"] if _sugg
                               else _DEFAULT_DASHBOARD_SPECS)
@@ -7638,7 +8017,8 @@ if _view == "Dashboards":
         # dashboard built from a different filter's data.
         filter_spec,
         _sugg_json,
-        _bv_noise,
+        # The behavioural variants are relative to the pruned tree.
+        (_bv_noise, prune_spec),
     )
 
     # A pin carries a fresh id per click, so it must not reach the cache

@@ -782,3 +782,67 @@ def test_generated_script_runs_a_split_model(tmp_path, monkeypatch):
                       ["perf_branch0_traversal_frequency"]
               for s in back.maps[0].nodes if isinstance(s, UCM.Stub)}
     assert counts == {"a": "4", "b": "2"}
+
+
+def test_infrequent_path_pruning_is_emitted_and_used():
+    """The Infrequent paths controls are reproduced by the script: every
+    tree the pipeline mines goes through ``prune_tree``."""
+    off = generate_script(_doc({}), include_scenarios=True)
+    assert "PRUNE_MIN_CASES = 0" in off
+    assert "PRUNE_MIN_SHARE = 0.0" in off
+    on = generate_script(
+        _doc({"prune_min_cases": 3, "prune_min_share": 0.05,
+              "family_attrs": ["country"]}),
+        include_scenarios=True, include_family=True)
+    assert "PRUNE_MIN_CASES = 3" in on
+    assert "PRUNE_MIN_SHARE = 0.05" in on
+    assert "PRUNE_DROP_CASES = False" in on
+    assert (on.count("pm4py.discover_process_tree_inductive(")
+            == on.count(" = prune_tree(tree, ")), (
+        "a mined tree is not pruned somewhere in the pipeline")
+    # The split model and the family prune each of their own trees.
+    assert on.count("prune=prune_arg()") == 2
+    compile(on, "gen.py", "exec")
+    dropping = generate_script(
+        _doc({"prune_min_share": 0.05, "prune_drop_cases": True}))
+    assert "PRUNE_DROP_CASES = True" in dropping
+
+
+def test_generated_script_prunes_the_model(tmp_path):
+    """Not only emitted: run_model drops the rare branch, and without the
+    thresholds keeps it."""
+    pd = pytest.importorskip("pandas")
+    pytest.importorskip("pm4py")
+    import pm4py_ucm
+
+    rows, t = [], pd.Timestamp("2024-01-01", tz="UTC")
+    for n, trace in enumerate([["a", "b", "d"]] * 48 + [["a", "c", "d"]] * 2):
+        for step in trace:
+            t += pd.Timedelta(minutes=5)
+            rows.append({"case:concept:name": f"c{n}", "concept:name": step,
+                         "time:timestamp": t})
+    df = pd.DataFrame(rows)
+
+    def run(share, drop=False):
+        ns = {"__name__": "codegen_test"}
+        src = generate_script(_doc({
+            "noise_threshold": 0.0, "decomposition": "off",
+            "resource_attribute": "", "prune_min_share": share,
+            "prune_drop_cases": drop,
+            "overlay_nodes": ["traversal_frequency"],
+            "overlay_edges": []}))
+        exec(compile(src, "gen.py", "exec"), ns)
+        ns["OUT_DIR"] = tmp_path
+        ns["_save_image"] = lambda *a, **k: None
+        ns["run_model"](df)
+        back = pm4py_ucm.read_ucm(str(tmp_path / "model.jucm"))
+        from pm4py_ucm.objects.ucm.obj import UCM
+        return {n.resp_def.name: {m.name: m.value for m in n.metadata}
+                                 .get("perf_traversal_frequency")
+                for n in back.maps[0].nodes if isinstance(n, UCM.RespRef)}
+
+    assert set(run(0.0)) == {"a", "b", "c", "d"}
+    # Kept: the two rare cases are still counted, on the remaining path.
+    assert run(0.1) == {"a": "50", "b": "50", "d": "50"}
+    # Dropped: the model is about the other 48.
+    assert run(0.1, drop=True) == {"a": "48", "b": "48", "d": "48"}

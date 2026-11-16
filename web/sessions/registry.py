@@ -39,6 +39,15 @@ REGISTRY: Tuple[Param, ...] = (
     # value, each bound to the model mined from that value's cases. None =
     # one model for the whole log.
     Param("split_attribute", "miner", None),
+    # Infrequent paths removed from the mined tree (pm4py_ucm.
+    # prune_infrequent_paths): a branch walked by fewer cases than the
+    # first, or below the second as a share (a FRACTION, 0.05 = 5 %) of its
+    # decision point. Both 0 = off. ``prune_drop_cases`` says what happens
+    # to the cases that walked a removed path: False keeps them in the log
+    # (they no longer fit the model), True drops them.
+    Param("prune_min_cases", "miner", 0),
+    Param("prune_min_share", "miner", 0.0),
+    Param("prune_drop_cases", "miner", False),
     # Performers.
     Param("resource_attribute", "performers", "org:role"),
     # Performance overlay.

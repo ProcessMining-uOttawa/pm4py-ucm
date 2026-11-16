@@ -592,6 +592,60 @@ def compute_traversal_stats(tree, log, **kwargs):
     return _cts(tree, log, **kwargs)
 
 
+def prune_infrequent_paths(
+    tree,
+    log=None,
+    *,
+    stats=None,
+    min_cases: int = 0,
+    min_share: float = 0.0,
+    prune_loops: bool = True,
+    drop_cases: bool = False,
+    **traversal_kwargs,
+):
+    """Remove the infrequent paths of a process tree, to simplify the
+    model built from it.
+
+    A branch of a choice (or the repeat of a loop) is removed when fewer
+    than ``min_cases`` distinct cases walk it, or when its local share at
+    its decision point is below ``min_share`` (``0.05`` = 5 %). Forks and
+    joins left with a single branch disappear, and so do the optional
+    branches of a parallel block that become empty. The most frequent
+    branch of a choice is always kept.
+
+    The frequencies are the replay-based traversal counts: pass the
+    ``log`` to have them computed here (``traversal_kwargs`` go to
+    :func:`compute_traversal_stats`), or ``stats`` if you already have
+    them for this very ``tree``.
+
+    Returns a :class:`~pm4py_ucm.algo.pruning.PruneResult`: ``.tree`` is
+    the pruned copy — hand it to :func:`convert_to_ucm` — and
+    ``.removed`` lists what went and why.
+
+    What happens to the cases that walked a removed branch is yours to
+    choose. By default (``drop_cases=False``) the log is not filtered and
+    ``result.log`` is the ``log`` you passed: those cases no longer fit
+    the pruned tree, which a fresh :func:`compute_traversal_stats` on it
+    reports. With ``drop_cases=True`` (which needs the ``log``),
+    ``result.log`` is the log **without** them — mine overlays, scenarios
+    and statistics from that one, so they describe the cases the pruned
+    model is about. ``result.affected_cases`` says how many cases that
+    is either way. See :mod:`pm4py_ucm.algo.pruning`.
+    """
+    from .algo.pruning import prune_infrequent_paths as _prune
+    if drop_cases and log is None:
+        raise ValueError("drop_cases=True needs the log to drop them from")
+    if stats is None:
+        if log is None:
+            raise ValueError(
+                "prune_infrequent_paths needs the log or its traversal stats")
+        stats = compute_traversal_stats(tree, log, **traversal_kwargs)
+    result = _prune(tree, stats, min_cases=min_cases, min_share=min_share,
+                    prune_loops=prune_loops)
+    result.log = result.filter_log(log) if drop_cases else log
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Model families (attribute-partitioned discovery)
 # ---------------------------------------------------------------------------
@@ -635,6 +689,7 @@ def discover_ucm_family(
     validate: bool = True,
     max_enum_cardinality: Optional[int] = None,
     numeric_coercion_threshold: Optional[float] = None,
+    prune: Optional[Dict[str, Any]] = None,
 ):
     """Mine a *family* of UCM models: partition ``log`` by the values
     of 1–2 case-level attributes (e.g. cancer type × age group) and
@@ -668,6 +723,15 @@ def discover_ucm_family(
     binned into ranges): pass a value above ``1.0`` to keep a column of
     numeric strings — codes, say — categorical.
 
+    ``prune`` removes each cell's infrequent paths, as
+    :func:`prune_infrequent_paths` does for one tree: a dict with any of
+    ``min_cases``, ``min_share``, ``prune_loops`` and ``drop_cases``, e.g.
+    ``{"min_share": 0.05}``. The frequencies are those of the cell's own
+    cases, so ``min_cases`` is a number of cases *per cell*. With
+    ``drop_cases`` the cases that walked a removed path leave their cell,
+    and every statistic, overlay and assembly built from the family
+    describes the remaining ones (``cell.pruned_cases`` counts them).
+
     ``validate=True`` (the default) checks each cell's model as it is mined
     and raises :class:`ValueError` if one is malformed, naming the cell. The
     cost is a single pass over that cell's nodes and connections — around a
@@ -698,6 +762,7 @@ def discover_ucm_family(
         validate=validate,
         max_enum_cardinality=max_enum_cardinality,
         numeric_coercion_threshold=numeric_coercion_threshold,
+        prune=prune,
     )
 
 
@@ -873,7 +938,8 @@ def discover_ucm_by_attribute(
     ``edge_metrics``, see :func:`annotate_performance`) is computed from
     exactly its own value's cases; the root map's counts are the number of
     cases per value. ``family_kwargs`` are forwarded to
-    :func:`discover_ucm_family` (``include_values``, ``bins``, ...).
+    :func:`discover_ucm_family` (``include_values``, ``bins``, ``prune``
+    to remove each value's infrequent paths, ...).
 
     ``fit``, when a dict is passed, receives the replay totals over the
     values (each case is replayed on its own value's model only).

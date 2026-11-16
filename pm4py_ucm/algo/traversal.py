@@ -124,6 +124,16 @@ class TraversalStats:
     #: Distinct concurrency-aware signatures among the counted cases.
     n_signatures: int = 0
 
+    #: ``{activity_sequence: cases}`` for every distinct sequence in the
+    #: log, counted or not.
+    sequence_cases: Dict[Tuple[str, ...], int] = field(default_factory=dict)
+    #: ``{activity_sequence: node ids walked}`` for every *counted*
+    #: sequence (along its repaired path, for a repaired one). This is
+    #: what lets a caller say exactly which cases walk a given part of the
+    #: model — see :mod:`pm4py_ucm.algo.pruning`.
+    sequence_nodes: Dict[Tuple[str, ...], frozenset] = field(
+        default_factory=dict)
+
     @property
     def counted_cases(self) -> int:
         """Cases contributing to the counts (fitting + repaired)."""
@@ -442,6 +452,7 @@ def compute_traversal_stats(
 
     stats = TraversalStats(
         total_cases=len(cases), n_sequences=len(sequence_cases),
+        sequence_cases=sequence_cases,
     )
     if not cases:
         return stats
@@ -503,6 +514,8 @@ def compute_traversal_stats(
     # Aggregate. Counts are keyed on the signature, so sequences that
     # parse the same way are added up rather than recomputed.
     signatures: set = set()
+    # Many sequences walk the same set of nodes; store each set once.
+    node_sets: Dict[frozenset, frozenset] = {}
     for seq, weight in sequence_cases.items():
         result = parsed.get(seq)
         if result is None:
@@ -524,6 +537,8 @@ def compute_traversal_stats(
 
         signature, counts, branches = result
         signatures.add(signature)
+        walked = frozenset(counts)
+        stats.sequence_nodes[seq] = node_sets.setdefault(walked, walked)
         for nid, n in counts.items():
             stats.node_counts[nid] = stats.node_counts.get(nid, 0) + n * weight
             stats.node_cases[nid] = stats.node_cases.get(nid, 0) + weight

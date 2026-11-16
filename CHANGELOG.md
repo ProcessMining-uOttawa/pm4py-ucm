@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Removing infrequent paths.** `pm4py_ucm.prune_infrequent_paths(tree,
+  log, min_cases=…, min_share=…)` removes from a process tree the branches
+  few cases take: a branch of a choice (a silent skip included) or the
+  repeat of a loop, judged by the number of cases walking it and by its
+  share at its decision point, both read from the replay-based traversal
+  counts. Forks and joins left with one branch disappear, and so does an
+  optional parallel branch that is almost never taken. It returns the
+  pruned copy, the list of what was removed and the exact number of cases
+  that walked a removed path; convert it with `convert_to_ucm` as usual.
+  Those cases are kept by default (they no longer fit the model);
+  `drop_cases=True` returns the log without them as `result.log`. Design
+  and decisions in [`docs/infrequent_paths.md`](docs/infrequent_paths.md).
+- **Pruning in families and split models.** `discover_ucm_family` and
+  `discover_ucm_by_attribute` take `prune={"min_cases": …, "min_share": …,
+  "drop_cases": …}` and prune every cell's tree from that cell's own
+  cases. `FamilyCell.prune` / `pruned_cases` and
+  `ModelFamily.pruned_cases` / `pruned_case_ids` report it.
+- `TraversalStats` records, per distinct activity sequence, its number of
+  cases (`sequence_cases`) and the tree nodes it walks (`sequence_nodes`).
+- **Web app: *Infrequent paths* controls** in the sidebar (*Minimum branch
+  share (%)*, *Minimum cases per branch*, *Drop the cases on removed
+  paths*). Every view uses them: the Model, Scenarios and Dashboards
+  views, a split model, and the Family and Compare views, where each model
+  is judged on its own cases. The Model, Family and Compare views say what
+  was removed. Saved with a project (`prune_min_cases`, `prune_min_share`,
+  `prune_drop_cases`) and reproduced by the exported script.
+
 ## [0.9.3] — 2026-11-16
 
 **Upgrade notes.** This is a patch release that changes two things you may

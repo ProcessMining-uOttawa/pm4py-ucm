@@ -100,6 +100,32 @@ def resource_parameters_for(
     return performers, extras
 
 
+def _prune_cell(tree, cell_df, case_ids, case_id_col: str,
+                prune: Dict[str, Any], drop_cases: bool):
+    """Prune one cell's tree from that cell's own traversal counts.
+
+    Returns ``(tree, cell_df, case_ids, PruneResult)``; the frame and the
+    ids are the cell's own unless ``drop_cases`` removed some. A cell is
+    never emptied: if every case walked a removed path, they all stay.
+    """
+    from ...pruning import prune_infrequent_paths
+    from ...traversal import compute_traversal_stats
+
+    # The replay reads the standard case column.
+    replay_df = (cell_df if case_id_col == "case:concept:name"
+                 else cell_df.rename(columns={case_id_col:
+                                              "case:concept:name"}))
+    stats = compute_traversal_stats(tree, replay_df)
+    result = prune_infrequent_paths(tree, stats, **prune)
+    if drop_cases and result.removed:
+        gone = set(result.dropped_case_ids(replay_df))
+        kept = [c for c in case_ids if str(c) not in gone]
+        if kept and len(kept) < len(case_ids):
+            cell_df = cell_df[~cell_df[case_id_col].astype(str).isin(gone)]
+            case_ids = kept
+    return result.tree, cell_df, case_ids, result
+
+
 #: Parameter keys consumed by the resource layer — stripped before the
 #: converter sees the parameters.
 _RESOURCE_KEYS = (
@@ -128,6 +154,7 @@ def discover(
     validate: bool = True,
     max_enum_cardinality: Optional[int] = None,
     numeric_coercion_threshold: Optional[float] = None,
+    prune: Optional[Dict[str, Any]] = None,
 ) -> ModelFamily:
     """Mine a :class:`ModelFamily` from ``log`` partitioned by 1–2
     case-level attributes.
@@ -168,6 +195,17 @@ def discover(
         Optional ``callback(stage, done, total)`` fired after each
         mined cell — per-cell mining dominates the family pipeline's
         cost. See :mod:`pm4py_ucm.util.progress`.
+    prune
+        Remove each cell's infrequent paths
+        (:func:`pm4py_ucm.prune_infrequent_paths`), with the frequencies
+        of **that cell's own cases**: a dict with any of ``min_cases``,
+        ``min_share``, ``prune_loops`` and ``drop_cases``. ``min_cases``
+        is therefore an absolute number per cell, and bites harder on a
+        small cell. With ``drop_cases`` the cases that walked a removed
+        path leave the cell (its ``case_ids`` / ``n_cases``), so every
+        statistic and overlay computed from the family describes the
+        remaining ones. ``None`` (default), or thresholds of 0, prunes
+        nothing.
     validate
         When ``True`` (default), check each cell's model is structurally
         well-formed as it is mined, and raise :class:`ValueError` otherwise.
@@ -212,14 +250,29 @@ def discover(
     ticker = Ticker(progress_callback, "Mining one model per cell",
                     len(part.cells), report_every=1)
 
+    prune = dict(prune or {})
+    drop_cases = bool(prune.pop("drop_cases", False))
+    do_prune = bool(prune.get("min_cases") or prune.get("min_share"))
+
     cells: List[FamilyCell] = []
+    pruned_ids: set = set()
     for pcell in part.cells:
         tree = tree_miner(pcell.df)
+        cell_df, cell_case_ids = pcell.df, pcell.case_ids
+        pruned, pruned_cases = None, 0
+        if do_prune:
+            tree, cell_df, cell_case_ids, pruned = _prune_cell(
+                tree, cell_df, cell_case_ids, case_id_col, prune, drop_cases)
+            pruned_cases = len(pcell.case_ids) - len(cell_case_ids)
+            if pruned_cases:
+                pruned_ids.update(
+                    str(c) for c in set(pcell.case_ids) - set(cell_case_ids))
+        n_cell_cases = pcell.n_cases - pruned_cases
 
         conv_params = {
             k: v for k, v in parameters.items() if k not in _RESOURCE_KEYS
         }
-        performers, extras = resource_parameters_for(pcell.df, parameters)
+        performers, extras = resource_parameters_for(cell_df, parameters)
         if performers is not None:
             conv_params["performers"] = performers
             if extras:
@@ -238,15 +291,22 @@ def discover(
 
         cells.append(FamilyCell(
             values=pcell.values,
-            case_ids=pcell.case_ids,
-            n_cases=pcell.n_cases,
-            coverage=pcell.n_cases / part.total_cases if part.total_cases else 0.0,
+            case_ids=cell_case_ids,
+            n_cases=n_cell_cases,
+            coverage=n_cell_cases / part.total_cases if part.total_cases else 0.0,
             tree=tree,
             ucm=ucm,
             performers=dict(performers or {}),
+            prune=pruned,
+            pruned_cases=pruned_cases,
         ))
         ticker.tick()
     ticker.finish()
+
+    if pruned_ids:
+        # The family's log is what the assemblies and the statistics read,
+        # so the dropped cases leave it too.
+        df = df[~df[case_id_col].astype(str).isin(pruned_ids)]
 
     return ModelFamily(
         attributes=part.attributes,
@@ -258,4 +318,6 @@ def discover(
         cell_parameters=parameters,
         decomposition=decomposition,
         case_id_col=case_id_col,
+        pruned_cases=len(pruned_ids),
+        pruned_case_ids=sorted(pruned_ids),
     )

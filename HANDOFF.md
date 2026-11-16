@@ -41,6 +41,55 @@ parse), and 0.8.0–0.8.3 delivered scenario simulation, coverage and A/B compar
 the validation gates, the variant-filtered log export, and the release
 tooling described below.
 
+## In progress: removing infrequent paths (unreleased)
+
+On the branch `feature/prune-infrequent-paths`, in a pull request. Built
+in one session (2026-11-16) from the maintainer's request and two rounds
+of his decisions; the code has not been reviewed beyond that.
+
+- `pm4py_ucm/algo/pruning.py` and `pm4py_ucm.prune_infrequent_paths`
+  prune the **process tree** from the traversal counts; the conversion is
+  untouched. Design, decisions and the not-built list are in
+  [`docs/infrequent_paths.md`](docs/infrequent_paths.md); tests in
+  `tests/test_pruning.py`.
+- The V6 app has the sidebar's **Infrequent paths** controls. The pruned
+  tree comes from `_model_tree`, which every single-tree consumer now
+  calls instead of `_log_and_tree` (Model, parse table, Scenarios,
+  behavioural variants). `_pruned_tree` is the cached step; it replays the
+  *unpruned* tree through the shared `_parse_table(…, prune_spec=())`.
+  `_model_tree` is deliberately uncached so the log is not stored once per
+  slider position.
+- **Keep or drop is an option** (the maintainer's decision, 2026-11-16):
+  `drop_cases` in the library, the *Drop the cases on removed paths*
+  checkbox in the app. `prune_spec` is `()` or `(min_cases, min_share,
+  drop)`. With drop on, `_model_tree` returns the log without the dropped
+  cases (their ids are the third element of `_pruned_tree`'s result), and
+  `_fact_table` filters the dashboards' frame the same way.
+- **Split models and families are pruned too** (same decision): the
+  family miner takes `prune=`, each cell judged on its own cases, and
+  `_mine_split` / `_mine_family` pass the sidebar's settings. With drop
+  on, the cells and `family.log_df` lose the dropped cases; the app's
+  download-only assemblies re-attach the log through
+  `_attach_family_log`, which removes them again.
+- Three registry parameters (`prune_min_cases`, `prune_min_share`,
+  `prune_drop_cases`), restored in `_apply_project_config`, emitted by the
+  code export (`prune_tree`, `prune_arg`).
+- Checked in the running app on the claims sample at 10%: two rare repeats
+  go; kept, the fit note moves from 89% to 83% with 341 cases affected;
+  dropped, the log card reads 5,259 cases and the fit is back to 89%;
+  split by Channel, 6 paths go in 3 models; a Broker family loses 17 paths
+  in 8 models and 386 cases, and Compare shows the same note. In drop
+  mode the Scenarios view reads 88.6% fitness with 598 non-conforming
+  cases, the dashboards compute over 5,259 cases, and the event-log export
+  holds 5,259 cases.
+- The Model view's event-log export leaves the dropped cases out
+  (`mined["dropped_case_ids"]`). The Family view's coverage preview is
+  computed before mining and only says that pruning will change it. The
+  replay prompts name what the replay is for (`_replay_what`), so they no
+  longer say "metrics" when only pruning asked for it; **those prompts
+  were not seen in the app**, since they only appear on a log whose replay
+  is slow.
+
 ## State on arrival
 
 - `main` carries 0.9.3. **Check the tag and PyPI
